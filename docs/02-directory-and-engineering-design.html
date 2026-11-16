@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RDWS 运行与配置空间 · 目录评审与 DSH 二次开发工程结构</title>
+<style>
+  :root{
+    --brand:#0E7490; --brand-dark:#0B596E; --brand-soft:#E6F3F6; --brand-line:#B9DEE6;
+    --ink:#1C2530; --ink-2:#43505E; --ink-3:#6B7885;
+    --line:#E2E7EB; --bg:#F5F7F8; --paper:#FFFFFF;
+    --red:#B3373A; --red-bg:#FCEDEC; --amber:#9A6410; --amber-bg:#FDF4E3;
+    --green:#24735A; --green-bg:#EAF5F0; --gray-bg:#F0F3F5;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:15px;line-height:1.75;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px 80px}
+  header{background:var(--paper);border-top:4px solid var(--brand);border-bottom:1px solid var(--line);padding:42px 0 32px;margin-bottom:30px}
+  header .wrap{padding-bottom:0}
+  .kicker{color:var(--brand);font-size:12px;letter-spacing:.18em;font-weight:700;margin-bottom:10px}
+  h1{font-size:28px;line-height:1.35;margin:0 0 10px;letter-spacing:-.01em}
+  .sub{color:var(--ink-3);font-size:13.5px;margin:0}
+  .meta{margin-top:20px;display:flex;flex-wrap:wrap;gap:8px}
+  .tag{font-size:12px;padding:4px 10px;border:1px solid var(--line);border-radius:3px;color:var(--ink-2);background:var(--gray-bg)}
+  h2{font-size:20px;margin:44px 0 6px;padding-top:18px;border-top:2px solid var(--brand)}
+  h2 .num{color:var(--brand);font-variant-numeric:tabular-nums;margin-right:10px}
+  h3{font-size:16px;margin:26px 0 8px;color:var(--brand-dark)}
+  p{margin:10px 0}
+  ul,ol{margin:10px 0;padding-left:22px}li{margin:5px 0}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;background:var(--gray-bg);padding:1px 5px;border-radius:3px;color:var(--brand-dark);word-break:break-word}
+  pre{background:#FBFCFD;border:1px solid var(--line);border-left:3px solid var(--brand-line);padding:14px 18px;overflow-x:auto;font-size:12.5px;line-height:1.65;margin:14px 0;border-radius:0 4px 4px 0}
+  pre code{background:none;padding:0;color:var(--ink-2);font-size:12.5px}
+  .lead{font-size:16px;color:var(--ink-2)}
+  .verdict{background:var(--brand-soft);border:1px solid var(--brand-line);border-left:4px solid var(--brand);padding:20px 24px;margin:22px 0;border-radius:0 4px 4px 0}
+  .verdict .vtitle{font-size:12px;letter-spacing:.14em;color:var(--brand);font-weight:700;margin-bottom:8px}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin:18px 0}
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:5px;padding:18px 20px}
+  .card .ct{font-weight:700;font-size:14px;margin-bottom:6px}
+  .card p{margin:0;font-size:13.5px;color:var(--ink-2)}
+  table{width:100%;border-collapse:collapse;margin:16px 0;background:var(--paper);border:1px solid var(--line);font-size:13.5px}
+  th,td{border-bottom:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
+  th{background:#F0F6F7;color:var(--brand-dark);font-weight:700;font-size:12.5px}
+  tr:last-child td{border-bottom:none}
+  td code{font-size:11.5px}
+  .pill{display:inline-block;font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:3px;white-space:nowrap}
+  .p-high{background:var(--red-bg);color:var(--red)}
+  .p-mid{background:var(--amber-bg);color:var(--amber)}
+  .p-low{background:var(--green-bg);color:var(--green)}
+  .p-info{background:var(--brand-soft);color:var(--brand-dark)}
+  .callout{border-left:3px solid var(--amber);background:var(--amber-bg);padding:12px 16px;margin:16px 0;font-size:13.5px;border-radius:0 3px 3px 0}
+  .danger{border-left:3px solid var(--red);background:var(--red-bg);padding:12px 16px;margin:16px 0;font-size:13.5px;border-radius:0 3px 3px 0}
+  .ok{border-left:3px solid var(--green);background:var(--green-bg);padding:12px 16px;margin:16px 0;font-size:13.5px;border-radius:0 3px 3px 0}
+  .src{font-size:12px;color:var(--ink-3)}
+  .steps{counter-reset:s;list-style:none;padding:0;margin:18px 0}
+  .steps li{counter-increment:s;position:relative;padding:0 0 16px 42px;margin:0;border-left:1px solid var(--brand-line);margin-left:13px}
+  .steps li:last-child{border-left-color:transparent;padding-bottom:0}
+  .steps li::before{content:counter(s);position:absolute;left:-13px;top:0;width:26px;height:26px;border-radius:50%;background:var(--brand);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .steps b{display:block;font-size:14px;margin-bottom:2px}
+  .steps span{font-size:13.5px;color:var(--ink-2)}
+  .toc{background:var(--paper);border:1px solid var(--line);padding:16px 22px;font-size:13.5px;columns:2;column-gap:32px}
+  .toc a{color:var(--ink-2);text-decoration:none;display:block;padding:2px 0}
+  .toc a:hover{color:var(--brand)}
+  .foot{margin-top:48px;padding-top:20px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-3)}
+  @media(max-width:720px){.grid{grid-template-columns:1fr}.toc{columns:1}h1{font-size:22px}.wrap{padding:0 16px 60px}table{font-size:12.5px}th,td{padding:8px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="kicker">RDWS · 架构设计评审</div>
+    <h1>运行与配置空间 · 目录评审与 DSH 二次开发工程结构</h1>
+    <p class="sub">从 <code>.rdws</code> 目录约定，到分支/worktree 策略，再到可落地的代码仓库骨架</p>
+    <div class="meta">
+      <span class="tag">2026-11-13</span>
+      <span class="tag">基线：DSH 0.2.2-rc.3（本地一手核查）</span>
+      <span class="tag">含 git worktree 隔离方案实测</span>
+      <span class="tag">结论：骨架可用，需 4 处改名/补层 + 1 项方案替换</span>
+      <span class="tag">仓库：Mayne-Zeng/rdws（GitHub）</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="toc">
+    <a href="#s0">0. 评审结论</a>
+    <a href="#s1">1. 目录结构逐项评审</a>
+    <a href="#s2">2. 修正后的 .rdws 完整结构</a>
+    <a href="#s3">3. 分支与 worktree 管理（含实测）</a>
+    <a href="#s4">4. 目录 → DSH 概念映射</a>
+    <a href="#s5">5. 实例分片粒度（修正上轮结论）</a>
+    <a href="#s6">6. 二次开发工程结构</a>
+    <a href="#s7">7. 插件清单与关键配置</a>
+    <a href="#s8">8. 关键数据流</a>
+    <a href="#s9">9. 坑与行动清单</a>
+    <a href="#s10">10. 证据索引</a>
+  </div>
+
+  <h2 id="s0"><span class="num">0</span>评审结论</h2>
+  <div class="verdict">
+    <div class="vtitle">总体判定</div>
+    <p style="margin:0 0 10px"><strong>方向对、分层对，尤其「项目即租户」「需求才是工作目录」这两个判断与 DSH 的原生模型高度契合。</strong>但当前目录设计有 4 个结构性问题会持续制造返工：<strong>① 与 DSH workspace 概念撞名；② 缺运行时目录（DSH_HOME 必须有独立落点）；③ 缺控制面数据的归属说明（目录不等于 RBAC）；④ sources「不允许直接改动」与 git worktree 的元数据写入天然矛盾。</strong></p>
+    <p style="margin:0;font-size:14px;color:var(--ink-2)">另外要修正我上一轮的一处粗略结论：<strong>不必「每需求一个 DSH 实例」</strong>。核查发现 <code>workspaceRegistry.create(path, title)</code> 幂等且一个实例可注册多个 workspace，因此<strong>默认按项目（租户）分片一个实例，按需升级为需求级实例</strong>更合理。详见 §5。</p>
+  </div>
+  <div class="grid">
+    <div class="card"><div class="ct">最漂亮的一点</div><p>把 <code>demand-A</code> 整个目录作为 DSH workspace，<code>sources</code> 置于 workspace 之外 —— DSH 的 <code>workspace-write</code> 沙箱以会话 cwd 为写入边界，<strong>物理上就实现了「唯一事实源不可由 AI 直接改动」</strong>，不靠约定、不靠自觉。</p></div>
+    <div class="card"><div class="ct">最需要替换的一点</div><p>「worktree 建在 demand 下、直接挂在 sources 主仓」做不到零写入：git 的 worktree 元数据必然写进主仓 <code>.git/worktrees/</code>，且 DSH 内置 worktree 插件的检出池是<strong>源仓库内部相对路径</strong>。推荐改为<strong>需求级私有 bare 仓库 + worktree</strong>（§3，已实测）。</p></div>
+    <div class="card"><div class="ct">必须补的一层</div><p><code>runtime/</code>：每个实例的 <code>DSH_HOME</code>（profile、凭据、会话日志、插件、SQLite）、进程状态、锁、缓存。它与业务数据的写频率、备份策略、保密级别完全不同，混进 <code>config</code> 或 <code>demands</code> 会出事故。</p></div>
+    <div class="card"><div class="ct">最容易被忽略的并发问题</div><p>一个需求下「很多 AI 会话」若共用同一个 worktree，<strong>并发写会互相覆盖</strong>。DSH 允许同一 workspace 下多会话并行，所以必须由平台加<strong>需求级写锁</strong>：同一时刻仅一个写会话，其余会话跑 <code>read-only</code> / 评审模式。</p></div>
+  </div>
+
+  <h2 id="s1"><span class="num">1</span>目录结构逐项评审</h2>
+  <table>
+    <tr><th style="width:160px">你的设计</th><th style="width:74px">判定</th><th>理由与建议</th></tr>
+    <tr><td><code>.rdws/</code> 统一工作区</td><td><span class="pill p-low">保留</span></td><td>隐藏目录 + 单一根，便于整体挂载、备份与迁移。建议明确它是<strong>运行时数据目录，不进代码仓库</strong>；代码仓库里只放 <code>config/</code> 模板与脚手架。</td></tr>
+    <tr><td><code>config/</code> 平台配置</td><td><span class="pill p-mid">补分层</span></td><td>需要 <code>platform/</code>、<code>projects/&lt;id&gt;/</code>、<code>profiles/</code>、<code>policies/</code> 四层，并明确<strong>密钥不进 config</strong>（放外部 KMS / secrets 挂载）。<code>config</code> 应可被 git 版本化，因此不能含运行时凭据与实例状态。</td></tr>
+    <tr><td><code>workspaces/</code> = 租户目录</td><td><span class="pill p-high">改名</span></td><td><strong>强烈建议改为 <code>projects/</code>（或 <code>tenants/</code>）。</strong>DSH 里 <code>workspace</code> 是精确概念：「一个规范目录 + 稳定 ID + 有序会话账本」，且实际对应的是 <code>demand-A</code> 这一级。同一个词在两层指代不同对象，会让插件命名、API 字段、文档、日志长期混乱。</td></tr>
+    <tr><td><code>project-A/</code> 项目即租户</td><td><span class="pill p-low">保留</span></td><td>作为隔离域是合理的。但建议把「租户」理解为<strong>授权与数据隔离域</strong>，而<strong>账号身份是平台级</strong>：一个账号跨多项目、一人多身份靠平台侧授权表表达，<strong>不要在目录里建 user 目录</strong>，否则「一人多项目」会立刻演变成目录复制。</td></tr>
+    <tr><td><code>sources/</code> 唯一事实源，不可直接改动</td><td><span class="pill p-mid">改实现</span></td><td>原则完全正确，但要精确定义为「<strong>工作树源码与 refs 不得由 AI 会话写入；由 syncer 独占 fetch 更新</strong>」。原因：git worktree 元数据会写回主仓 <code>.git/worktrees/</code>；若直接把 worktree 挂到主仓，这条原则在物理上不成立。建议主仓统一为 <strong>bare mirror</strong>（<code>sources/&lt;repo&gt;.git</code>），并采用 §3 的需求级私有 bare 方案。</td></tr>
+    <tr><td><code>demands/demand-A/</code> 实际工作目录</td><td><span class="pill p-low">保留·细化</span></td><td>与 DSH workspace 一一对应，非常准确。建议内部再分层：<code>context/</code>（需求输入）、<code>worktrees/</code>（唯一可写代码区）、<code>artifacts/</code>（S0–S6 产物）、<code>.gitstore/</code>（需求私有 bare）、<code>AGENTS.md</code>、<code>demand.yaml</code>。详见 §2。</td></tr>
+    <tr><td>一个需求下很多 AI 会话</td><td><span class="pill p-low">原生支持</span></td><td>DSH 的 workspace 自带<strong>有序会话账本</strong>，session 为 append-only 事件日志，支持 resume / fork / replay / 搜索。注意会话日志物理存放在 <code>DSH_HOME</code>，<strong>不要</strong>在 demand 下再建同名 <code>sessions/</code> 目录存日志，只放导出与摘要。</td></tr>
+    <tr><td>（缺）运行时与控制面</td><td><span class="pill p-high">必须补</span></td><td>新增 <code>runtime/</code>（DSH_HOME、实例状态、锁、缓存）与 <code>state/</code>（控制面索引/导出快照，<strong>主数据应在数据库</strong>）。目录结构无法表达成员、角色、分配、状态机与审计，这些必须进 DB，目录只是投影。</td></tr>
+  </table>
+
+  <h2 id="s2"><span class="num">2</span>修正后的 .rdws 完整结构</h2>
+  <pre><code>.rdws/                                   # 产品统一工作区（运行时数据，不进代码仓库）
+├── config/                              # 可版本化的配置（不含密钥）
+│   ├── platform.yaml                    #   全局：模型网关、SSO、插件白名单、配额、审计
+│   ├── policies/                        #   沙箱/命令/网络/工具策略基线
+│   │   ├── sandbox.yaml                 #     默认 workspace-write，禁用 danger-full-access
+│   │   └── tools.yaml                   #     命令白名单、禁止路径（sources、config、runtime）
+│   ├── profiles/                        #   DSH profile 模板（渲染输入，不是 DSH_HOME）
+│   │   ├── rdws-project.manifest.yaml
+│   │   └── cordis.patch.yml.tpl         #     占位符：实例 ID、项目 ID、网关地址、端口
+│   └── projects/
+│       └── project-A.yaml               #   项目覆盖：仓库清单、基线分支、角色、模型策略
+│
+├── projects/                            # ★ 原 workspaces/ 改名；项目即租户（隔离域）
+│   ├── project-A/
+│   │   ├── sources/                     # 唯一事实源：只读 bare mirror
+│   │   │   ├── repo-a.git/              #   git clone --bare --mirror
+│   │   │   └── repo-b.git/
+│   │   └── demands/
+│   │       ├── demand-A/                # ★ 1 个 DSH workspace = 1 个需求
+│   │       │   ├── demand.yaml          #   需求快照（主数据在 DB，此处只读镜像）
+│   │       │   ├── AGENTS.md            #   需求级指令（平台生成，不进 git）
+│   │       │   ├── context/             #   S0/S1 输入：需求文档、验收标准、接口契约
+│   │       │   ├── .gitstore/           #   ★ 需求私有 bare 仓（--local 硬链接共享对象）
+│   │       │   │   ├── repo-a.git/
+│   │       │   │   └── repo-b.git/
+│   │       │   ├── worktrees/           #   ★ AI 唯一可写的代码区
+│   │       │   │   ├── repo-a/          #     .git 文件指向 .gitstore，不指向 sources
+│   │       │   │   └── repo-b/
+│   │       │   ├── artifacts/           #   S2–S6 产物
+│   │       │   │   ├── design/  test/  deploy/
+│   │       │   │   └── sessions/        #     会话摘要/轨迹导出（日志在 DSH_HOME）
+│   │       │   └── .rdws/               #   需求级写锁、临时区、状态
+│   │       └── demand-B/
+│   └── project-B/
+│
+├── runtime/                             # ★ 新增：实例运行时（高频写、含凭据、独立备份）
+│   ├── dsh/
+│   │   └── &lt;instance-id&gt;/               #   = 该实例的 DSH_HOME
+│   │       ├── profiles/rdws/cordis.patch.yml
+│   │       ├── .credentials.yaml        #     模型网关凭据（权限 600）
+│   │       ├── AGENTS.md                #     平台级红线（DSH 用户全局指令链必加载）
+│   │       ├── sessions/                #     append-only 会话日志（单写者）
+│   │       ├── storage/                 #     workspace 注册表等非会话数据
+│   │       └── plugins/                 #     已安装的自研插件
+│   ├── instances/                       #   pid / port / socket / 健康状态 / 启动锁
+│   └── cache/                           #   镜像、依赖、临时检出
+│
+└── state/                               # 控制面索引与导出快照（主数据在 PostgreSQL）
+    ├── indexes/                         #   demand→workspace→session→instance 路由表快照
+    └── exports/                         #   审计导出、迁移备份</code></pre>
+  <div class="ok"><strong>为什么 DSH_HOME 必须独立：</strong><code>packages/boot/app-boot/README.zh.md</code> 说明 profile 位于 <code>$DSH_HOME/profiles/&lt;name&gt;</code>，凭据与会话日志也在 home 内；<code>session-persistence</code> 规定每会话单写者。把 home 放进 <code>config</code> 会让配置版本化与密钥管理失控，放进 <code>demands</code> 会让「归档需求」误删会话历史。</div>
+
+  <h2 id="s3"><span class="num">3</span>分支与 worktree 管理（你问的重点）</h2>
+
+  <h3>3.1 先说清矛盾在哪</h3>
+  <p><code>git worktree add</code> 会在<strong>主仓库</strong>的 <code>.git/worktrees/&lt;name&gt;/</code> 下登记 HEAD、index、gitdir 等元数据；worktree 里的 <code>.git</code> 是一个<strong>含绝对路径的文件</strong>，指回主仓库。所以「worktree 放在 demand 目录、主仓 sources 完全只读」这两个要求，在原生 worktree 下不能同时成立。此外 DSH 自带 <code>@deepseek-ai/dsh-experimental-worktree</code> 的配置项 <code>directory</code> 明确是「<em>Relative checkout pool <strong>inside the source repository</strong></em>」，默认检出到 <code>&lt;current checkout root&gt;/.agents/worktrees/&lt;name&gt;</code>，且文档写明「创建操作不会扩大目标目录或共享 Git 管理目录的写权限」—— 在 <code>workspace-write</code> 沙箱下让 AI 自己跑这个工具会被拒，<strong>不适合作为 RDWS 的需求主工作树方案</strong>。</p>
+
+  <h3>3.2 三个方案对比</h3>
+  <table>
+    <tr><th style="width:56px">方案</th><th style="width:210px">做法</th><th>利</th><th>弊</th><th style="width:66px">结论</th></tr>
+    <tr><td>A</td><td>主仓 <code>sources</code> 直接 <code>worktree add</code> 到 demand</td><td>最简单、对象零复制</td><td>主仓 <code>.git/worktrees/</code> 被写 → 违反「唯一事实源不可改动」；并发 add 有锁竞争；AI 容器必须挂载可写 sources</td><td><span class="pill p-high">否</span></td></tr>
+    <tr><td>B</td><td>每需求独立 <code>git clone</code></td><td>完全隔离、<code>.git</code> 在 demand 内、AI 容器无需挂载 sources</td><td>每需求一份完整对象库，大仓磁盘/时间成本高；基线冻结需额外处理</td><td><span class="pill p-mid">备选</span></td></tr>
+    <tr><td>C</td><td><strong>需求私有 bare + worktree</strong>：<code>git clone --bare --local</code> 从 sources 到 <code>demand/.gitstore/repo.git</code>，再从私有 bare <code>worktree add</code> 到 <code>demand/worktrees/repo</code></td><td><code>--local</code> 硬链接共享对象，几乎零额外磁盘；gitdir 全在 demand 内；sources 只被读一次；需求级 refs 与分支天然隔离；归档删目录即彻底清理</td><td>平台侧多一层编排；跨文件系统时 <code>--local</code> 退化为复制</td><td><span class="pill p-low">推荐</span></td></tr>
+  </table>
+
+  <h3>3.3 方案 C 实测结果（本机 git 验证）</h3>
+  <pre><code># 1. 唯一事实源（只读 bare mirror）
+sources/repo-a.git/
+
+# 2. 需求创建时，平台编排层执行（AI 会话不参与）
+git clone --bare --local \
+  /abs/.rdws/projects/project-A/sources/repo-a.git \
+  /abs/.rdws/projects/project-A/demands/demand-A/.gitstore/repo-a.git
+
+git --git-dir=/abs/.../demand-A/.gitstore/repo-a.git \
+    worktree add -b rdws/demand-A/repo-a \
+    /abs/.../demand-A/worktrees/repo-a &lt;baseCommit&gt;
+
+# 3. 需求完成后：发起 MR → CI → 合入 baseline；归档时
+git --git-dir=/abs/.../.gitstore/repo-a.git worktree remove .../worktrees/repo-a</code></pre>
+  <table>
+    <tr><th style="width:260px">验证项</th><th>实测结果</th></tr>
+    <tr><td>对象是否共享</td><td><code>--local</code> 后 origin 与 demand 私有 bare 的对象文件 <strong>inode 相同</strong>（硬链接），无额外对象复制</td></tr>
+    <tr><td>worktree 的 <code>.git</code> 指向</td><td><code>gitdir: /.../demand-A/.gitstore/repo-a.git/worktrees/repo-a</code> —— <strong>完全在需求目录内</strong></td></tr>
+    <tr><td>AI 在 worktree 内能否提交</td><td>可以，<code>git commit</code> 成功，新提交落在需求分支 <code>rdws/demand-A/repo-a</code></td></tr>
+    <tr><td>唯一事实源是否被改动</td><td>origin HEAD 与基线一致、refs 仍只有 <code>main</code>、<strong>主仓 worktrees 登记数 = 0</strong>；需求私有 bare 登记数 = 1</td></tr>
+  </table>
+  <div class="ok"><strong>结论：</strong>方案 C 让「sources 是唯一事实源、不允许直接改动」从约定变成物理事实 —— AI 容器<strong>只需挂载 <code>demand-A</code> 一个目录</strong>，连 <code>sources</code> 都不必挂载。</div>
+
+  <h3>3.4 分支规范与生命周期</h3>
+  <table>
+    <tr><th style="width:130px">环节</th><th>规则</th></tr>
+    <tr><td>基线</td><td>项目级 <code>config/projects/project-A.yaml</code> 声明 <code>baselineBranch</code>（如 <code>develop</code>）；创建需求时解析为 <strong>不可变 <code>baseCommit</code></strong> 写入 <code>demand.yaml</code>。</td></tr>
+    <tr><td>分支命名</td><td><code>rdws/&lt;demand-id&gt;/&lt;repo&gt;</code>；多仓库需求下每个 repo 一条同名分支。禁止 AI 自行 <code>checkout -b</code> 到基线分支。</td></tr>
+    <tr><td>创建主体</td><td><strong>只能由平台 orchestrator 执行</strong>（唯一有 sources 读权限与 git 操作权限的组件）；AI 会话创建前工作树已就绪。</td></tr>
+    <tr><td>并发写</td><td>同一 demand 下多会话共用同一批 worktree，<strong>必须加需求级写锁</strong>：同一时刻一个写会话（<code>workspace-write</code>），其余会话以 <code>read-only</code>（设计/评审/测试分析）运行。需要真正并行写代码时，由平台按会话派生二级 worktree（<code>rdws/&lt;demand&gt;/&lt;session&gt;/&lt;repo&gt;</code>）并在合并点做显式归并，作为可选高级模式。</td></tr>
+    <tr><td>回主干</td><td>平台发起 MR/PR → CI → 合入 baseline；<strong>AI 不直接 push</strong>。合并后 syncer 更新 sources mirror，其他活跃需求通过 <code>git fetch</code> 自行决定是否 rebase 基线。</td></tr>
+    <tr><td>归档</td><td>状态机置为 archived → 停止会话 → 导出轨迹摘要到 <code>artifacts/sessions/</code> → <code>worktree remove</code>（保留分支与提交，可配置）→ 按需整体冷备 demand 目录后清理 <code>.gitstore</code>。</td></tr>
+  </table>
+  <div class="callout"><strong>运维坑：</strong>worktree 的 <code>.git</code> 文件写的是<strong>绝对路径</strong>。整体迁移 <code>.rdws</code> 或跨主机恢复备份后，必须执行 <code>git worktree repair</code> 或由平台重建 worktree；否则所有需求工作树同时失效。建议把「路径可重建」写进编排层，不把 worktree 当作可搬运资产。</div>
+
+  <h2 id="s4"><span class="num">4</span>目录 → DSH 概念映射</h2>
+  <table>
+    <tr><th style="width:230px">RDWS 目录</th><th style="width:190px">DSH 概念 / API</th><th>绑定方式与约束</th></tr>
+    <tr><td><code>demands/demand-A</code></td><td><code>Workspace</code><br><code>ctx.workspaceRegistry.create(path, title)</code></td><td>目录必须先存在；<code>create</code> 按 <code>fs.realpath</code> 规范化且<strong>幂等复用</strong>。一个实例可注册多个 workspace（<code>list()</code>），这正是按项目分片的依据。</td></tr>
+    <tr><td>需求下的每个 AI 会话</td><td><code>Session</code> + <code>attachSession(id)</code></td><td><strong>关键约束：</strong><code>attachSession</code> 要求 session 的 <strong>header cwd 解析后与 workspace.path 完全相等</strong>。所以创建会话时 cwd 必须精确设为 <code>demand-A</code>，<strong>不能</strong>设成 <code>demand-A/worktrees/repo-a</code>；后续 AI 用 <code>working_directory(cd)</code> 进入 worktree 不影响归属（header cwd 不可变）。</td></tr>
+    <tr><td><code>demand-A/worktrees/*</code></td><td><code>ctx.workingDirectory</code> 有效目录</td><td>切换只影响单个 session；<strong>沙箱可写根与项目归属仍绑定原始 header cwd</strong> —— 正好让整个 demand 目录保持可写、sources 在边界外。</td></tr>
+    <tr><td><code>sources/</code></td><td>沙箱边界之外</td><td><code>workspace-write</code> 允许写「工作区根 + 受支持额外目录 + 临时区」；<code>sandboxPolicy.resolve()</code> 明确「a session cwd is its workspace-write boundary」。<strong>基线策略：禁止 <code>danger-full-access</code>，禁止 <code>registerWritableRoot()</code> 放行项目根</strong>。</td></tr>
+    <tr><td><code>runtime/dsh/&lt;instance&gt;</code></td><td><code>$DSH_HOME</code></td><td>profile 位于 <code>$DSH_HOME/profiles/rdws/</code>；凭据、会话日志、workspace 注册表、插件都在此。每实例独占，禁止共享。</td></tr>
+    <tr><td><code>config/profiles/*</code></td><td>profile 模板 + <code>cordis.patch.yml</code></td><td>模板是渲染输入；启动时由 launcher 生成到实例 DSH_HOME。可用 <code>dsh --profile rdws --from-default-profile web</code> 从随附模板创建自定义 profile。</td></tr>
+    <tr><td><code>AGENTS.md</code> 三级</td><td><code>dsh-agent-instructions</code></td><td><code>$DSH_HOME/AGENTS.md</code>（平台红线）<strong>必定加载</strong>；项目级指令链依赖 <code>.git</code> 根标记上溯，demand 目录本身无 <code>.git</code>，<strong>不能依赖目录链自动加载需求上下文</strong>。建议用插件 <code>agent.inject()</code> 显式注入 <code>demand.yaml</code> + <code>context/</code>，更可靠。</td></tr>
+  </table>
+
+  <h2 id="s5"><span class="num">5</span>实例分片粒度（修正上轮结论）</h2>
+  <p>上一轮我建议「每需求一个 DSH 实例」，是基于隔离最强化给出的粗略判断。核查 <code>workspaceRegistry</code> 后可细化如下：</p>
+  <table>
+    <tr><th style="width:150px">粒度</th><th>可行性</th><th>取舍</th><th style="width:74px">建议</th></tr>
+    <tr><td>全平台一实例</td><td>否</td><td>单 owner、单 DSH_HOME、跨租户无隔离，且所有会话单写者挤在一个进程</td><td><span class="pill p-high">排除</span></td></tr>
+    <tr><td><strong>每项目（租户）一实例</strong></td><td>可行</td><td>一个实例注册该项目下所有 demand workspace；挂载整个 <code>project-A</code>（sources 只读 / demands 可写）；共享项目级模型与凭据策略；资源开销 O(项目数)。代价：项目内所有成员在 DSH 侧仍是同一 owner，<strong>权限必须完全由平台 BFF 兜住</strong></td><td><span class="pill p-low">默认</span></td></tr>
+    <tr><td>每需求一实例</td><td>可行</td><td>隔离最强、配额与模型策略可按需定制；代价 O(需求数) 个 Node 进程 + 独立 DSH_HOME + 独立凭据，冷启动慢</td><td><span class="pill p-mid">按需升级</span></td></tr>
+    <tr><td>每会话一实例</td><td>可行但过度</td><td>会话本就是 DSH 内的一等公民，重复造进程纯属浪费</td><td><span class="pill p-high">排除</span></td></tr>
+  </table>
+  <div class="callout"><strong>落地建议：</strong>用统一的 <code>InstanceSpec { scope: 'project' | 'demand', projectId, demandId?, ... }</code> 抽象实例化，默认 <code>project</code>；对高敏项目、独立配额需求或需要不同模型策略的需求，在 <code>config/projects/&lt;id&gt;.yaml</code> 里声明 <code>isolation: demand</code> 即可切换，不改代码。<strong>无论哪种粒度，DSH 都只监听内网，浏览器一律经平台 BFF。</strong></div>
+
+  <h2 id="s6"><span class="num">6</span>二次开发工程结构</h2>
+  <p class="lead">核心原则：<strong>自研代码与 DSH 上游彻底隔离</strong>。上游是 rc 版本且明确会有破坏性变更，所有耦合收敛到 <code>dsh/bridge</code> 一层，自研插件只依赖公共 seam，不 import <code>packages/core</code> 内部路径。</p>
+  <pre><code>rdws/                                    # 代码仓库（与运行时 .rdws 严格区分）
+├── apps/
+│   ├── console/                         # Web 前端：项目/需求/角色/会话/轨迹控制台
+│   ├── server/                          # 平台后端：账号、项目、RBAC、需求、导入、审计、BFF
+│   ├── orchestrator/                    # 实例调度、worktree 生命周期、需求写锁、会话路由
+│   └── syncer/                          # ★ 唯一可写 sources 的组件（fetch mirror、基线同步）
+├── packages/
+│   ├── contracts/                       # OpenAPI / 事件 schema / 领域类型（前后端 + 插件共享）
+│   ├── ui/                              # 设计系统与业务组件
+│   └── sdk/                             # 平台 API 客户端
+├── dsh/                                 # ★ DSH 集成层
+│   ├── upstream/                        # 锁定版本快照：git submodule 或 vendor tarball + 升级报告
+│   ├── profiles/
+│   │   ├── rdws-project/                # 自定义 profile 模板（manifest + bundle 列表）
+│   │   └── patches/cordis.patch.yml.tpl # 渲染时注入实例 ID / 网关 / 端口 / 插件白名单
+│   ├── plugins/                         # pnpm workspace：每个插件一个包
+│   │   ├── rdws-auth/                   #   ConnectionAuthentication provider + PrincipalMap 扩展
+│   │   ├── rdws-workspace/              #   workspaceRegistry.create / attachSession 适配
+│   │   ├── rdws-demand-context/         #   agent.inject() 注入需求上下文；AGENTS.md 生成
+│   │   ├── rdws-policy/                 #   tools/pre-execute 拦截：路径守卫、命令白名单、禁越权模式
+│   │   ├── rdws-audit/                  #   session/event → 平台审计总线
+│   │   ├── rdws-model/                  #   内网模型网关 adapter + 凭据注入
+│   │   └── rdws-lifecycle/              #   就绪上报、空闲检测、归档钩子、写锁联动
+│   ├── host/
+│   │   ├── launcher/                    #   渲染 DSH_HOME → 生成 profile → 拉起 dsh → 健康检查
+│   │   └── shim/                        #   实例侧 HTTP/WS 代理，仅监听内网，供 BFF 调用
+│   ├── bridge/                          # ★ 防腐层：TS SDK / JSON-RPC / headless 封装
+│   │   ├── session.ts                   #     createSession(cwd=demandDir) / resume / fork / archive
+│   │   ├── workspace.ts                 #     create(path) / attach(sessionId) / list
+│   │   └── events.ts                    #     会话事件订阅 → 平台事件总线
+│   └── tests/                           # 契约测试、profile 快照、上游升级回归
+├── config/                              # 默认配置模板（进 git；非运行时数据）
+├── deploy/                              # Dockerfile / compose / helm；固化 Node ≥24.9 + pnpm 11.28.5
+├── docs/                                # 目录约定、分支规范、插件开发、升级手册
+└── scripts/rdwsctl                      # init-project / new-demand / worktree / doctor / upgrade-check</code></pre>
+  <table>
+    <tr><th style="width:180px">模块</th><th>为什么必须有</th></tr>
+    <tr><td><code>dsh/bridge</code></td><td>上游 rc 破坏性变更只改这一层；平台业务代码不感知 DSH API。所有「创建会话时 cwd 必须等于 workspace.path」这类隐性约束，在 bridge 里断言一次并在测试中锁死。</td></tr>
+    <tr><td><code>dsh/host/launcher</code></td><td>把 <code>config</code> 模板渲染成实例专属 <code>DSH_HOME</code>，注入 <code>--trusted-host</code>、<code>--public-url</code>、模型网关地址、插件白名单；负责进程生命周期与健康检查。</td></tr>
+    <tr><td><code>dsh/upstream</code></td><td>锁定 0.2.2-rc.3 快照，配合 <code>dsh/tests</code> 的 profile 快照与回归用例，避免评估当天仍在合入的 master 打穿自研插件。</td></tr>
+    <tr><td><code>apps/syncer</code></td><td>把「唯一事实源」的写权限收敛到单一组件；AI 实例只挂载 demand 目录，从架构上消除误写 sources 的可能。</td></tr>
+    <tr><td><code>apps/orchestrator</code></td><td>持有需求写锁、<code>sessionId → instance</code> 路由、worktree 注册表、实例池与空闲回收；是把「目录约定」变成「可运行状态机」的地方。</td></tr>
+  </table>
+
+  <h2 id="s7"><span class="num">7</span>插件清单与关键配置</h2>
+  <h3>7.1 自研插件与 DSH 扩展点对应</h3>
+  <table>
+    <tr><th style="width:190px">插件</th><th style="width:250px">挂载点</th><th>职责 / 优先级</th></tr>
+    <tr><td><code>rdws-policy</code></td><td><code>tools/pre-execute</code>、<code>ctx.sandboxPolicy</code></td><td><span class="pill p-high">P0</span> 拦截对 <code>sources/</code>、<code>config/</code>、<code>runtime/</code>、其他 demand 目录的读写；禁止 <code>danger-full-access</code>；命令白名单；拒绝直接编辑 <code>.gitstore</code> 内文件（git 命令走受控通道）。</td></tr>
+    <tr><td><code>rdws-model</code></td><td><code>ctx.llm</code> / Custom Provider</td><td><span class="pill p-high">P0</span> 强制内网模型网关；关闭 <code>dsh-session-log-deepseek</code>（<code>enabled: false</code>）与遥测；凭据不落明文。</td></tr>
+    <tr><td><code>rdws-workspace</code></td><td><code>ctx.workspaceRegistry</code></td><td><span class="pill p-high">P0</span> 实例启动时按项目/需求批量 <code>create(path)</code>；创建会话后 <code>attachSession()</code>；保证 cwd 精确等于 demand 路径。</td></tr>
+    <tr><td><code>rdws-demand-context</code></td><td><code>agent.inject()</code> / <code>agent/pre-step</code></td><td><span class="pill p-mid">P1</span> 注入需求描述、验收标准、分支与仓库清单、阶段角色（需求/开发/测试/部署）对应的可用工具集；生成 <code>AGENTS.md</code>。</td></tr>
+    <tr><td><code>rdws-audit</code></td><td><code>session/event</code>、<code>tool/*</code></td><td><span class="pill p-mid">P1</span> 轨迹、工具调用、审批与产物变更写平台审计总线，满足回溯与合规。</td></tr>
+    <tr><td><code>rdws-auth</code></td><td><code>ctx.connection.authentication.register()</code> + <code>PrincipalMap</code></td><td><span class="pill p-mid">P2</span> 仅当将来需要浏览器直连实例时启用；默认 BFF 模式下不需要，避免 owner 旁路风险。</td></tr>
+    <tr><td><code>rdws-lifecycle</code></td><td><code>workspace/*</code>、<code>agent/*</code></td><td><span class="pill p-mid">P2</span> 空闲上报、写锁联动、归档前导出轨迹、异常实例隔离。</td></tr>
+  </table>
+
+  <h3>7.2 profile patch 基线（示意）</h3>
+  <pre><code># config/profiles/cordis.patch.yml.tpl → 渲染到 $DSH_HOME/profiles/rdws/cordis.patch.yml
+- name: '@deepseek-ai/dsh-session-log-deepseek'
+  config: { enabled: false }                 # P0：禁止会话日志随官方 API 上传
+- name: '@deepseek-ai/dsh-session-telemetry-otel'
+  config: { mode: DISABLED }                  # P0：禁止遥测外发
+- name: '@deepseek-ai/dsh-host-webserver'
+  config:
+    host: 127.0.0.1                          # 仅内网；由 shim / BFF 代理
+    port: {{PORT}}
+- name: '@deepseek-ai/dsh-sandbox-policy'
+  config: { defaultMode: workspace-write }   # P0：禁止 danger-full-access
+- name: '@deepseek-ai/dsh-experimental-worktree'
+  config: { enabled: false }                 # 需求工作树由 orchestrator 建，不让模型自建
+- name: '@deepseek-ai/rdws-policy'           # 自研插件按序挂载
+- name: '@deepseek-ai/rdws-workspace'
+- name: '@deepseek-ai/rdws-demand-context'</code></pre>
+  <p class="src">字段名以 <code>docs/config-catalog.zh.md</code> 与实际 bundle 行为为准；此处表达的是「基线策略进 patch、实例参数靠渲染」这一机制，不是可直接粘贴的最终配置。patch 层按 id 替换整个 config（<code>docs/architecture.zh.md</code>），写 patch 时必须重述要保留的字段。</p>
+
+  <h2 id="s8"><span class="num">8</span>关键数据流</h2>
+  <ol class="steps">
+    <li><b>项目初始化</b><span>平台建 <code>projects/project-A/{sources,demands}</code> → syncer 把各仓库 <code>git clone --bare --mirror</code> 到 <code>sources/&lt;repo&gt;.git</code> → 写 <code>config/projects/project-A.yaml</code>（仓库清单、baseline、角色、隔离档位）。</span></li>
+    <li><b>需求创建 / 批量导入</b><span>平台在 DB 建需求与指派 → 解析 <code>baseCommit</code> → orchestrator 建 <code>demands/demand-A</code> 目录树 → 按仓库执行 <code>clone --bare --local</code> + <code>worktree add -b rdws/demand-A/&lt;repo&gt;</code> → 生成 <code>demand.yaml</code> 与 <code>AGENTS.md</code>。</span></li>
+    <li><b>实例就绪</b><span>launcher 按 <code>InstanceSpec</code> 渲染 <code>runtime/dsh/&lt;instance&gt;</code>（profile + patch + 凭据 + 插件）→ 拉起 <code>dsh --profile rdws</code> → <code>rdws-workspace</code> 对本项目所有 demand 调 <code>workspaceRegistry.create()</code> → 健康检查通过，登记路由表。</span></li>
+    <li><b>开发会话</b><span>开发登录 → BFF 校验角色与需求权限 → 取需求写锁 → bridge <code>createSession(cwd = demand-A 绝对路径)</code> → <code>attachSession()</code> → <code>rdws-demand-context</code> 注入上下文 → AI 在 <code>worktrees/repo-a</code> 内编码（<code>workspace-write</code> 边界仍为 demand-A）→ 事件流写审计。</span></li>
+    <li><b>阶段流转与归档</b><span>需求/开发/测试/部署角色在同一 workspace 开不同会话（读会话不占写锁）→ 平台发起 MR → CI → 合入 baseline → 归档时导出轨迹摘要、<code>worktree remove</code>、释放写锁、按策略冷备或清理 <code>.gitstore</code>。</span></li>
+  </ol>
+
+  <h2 id="s9"><span class="num">9</span>坑与行动清单</h2>
+  <table>
+    <tr><th style="width:52px">优先级</th><th style="width:210px">事项</th><th>说明 / 验收</th></tr>
+    <tr><td><span class="pill p-high">P0</span></td><td><code>workspaces/</code> → <code>projects/</code> 改名</td><td>现在改成本为零；等插件与 API 铺开后再改，字段、日志、文档全要返工。</td></tr>
+    <tr><td><span class="pill p-high">P0</span></td><td>补 <code>runtime/</code> 与 <code>state/</code>，密钥出 <code>config</code></td><td>验收：实例可整体销毁重建而不丢业务数据；<code>config/</code> 可安全提交到配置仓库。</td></tr>
+    <tr><td><span class="pill p-high">P0</span></td><td>采用方案 C 并禁用 DSH 内置 worktree 工具</td><td>验收：AI 容器不挂载 sources；在 demand 内提交后主仓 refs 与 worktrees 登记零变化（已具备实测脚本，纳入 CI）。</td></tr>
+    <tr><td><span class="pill p-high">P0</span></td><td>会话 cwd 精确等于 demand 路径</td><td>在 <code>bridge/session.ts</code> 断言并写契约测试；否则 <code>attachSession</code> 直接拒绝，会话会变成 Ungrouped。</td></tr>
+    <tr><td><span class="pill p-high">P0</span></td><td>需求级写锁 + 会话只读档位</td><td>验收：两个并发会话中仅一个可写，第二个自动以 <code>read-only</code> 运行且不产生文件变更。</td></tr>
+    <tr><td><span class="pill p-mid">P1</span></td><td>需求上下文不依赖 AGENTS.md 目录发现</td><td>demand 目录无 <code>.git</code> 根标记，指令链上溯不稳定；用 <code>agent.inject()</code> 显式注入，<code>$DSH_HOME/AGENTS.md</code> 只放平台红线。</td></tr>
+    <tr><td><span class="pill p-mid">P1</span></td><td>worktree 绝对路径与迁移</td><td>备份/迁移后必须 <code>git worktree repair</code> 或由编排层重建；不要把 worktree 当可搬运资产。</td></tr>
+    <tr><td><span class="pill p-mid">P1</span></td><td>并发 git 操作串行化</td><td>同一 <code>.gitstore</code> 上的 worktree add/remove、以及 syncer 的 fetch，需平台侧加锁，避免 index/refs 竞争。</td></tr>
+    <tr><td><span class="pill p-mid">P1</span></td><td><code>.gitstore</code> 保护</td><td>允许 git 命令写元数据，但用 <code>rdws-policy</code> 拦截文件工具对 <code>.gitstore/</code> 的直接编辑/删除，防止 AI 破坏需求对象库。</td></tr>
+    <tr><td><span class="pill p-mid">P2</span></td><td>上游版本与回归</td><td>锁 0.2.2-rc.3 快照；<code>dsh/tests</code> 固定 profile 快照、会话归属、cwd 与沙箱策略用例，作为每次升级的门禁。</td></tr>
+  </table>
+
+  <h2 id="s10"><span class="num">10</span>证据索引</h2>
+  <table>
+    <tr><th style="width:360px">DSH 一手文件（本地 <code>.dsh-ref/</code>）</th><th>支撑结论</th></tr>
+    <tr><td><code>docs/subsystems/workspace.zh.md</code> §Workspace / §注册表</td><td>workspace = 规范路径 + 稳定 ID + 有序会话账本；<code>create()</code> 幂等、<code>list()</code> 多 workspace；<code>attachSession()</code> 要求 header cwd 等于 workspace.path</td></tr>
+    <tr><td><code>docs/subsystems/working-directory.zh.md</code></td><td>不可变 header cwd 标识原始项目；切换目录只影响单会话；沙箱可写根与项目归属仍绑定原始项目</td></tr>
+    <tr><td><code>docs/subsystems/sandbox.zh.md</code> L11 / L204–222</td><td><code>workspace-write</code> 写入范围；<code>sandboxPolicy.resolve()</code>「a session cwd is its workspace-write boundary」；<code>registerWritableRoot()</code> 为 runtime-only</td></tr>
+    <tr><td><code>packages/experimental/worktree/README.zh.md</code>、<code>docs/config-catalog.zh.md</code> L1586–1610</td><td>内置 worktree 的 <code>directory</code> 是源仓库内部相对检出池；创建沿用会话文件策略、不扩大共享 Git 管理目录写权限 → 不适用于本方案</td></tr>
+    <tr><td><code>packages/context/agent-instructions/README.zh.md</code></td><td><code>$DSH_HOME/AGENTS.md</code> 全局链必加载；项目链依赖 <code>.git</code> 根标记上溯 → 需求上下文应显式注入</td></tr>
+    <tr><td><code>packages/boot/app-boot/README.zh.md</code> L52–65</td><td>profile 位于 <code>$DSH_HOME/profiles/&lt;name&gt;</code>；<code>cordis.patch.yml</code> 分层与 <code>--from-default-profile</code></td></tr>
+    <tr><td><code>docs/architecture.zh.md</code> §会话日志 / §新行为的归属位置</td><td>session append-only 事件日志、resume/fork/replay；<code>agent.inject()</code> 注入模型可见上下文</td></tr>
+    <tr><td>本机 git 实测（<code>clone --bare --local</code> + <code>worktree add</code> + 提交）</td><td>对象 inode 相同、gitdir 落在 demand 内、worktree 内可提交、主仓 refs 与 worktrees 登记零变化</td></tr>
+  </table>
+  <p class="src">上一轮《可行性评估报告》见 <code>dsh-feasibility-report.html</code>；本文件是其工程落地续篇，结论有冲突处以本文件为准（特别是实例分片粒度）。</p>
+
+  <div class="foot">RDWS 运行与配置空间设计评审 · 2026-11-13。所有 DSH 结论基于本地锁定的 0.2.2-rc.3 源码核查；git 行为基于本机 git 实测。文档为工程方案，不构成法律意见。</div>
+</div>
+</body>
+</html>

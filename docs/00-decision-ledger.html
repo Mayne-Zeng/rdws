@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RDWS · 决策台账 v3（后续 Demo 设计的唯一事实来源）</title>
+<style>
+  :root{
+    --brand:#0E7490; --brand-dark:#0B596E; --brand-soft:#E6F3F6; --brand-line:#B9DEE6;
+    --ink:#1C2530; --ink-2:#43505E; --ink-3:#6B7885;
+    --line:#E2E7EB; --bg:#F5F7F8; --paper:#FFFFFF;
+    --red:#B3373A; --red-bg:#FCEDEC; --amber:#9A6410; --amber-bg:#FDF4E3;
+    --green:#24735A; --green-bg:#EAF5F0; --gray-bg:#F0F3F5;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:15px;line-height:1.75;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px 80px}
+  header{background:var(--paper);border-top:4px solid var(--brand);border-bottom:1px solid var(--line);padding:42px 0 32px;margin-bottom:28px}
+  header .wrap{padding-bottom:0}
+  .kicker{color:var(--brand);font-size:12px;letter-spacing:.18em;font-weight:700;margin-bottom:10px}
+  h1{font-size:27px;line-height:1.35;margin:0 0 10px;letter-spacing:-.01em}
+  .sub{color:var(--ink-3);font-size:13.5px;margin:0}
+  .meta{margin-top:20px;display:flex;flex-wrap:wrap;gap:8px}
+  .tag{font-size:12px;padding:4px 10px;border:1px solid var(--line);border-radius:3px;color:var(--ink-2);background:var(--gray-bg)}
+  h2{font-size:20px;margin:42px 0 6px;padding-top:18px;border-top:2px solid var(--brand)}
+  h2 .num{color:var(--brand);font-variant-numeric:tabular-nums;margin-right:10px}
+  h3{font-size:15.5px;margin:24px 0 8px;color:var(--brand-dark)}
+  p{margin:10px 0}
+  ul,ol{margin:10px 0;padding-left:22px}li{margin:5px 0}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;background:var(--gray-bg);padding:1px 5px;border-radius:3px;color:var(--brand-dark);word-break:break-word}
+  pre{background:#FBFCFD;border:1px solid var(--line);border-left:3px solid var(--brand-line);padding:14px 18px;overflow-x:auto;font-size:12.5px;line-height:1.7;margin:14px 0;border-radius:0 4px 4px 0}
+  pre code{background:none;padding:0;color:var(--ink-2)}
+  .lead{font-size:16px;color:var(--ink-2)}
+  .verdict{background:var(--brand-soft);border:1px solid var(--brand-line);border-left:4px solid var(--brand);padding:18px 22px;margin:20px 0;border-radius:0 4px 4px 0}
+  .verdict .vtitle{font-size:12px;letter-spacing:.14em;color:var(--brand);font-weight:700;margin-bottom:8px}
+  .warn{background:var(--amber-bg);border:1px solid #EBD9B4;border-left:3px solid var(--amber);padding:12px 16px;font-size:13.5px;color:#6F4A0B;border-radius:0 3px 3px 0;margin:14px 0}
+  .danger{background:var(--red-bg);border:1px solid #F0CECD;border-left:3px solid var(--red);padding:12px 16px;font-size:13.5px;color:#8A2C2F;border-radius:0 3px 3px 0;margin:14px 0}
+  .ok{background:var(--green-bg);border:1px solid #CDE7DA;border-left:3px solid var(--green);padding:12px 16px;font-size:13.5px;color:#1F5C48;border-radius:0 3px 3px 0;margin:14px 0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;background:var(--paper);border:1px solid var(--line);font-size:13px}
+  th,td{border-bottom:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:#F0F6F7;color:var(--brand-dark);font-weight:700;font-size:12px}
+  tr:last-child td{border-bottom:none}
+  td code{font-size:11.5px}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:3px;white-space:nowrap}
+  .p-red{background:var(--red-bg);color:var(--red)}
+  .p-amber{background:var(--amber-bg);color:var(--amber)}
+  .p-green{background:var(--green-bg);color:var(--green)}
+  .p-blue{background:var(--brand-soft);color:var(--brand-dark)}
+  .p-gray{background:var(--gray-bg);color:var(--ink-3)}
+  .src{font-size:12px;color:var(--ink-3)}
+  .toc{background:var(--paper);border:1px solid var(--line);padding:16px 22px;font-size:13.5px;columns:2;column-gap:32px}
+  .toc a{color:var(--ink-2);text-decoration:none;display:block;padding:2px 0}
+  .toc a:hover{color:var(--brand)}
+  .foot{margin-top:46px;padding-top:20px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-3)}
+  @media(max-width:720px){.toc{columns:1}h1{font-size:22px}.wrap{padding:0 16px 60px}table{font-size:12px}th,td{padding:8px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="kicker">RDWS · 项目基线</div>
+    <h1>决策台账 v3</h1>
+    <p class="sub">后续 Demo 设计与单需求 PoC 的唯一事实来源 · 已与用户确认共同理解</p>
+    <div class="meta">
+      <span class="tag">确认日期：2026-11-15</span>
+      <span class="tag">状态：共同理解已确认 · C1 不追认已收口</span>
+      <span class="tag">核查基线：DSH 0.2.2-rc.3</span>
+      <span class="tag">落地点：/Users/zengym/workspace/rdws</span>
+      <span class="tag">仓库：Mayne-Zeng/rdws（GitHub）</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="toc">
+    <a href="#s0">0. 这份文件的用途</a>
+    <a href="#s1">1. 已确认决策台账</a>
+    <a href="#s2">2. 约束与非目标</a>
+    <a href="#s3">3. 独立复核与残余风险</a>
+    <a href="#s4">4. 待核实事实</a>
+    <a href="#s5">5. 下游动作与验证边界</a>
+    <a href="#s6">6. 目录与文件导航</a>
+    <a href="#s7">7. 证据索引</a>
+  </div>
+
+  <h2 id="s0"><span class="num">0</span>这份文件的用途</h2>
+  <div class="verdict">
+    <div class="vtitle">定位</div>
+    <p style="margin:0">本台账是 2026-11-13 至 11-15 决策访谈的确认结果，经用户明确确认共同理解，并由三份独立评审复核后收口。<strong>后续 Demo 设计、原型迭代与单需求 PoC 均以本文件为唯一事实来源</strong>：不得把任何决策转述得比这里更强或更弱；若实现阶段暴露范围、契约、架构、安全、数据、验收或运维方面的实质偏离，停下来重新对齐，不要静默吸收。</p>
+  </div>
+  <h3>项目与仓库</h3>
+  <table>
+    <tr><th style="width:150px">项</th><th>信息</th></tr>
+    <tr><td>项目</td><td><strong>RDWS</strong> · AI-Native R&amp;D Workstation</td></tr>
+    <tr><td>定位</td><td>面向项目研发全过程的多租户工程工作站</td></tr>
+    <tr><td>Git 仓库</td><td><a href="https://github.com/Mayne-Zeng/rdws" target="_blank" rel="noopener" style="color:var(--brand-dark)">https://github.com/Mayne-Zeng/rdws.git</a> · GitHub · PUBLIC · 2026-11-16 创建 · 默认分支 <code>main</code></td></tr>
+    <tr><td>访问账号</td><td><code>Mayne-Zeng</code>（本机 <code>gh</code> 活跃账号已核实；remote 走 HTTPS + gh 凭据助手）</td></tr>
+    <tr><td>本地路径</td><td><code>/Users/zengym/workspace/rdws</code></td></tr>
+    <tr><td>本地关联</td><td><code>git init -b main</code> · <code>origin</code> → 上述 HTTPS URL · 仓库级 <code>credential.helper</code> 先置空、再指向 <code>!gh auth git-credential</code>（清空系统 / 全局继承的 osxkeychain 与 store，强制走 gh 活跃账号）</td></tr>
+    <tr><td>凭据身份</td><td>实测 <code>git credential fill</code> → <code>username=Mayne-Zeng</code>；<code>gh api user</code> → <code>Mayne-Zeng</code>；<code>git ls-remote origin</code> 连通（只读核实）</td></tr>
+    <tr><td>提交身份</td><td>仓库级 <code>user.name = Mayne-Zeng</code> · <code>user.email = rdws@mayne.cn</code>；实测 <code>git var GIT_AUTHOR_IDENT</code> / <code>GIT_COMMITTER_IDENT</code> 均为 <code>Mayne-Zeng &lt;rdws@mayne.cn&gt;</code>。仅作用于本仓库，不改系统 / 全局配置</td></tr>
+    <tr><td>许可证 / 仓库配套</td><td><code>MIT</code> · Copyright (c) 2026 Mayne-Zeng，<strong>本轮自决、可推翻</strong>（如需更换请显式说明；仓库已公开，更换后已分发版本仍受原许可约束）；已补 <code>.gitignore</code> / <code>README.md</code> / <code>SECURITY.md</code> / <code>THIRD_PARTY_NOTICES.md</code>。许可证属项目标识，不改变 §1–§3 的任何已确认决策</td></tr>
+  </table>
+  <p class="src">仓库信息属于<strong>项目标识</strong>，不是决策：本台账 §1–§3 的已确认决策、C1 不追认口径与 R-A / R-B 残余风险不因本次登记改变。已完成本地初始化、remote 关联与首次提交推送（<code>main</code> 分支）；提交与作者身份以 GitHub 仓库历史为准。注意：本机系统 / 全局另存有 <code>zengym-sally</code> 的凭据，若不在本仓库清空继承链，git 会优先取到该账号；实测已通过空 helper 规避。访问与提交身份已统一为 <code>Mayne-Zeng</code>；提交邮箱 <code>rdws@mayne.cn</code> 是否已在 GitHub 账号验证，当前 token 缺 <code>user:email</code> scope 无法核实，若未验证 GitHub 会把 commit 标为 Unverified（不影响提交本身）。</p>
+  <p>三份既有成果与本台账的关系：<code>01-feasibility-report.html</code> 回答「能不能用 DSH、有什么开源与安全风险」；<code>02-directory-and-engineering-design.html</code> 回答「目录怎么放、工程怎么搭」；<code>demo/rdws-overall-demo.html</code> 是 D17 的<strong>探索稿原型</strong>。三者中与本台账冲突时，<strong>以本台账为准</strong>（例如设计文档 §5 的「每需求一实例」已被 D4 修正为项目级实例）。此后新增的 <code>03-design-crosscheck-report.html</code> 与 <code>04-design-baseline.html</code> 属评审与基线产物，不改变上述关系。</p>
+
+  <h2 id="s1"><span class="num">1</span>已确认决策台账</h2>
+
+  <h3>1.1 范围与交付</h3>
+  <table>
+    <tr><th style="width:110px">标号</th><th style="width:190px">决策</th><th>确认要点</th></tr>
+    <tr><td>D1</td><td>首版范围</td><td>(a) <strong>单需求 PoC</strong>：一个项目、一个需求、一个实例；验收＝一个 workspace 下 ≥5 会话，恢复 / fork / 回放可用，sources 零写入可被脚本验证。</td></tr>
+    <tr><td>D17</td><td>PoC 前置 Demo</td><td>(b) <strong>可点击的整体 Demo 原型</strong>：完整整体、覆盖多角色与全链路、假数据、不接真实后端与 DSH。</td></tr>
+    <tr><td>D18</td><td>原型的契约强度</td><td>(a) <strong>探索稿</strong>：明确标注「非契约、可推翻」，不与实现绑定；冲突时改原型，不走变更评审。</td></tr>
+    <tr><td>D10</td><td>客户端形态</td><td>(b) <strong>带范围限定</strong>：首版只做浏览器模式；Tauri 薄壳列为后续产品演进路线，不进 PoC、不进这版原型。薄壳不得内嵌 DSH runtime。</td></tr>
+  </table>
+
+  <h3>1.2 安全与数据</h3>
+  <table>
+    <tr><th style="width:110px">标号</th><th style="width:190px">决策</th><th>确认要点</th></tr>
+    <tr><td>D2</td><td>模型来源 / 安全基线</td><td>模型由部署方自行配置，<strong>平台不预设公网或内网限制</strong>；支持第三方供应商。会话日志上传（<code>dsh-session-log-deepseek</code>）与 OTel 遥测由<strong>平台级强制锁定为关闭</strong>，项目级 / 个人级不可覆盖；出口白名单交部署方配置。残余风险见 §3。</td></tr>
+    <tr><td>D19</td><td>三级作用域</td><td>(a) 分层语义：平台级管供应商注册表 / 协议 / 端点 / 凭据与 D2 锁定项；项目级管本项目可用供应商子集 + 默认模型 + 配额；个人级只在允许集合内选<strong>本次会话</strong>的模型，走会话级注入。<strong>一人一实例路径明确排除</strong>。</td></tr>
+    <tr><td>D21</td><td>能力白名单</td><td>(a) 平台维护已审核插件 / 技能 / MCP 白名单，需求导入 / 新建 / 编辑时生成 <code>agent preset</code>，后续可调整；<strong>平台之外的插件、技能、MCP 一律不允许</strong>。DSH 硬约束：preset 修改只影响之后创建的会话。</td></tr>
+    <tr><td>D3</td><td>鉴权收口</td><td>(c) <strong>BFF 全兜 + 数据面过滤</strong>：浏览器不直连 DSH，平台侧记「真人 / 角色 / 需求 / 会话」；过滤覆盖 session/list、search、workspace 列表与 <code>$events</code> 帧。要不要补 DSH 内部方法级授权留到 MVP 评估。</td></tr>
+    <tr><td>D20</td><td>HITL</td><td>(a) 平台作为 DSH 唯一 <code>answer</code> 客户端，按需求权限路由审批、超时 fail-closed、代答并写审计；<strong>收口 (a)</strong>：<code>workspace-write</code> + <code>never</code>，工具级审批关掉，只有平台显式声明的业务 HITL 关卡（设计确认 / 测试验收 / 部署批准）走交互式。</td></tr>
+    <tr><td>D7</td><td>数据归属</td><td>(a) 会话轨迹<strong>权威</strong>＝每个实例 <code>$DSH_HOME</code> 里的 append-only JSONL；PG 只存身份映射 / 审计索引 / 摘要。哈希由独立校验任务计算，锚点写入 PG 的 append-only 审计表、与文件分离存储，写锚点者无权改会话文件。留存期归档后可配置、不做自动删除。</td></tr>
+    <tr><td>D5</td><td>隔离档位</td><td><strong>双档可配置</strong>：具备 Docker 时整个 DSH 实例进容器、只挂 demand + runtime（强隔离档）；无 Docker 时走 OS 用户 / 目录权限 + DSH 自带 bwrap / Seatbelt + <code>rdws-policy</code> 路径守卫（平台层尽力隔离档）。逻辑隔离、不做完整对象复制；git 对象 <code>444</code> 只读为既有事实。</td></tr>
+  </table>
+
+  <h3>1.3 架构与运行时</h3>
+  <table>
+    <tr><th style="width:110px">标号</th><th style="width:190px">决策</th><th>确认要点</th></tr>
+    <tr><td>D4</td><td>实例分片</td><td>(a) <strong>项目级实例 + 每需求 preset</strong>；一个实例注册该项目下所有 demand workspace。排除一人一实例、也排除每需求一实例。</td></tr>
+    <tr><td>D9</td><td>部署形态</td><td>全本地、主机部署走本地文件系统、<strong>不走容器作为必需依赖</strong>；Docker 仅为可选增强档位。</td></tr>
+    <tr><td>D26</td><td>部署上界</td><td>(c) <strong>未来可能多机 / HA</strong> 为上界声明；因此嵌入式 SQLite 不作为平台库，HA 迁移按独立项目处理，PoC 阶段不做在线迁移。</td></tr>
+    <tr><td>D11 / D-DB</td><td>技术栈与数据库</td><td>(a) <strong>全 TypeScript / Node 单栈</strong>：平台后端、orchestrator、syncer、bridge、插件、前端同仓 pnpm workspace；launcher 在同一套 TS 内支持「本地进程 / Docker」两个启动后端。<strong>外部系统统一走 HTTP 对接，不嵌进程内 SDK</strong>。平台库 <strong>PostgreSQL 单机</strong>（本地服务进程）；SQLite 仅用于各 DSH_HOME 内部的 <code>storage-sqlite</code> / <code>session-query-sqlite</code>。</td></tr>
+    <tr><td>D12</td><td>专家裁决升级</td><td>原 Tier 2E 的 worktree 技术分叉被独立评审 <strong>BLOCK</strong>，升级为 Tier 3，拆成 D5 与 D6 两个用户决策。</td></tr>
+    <tr><td>D13–D16</td><td>自决项</td><td><code>workspaces/</code> → <code>projects/</code> 改名（避免与 DSH workspace 撞名）；锁定 DSH 0.2.2-rc.3 + 回归门禁；禁用第三方社区插件市场（白名单）；禁用 DSH 内置 worktree 工具（需求工作树由平台编排层创建）。</td></tr>
+  </table>
+
+  <h3>1.4 代码、发布与迁移</h3>
+  <table>
+    <tr><th style="width:110px">标号</th><th style="width:190px">决策</th><th>确认要点</th></tr>
+    <tr><td>D23</td><td>事实源与写入路径</td><td>(a) <strong>双仓</strong>：本地 <code>sources/</code> 是只读 bare mirror，<strong>GitLab 主仓才是事实源</strong>；需求分支 push 到 GitLab 的 <code>rdws/*</code>，主线更新由 syncer <code>git fetch</code> 回镜像（只动 baseline refs）。</td></tr>
+    <tr><td>D8</td><td>GitLab 权限</td><td>(a) 平台服务账号<strong>只 push 非保护的 <code>rdws/*</code> 需求分支</strong>；<code>dev/develop/main</code>、<code>test</code>、<code>prod/master</code> 等环境分支受保护、普通开发无 push、<strong>一律走 MR + 人工审批</strong>（集成与回退都不例外）。</td></tr>
+    <tr><td>D24</td><td>环境集成与回退</td><td>(a) 长期环境分支 + 按需求记录合入；回退不是平台直推，而是按映射表<strong>生成一组 revert MR</strong> 由有权限者审批合入。映射表按「需求 × 版本 × 仓库 × 环境 × 合入 commit」记录，回退按<strong>版本</strong>选择、以需求为聚合视图。</td></tr>
+    <tr><td>D22</td><td>需求代码更新</td><td>(a) <strong>冻结 baseCommit + 显式按需同步</strong>：开发主动触发 <code>fetch + merge</code>（不 rebase、不 force push），冲突交当前会话或人处理；需求提交以 cherry-pick 进环境分支；已合入环境的需求更新后再发一张增量 MR。</td></tr>
+    <tr><td>D6</td><td>迁移与归档</td><td>(a) <strong>可重建、不做可搬运资产</strong>：<code>.rdws</code> 根路径固定进平台配置；迁移 / 恢复后跑幂等的 <code>rdwsctl doctor --repair-worktrees</code>（<code>git worktree repair</code> + 按映射表重建，必要时从 sources 重新 <code>clone --bare --local</code>）；归档导出轨迹摘要、删除 worktree 与 <code>.gitstore</code>；HA 走冷备、不做在线迁移。</td></tr>
+  </table>
+
+  <h3>1.5 已确认的执行细则（自决，不占决策题）</h3>
+  <ul>
+    <li><strong>需求级写锁</strong>：同一时刻一个写会话，其余会话只读 / 评审；写锁带租约与过期释放。</li>
+    <li><strong>会话 header cwd</strong> 必须精确等于需求目录（否则 <code>attachSession</code> 拒绝、会话变 Ungrouped）；AI 后续用 <code>working_directory(cd)</code> 进入 worktree 不改变归属。</li>
+    <li><strong>需求上下文</strong>用 <code>agent.inject()</code> 显式注入，不依赖 AGENTS.md 目录链；<code>$DSH_HOME/AGENTS.md</code> 只放平台红线。</li>
+    <li><strong>平台侧自建能力</strong>：三类平台角色、四类阶段角色、一人多身份、一账号多项目、批量导入 / 指派 / 状态机，沿用设计文档 §6，D17 原型必须画出相应页面。</li>
+    <li><strong>服务账号拆权</strong>：git push 凭据、模型网关凭据、审批代答凭据分离托管，密钥轮换 + 逐次调用审计写 PG。</li>
+    <li><strong>BFF 补强</strong>：DSH 只绑 loopback + 主机防火墙拒绝外部直连；Token / Cookie 有效期改短并按需轮换；第二道闸（RemoteAccessPolicy）定为 PoC 强制验收项。</li>
+    <li><strong>故障路径</strong>：崩溃后按 session 单写者所有权恢复写句柄；repair 失败即标记需求不可用并告警；revert MR 被拒保持环境现状并上报；syncer 校验基线 commit 签名；多仓库一组 MR 允许部分成功但必须聚合告警。</li>
+    <li><strong>供应链 P0</strong>：发布包剔除 <code>claude-code-mods</code> 相关实验插件及 Claude Code 平台 payload，不依赖其 identity-scoped 授权；MPL-2.0 LibreOffice 套件保留对应源码与 NOTICE 可得路径。</li>
+    <li><strong>品牌</strong>：「DeepSeek Harness」是注册商标，<strong>不用作项目名</strong>；只作事实性描述（如「基于 DSH 构建」），建议用缩写 DSH。</li>
+  </ul>
+
+  <h2 id="s2"><span class="num">2</span>约束与非目标</h2>
+  <table>
+    <tr><th style="width:150px">类别</th><th>内容</th></tr>
+    <tr><td>硬约束</td><td>不做容器强依赖；不做一人一实例；不使用平台白名单之外的插件 / 技能 / MCP；不扩大范围；外部系统统一 HTTP；环境分支零例外只走 MR；平台级锁定项不可被下级覆盖。</td></tr>
+    <tr><td>首版非目标</td><td>Tauri 薄壳、HA / 多机部署、中心化会话日志在线迁移、多环境自动编排、DSH 内部方法级授权、按人分片实例、需求自带外部插件。</td></tr>
+    <tr><td>原型定位</td><td>探索稿、非契约、可推翻；单文件 HTML、假数据、不连后端 / DSH / 模型服务；显著标注该口径，避免被当成验收依据。</td></tr>
+    <tr><td>已确认但需如实携带</td><td>C1 不追认带来的隔离残余风险（§3）；D2 口径带来的模型请求外发残余风险（§3）。二者不是遗漏，是用户明确接受的取舍。</td></tr>
+  </table>
+
+  <h2 id="s3"><span class="num">3</span>独立复核与残余风险登记</h2>
+  <p>共同理解确认后，按用户要求派了两组互不通气的独立评审者（A 面一致性 / B 面安全运维）做对抗复核，<strong>首评两面均为 BLOCK</strong>；全量处置发现项形成 v2 后，再由第三个全新评审者重评，<strong>仍为 BLOCK</strong>，指出 C1：v2 的处置静默收窄了 D9 / D5 语义、越过用户追认程序。随后用户明确<strong>不追认 C1</strong>，按契约第二条路收口为 v3。</p>
+
+  <h3>3.1 已自决消化的发现项</h3>
+  <table>
+    <tr><th style="width:170px">发现</th><th>处置</th></tr>
+    <tr><td>模型请求外发</td><td>如实登记残余风险（见 3.2），提供出口白名单与网关配置能力、默认模板给内网示例；部署方选公网供应商须显式登记并经数据合规确认。<strong>不恢复强制内网网关</strong>，因为那会推翻已确认的 D2。</td></tr>
+    <tr><td>BFF 被绕过 / owner 恒放行</td><td>第二道闸改 PoC 强制验收；补端口与凭据细则、BFF 过滤面。</td></tr>
+    <tr><td>服务账号高权集中 / 审计哈希无锚点 / 供应链 payload 降级</td><td>见 §1.5 执行细则：拆权 + 轮换 + 逐次审计；哈希锚点写 PG append-only 表；恢复 P0 剔除 payload。</td></tr>
+    <tr><td>「单实例无法按需求分化」</td><td><strong>以一手证据拒绝核心论断</strong>：<code>packages/preset/README.zh.md:12</code>、<code>agent-preset/README.zh.md:12</code>、<code>packages/mcp/README.zh.md:12</code>、<code>docs/architecture.zh.md:156</code> 证实会话级能力分化是 DSH 原生能力。措辞按重评意见降为「部分证伪 + 细则待定」，并把 preset 动态增删与 HMR 协调、多实例端口 / DSH_HOME 分配列为工程细则。</td></tr>
+    <tr><td>角色 / RBAC / 导入 / 状态机遗漏、故障路径、回退口径</td><td>见 §1.5 与 D22 / D24；属台账表述遗漏，已补齐，非范围遗漏。</td></tr>
+  </table>
+
+  <h3>3.2 必须携带的残余风险</h3>
+  <div class="danger"><strong>R-A（C1，用户明确不追认）</strong>：无 Docker 档下，AI 子进程与 <code>sources/</code> 在同一台主机、同一内核，隔离依靠 OS 用户 / 目录权限 + DSH 自带 bwrap / Seatbelt + <code>rdws-policy</code> 路径守卫。而 <code>SAFETY.zh.md</code> 明确「沙箱、审批与权限控制不保证隔离」「不得作为不可信工作负载唯一的安全控制」。用户未追认「生产 / 不可信负载必须启用 Docker 强隔离档、PoC 验收含该档」这一修订，因此：<strong>无 Docker 档仅作为开发与功能验证档，不作为生产或不可信工作负载的安全边界；面向真实项目组或生产数据时的隔离强度由部署方自行评估并承担风险，PoC 不覆盖生产档验收。</strong>台账 v3 撤回 v2 里越界的「不可推翻前置」表述，恢复自洽。</div>
+  <div class="warn"><strong>R-B（D2 口径）</strong>：关闭 <code>dsh_session_log</code> 与遥测只是移除附加字段与旁路通道，<strong>模型请求本身仍携带源码片段、命令输出与文件内容</strong>。若部署方选公网供应商，等同于源码出企业边界。这是用户明确选择的「平台不预设限制」的后果，不是遗漏；平台不代为判断合规性，但必须在部署清单中显著登记并要求数据合规确认。抓包验收保留为部署方检查项。</div>
+  <div class="ok"><strong>评审已确认非缺陷</strong>：D9↔D26、D7↔D26 属「当前形态 vs 未来上界」，非互斥；「默认内网网关模板 vs 不预设限制」是示例而非硬限；全 TS 单栈与长期环境分支属取向。上轮报告 §2 的其他 P0（MIT / 商标 / 第三方依赖 / 会话日志上传 / 遥测 / 锁版本）均已落到执行细则。</div>
+
+  <h2 id="s4"><span class="num">4</span>待核实事实（指派给下游，不是决策）</h2>
+  <table>
+    <tr><th style="width:230px">事项</th><th>为何需要 / 何时闭环</th></tr>
+    <tr><td>目标主机 Linux + bwrap 可用性</td><td>非特权 user namespace 是否被发行版禁用，决定无 Docker 档的沙箱后端能否达到 <code>enforcement: full</code>；PoC 部署前冒烟。</td></tr>
+    <tr><td>GitLab <code>rdws/*</code> 通配保护规则与平台服务账号实际权限</td><td>用户已确认公司平台可建分支、普通开发无 push 只走 MR；仍需确认服务账号可 push 非保护分支、且 force push 被禁。</td></tr>
+    <tr><td>公司模型网关协议与流式兼容性</td><td>OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini API 四选一或并存；接入前验证工具调用与流式。</td></tr>
+    <tr><td>Claude Code payload 的 <code>LICENSE.md</code> 正文</td><td>法务复核；不作为「是否剔除」的前置 —— 剔除已是 P0 执行项。</td></tr>
+    <tr><td>环境分支与多仓库命名映射</td><td><code>dev/develop/main</code>、<code>test</code>、<code>prod/master</code> 与各 git 工程的分支前缀规范。</td></tr>
+    <tr><td>上游 DSH rc 版本时效</td><td>立项时重新核对 README / SAFETY / THIRD_PARTY_NOTICES；项目仍在高频迭代，不以 master 为部署源。</td></tr>
+  </table>
+
+  <h2 id="s5"><span class="num">5</span>下游动作与验证边界</h2>
+  <h3>5.1 当前重点：Demo 设计</h3>
+  <p>用户已明确「之后再重点来做 demo 设计」。现有 <code>demo/rdws-overall-demo.html</code> 是 D17 的<strong>第一版探索稿</strong>（管理看板范式），不是最终设计；<strong>当前设计稿是 <code>demo/rdws-workbench.html</code></strong>（全新「智能体工作台」范式，2026-11-15 新增，同样为 D18 探索稿、非契约可推翻，旧稿保留作对照）。本段仅为文件导航更新，不改动任何已确认决策。后续深化必须遵守：</p>
+  <ul>
+    <li>首版只做<strong>浏览器模式</strong>；Tauri 薄壳只作为演进路线，不画进这版原型。</li>
+    <li>必须覆盖：三层架构、四类阶段角色、需求导入到归档全链路、会话与轨迹、审计、主线同步与多环境 MR / 回退、三级模型作用域与 preset 白名单、<code>.rdws</code> 目录与运行空间、角色与权限（一人多身份、一账号多项目）。</li>
+    <li>显要位置标注「探索稿 · 非契约 · 可推翻」，并把 <strong>R-A / R-B 两条残余风险可视化</strong>，避免演示时被误读为已完成的安全保证。</li>
+    <li>品牌用独立名称，不使用「DeepSeek Harness」作项目名；技术基线可作事实性描述。</li>
+    <li>原型任何页面 / 字段与本台账冲突时，<strong>以本台账为准并改原型</strong>，不改台账。</li>
+  </ul>
+
+  <h3>5.2 之后：单需求 PoC（D1）</h3>
+  <p>验证四件事：① 会话 header cwd 精确等于 demand 目录、会话正确归入 workspace；② sources 零写入可脚本验证（主仓 refs 与 worktrees 登记不变）；③ ≥5 会话的 resume / fork / replay；④ 需求分支 push 到 GitLab <code>rdws/*</code> + MR 映射表闭环。</p>
+  <p><strong>PoC 不验证</strong>：HA / 多机、Tauri 薄壳、多环境自动编排、中心化日志在线迁移、生产档（Docker 强隔离）验收 —— 后者因 C1 不追认而明确排除。</p>
+
+  <h2 id="s6"><span class="num">6</span>目录与文件导航</h2>
+  <pre><code>/Users/zengym/workspace/rdws/
+├── .gitignore                                 macOS / Node / 运行时数据 / 凭据 / 备份
+├── LICENSE                                    MIT · Copyright (c) 2026 Mayne-Zeng
+├── README.md                                  项目简介 / 文档导航 / 状态与路线
+├── SECURITY.md                                安全政策 · R-A / R-B 残余风险
+├── THIRD_PARTY_NOTICES.md                     第三方声明 / 品牌与商标口径
+├── docs/
+│   ├── 00-decision-ledger.html                  ← 本文件（唯一事实来源，先读这个）
+│   ├── 01-feasibility-report.html              开源风险 / 二次开发难度评估
+│   ├── 02-directory-and-engineering-design.html  目录评审 / worktree 方案 / 工程骨架
+│   ├── 03-design-crosscheck-report.html          Demo 三面交叉检查 / 功能触点覆盖率 / 修复与回归证据
+│   └── 04-design-baseline.html                  设计基线与交接规格 / a11y 实测 / 一致性走查
+└── demo/
+    ├── rdws-workbench.html                  ← 当前设计稿：智能体工作台范式（探索稿）
+    └── rdws-overall-demo.html              D17 第一版探索稿（管理看板范式，保留对照）</code></pre>
+  <p class="src">五份 HTML 均为单文件、无外部依赖，直接双击或拖进浏览器即可打开。原工作区 <code>/Users/zengym/WorkBuddy/2026-11-13-16-29-37/</code> 保留了同源文件与 DSH 一手核查副本 <code>.dsh-ref/</code>（未复制进本项目，需要时重新浅克隆即可）。</p>
+  <p class="src">代码仓库骨架（<code>apps/</code>、<code>packages/</code>、<code>dsh/</code>、<code>deploy/</code> 等）见 <code>02-directory-and-engineering-design.html</code> §6；运行时数据目录 <code>.rdws/</code> 见其 §2。二者严格区分：<strong>代码仓库进 git，运行时数据不进</strong>。</p>
+
+  <h2 id="s7"><span class="num">7</span>证据索引</h2>
+  <table>
+    <tr><th style="width:340px">一手来源</th><th>支撑</th></tr>
+    <tr><td><code>.dsh-ref/LICENSE</code>、<code>BRAND_GUIDELINES.md</code>、<code>THIRD_PARTY_NOTICES.md</code></td><td>MIT 条款、注册商标限制、Claude Code payload 身份范围授权、MPL-2.0 源码义务</td></tr>
+    <tr><td><code>.dsh-ref/SAFETY.zh.md</code>、<code>README.zh.md</code></td><td>未安全审计、不得视为生产可用、沙箱不保证隔离、破坏性变更预告（R-A 依据）</td></tr>
+    <tr><td><code>.dsh-ref/docs/user/guide/providers.zh.md</code></td><td>自定义模型 API 四种协议、Provider ID 永久、凭据只写存 <code>$DSH_HOME/.credentials.yaml</code></td></tr>
+    <tr><td><code>.dsh-ref/docs/architecture.zh.md</code>、<code>docs/subsystems/workspace.zh.md</code></td><td>插件内核、profile 分层、会话日志、workspace 注册表与 <code>create()</code> 幂等、<code>attachSession()</code> 的 cwd 约束</td></tr>
+    <tr><td><code>.dsh-ref/packages/preset/*/README.zh.md</code>、<code>packages/mcp/README.zh.md</code></td><td>会话级 agent preset 能力分化、MCP 按作用域可见</td></tr>
+    <tr><td><code>.dsh-ref/packages/client/connection/README.zh.md</code>、<code>packages/api/remote-access/README.zh.md</code></td><td>单 owner Peer、owner 恒放行、<code>session/list</code> 不过滤、审批 waterfall</td></tr>
+    <tr><td><code>.dsh-ref/packages/sandbox/sandbox-local/README.zh.md</code>、<code>docs/subsystems/sandbox.zh.md</code></td><td>bwrap / Landlock / Seatbelt 后端、只读宿主根、full vs partial 强制执行</td></tr>
+    <tr><td><code>.dsh-ref/packages/session/session-log-deepseek/README.zh.md</code>、<code>session-telemetry-otel/README.zh.md</code></td><td>默认上传会话日志、公网 collector、不内置脱敏（R-B 依据）</td></tr>
+    <tr><td>本机 git 实测</td><td><code>clone --bare --local</code> 对象 inode 相同、gitdir 在 demand 内、主仓零写入；对象文件 <code>444</code> 只读、直接改写被拒</td></tr>
+    <tr><td>三份独立评审意见</td><td>两面首评 BLOCK、修订 v2 重评 BLOCK、C1 越界认定与 F1–F10 关闭判定（见 §3）</td></tr>
+  </table>
+
+  <div class="foot">RDWS 决策台账 v3 · 2026-11-15 · 共同理解已确认。后续 Demo 设计与 PoC 以本文件为唯一事实来源；实现阶段如有实质偏离，先回到决策对齐，不静默吸收。</div>
+</div>
+</body>
+</html>

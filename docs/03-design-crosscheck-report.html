@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RDWS · 整体设计交叉检查报告（三面独立评审 + 运行时实测）</title>
+<style>
+  :root{--brand:#0E7490;--brand-dark:#0B596E;--brand-soft:#E6F3F6;--brand-line:#B9DEE6;
+    --ink:#1C2530;--ink-2:#43505E;--ink-3:#6B7885;--line:#E2E7EB;--bg:#F5F7F8;--paper:#FFF;
+    --red:#B3373A;--red-bg:#FCEDEC;--amber:#9A6410;--amber-bg:#FDF4E3;--green:#24735A;--green-bg:#EAF5F0;--gray-bg:#F0F3F5}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px 80px}
+  header{background:var(--paper);border-top:4px solid var(--brand);border-bottom:1px solid var(--line);padding:42px 0 32px;margin-bottom:28px}
+  header .wrap{padding-bottom:0}
+  .kicker{color:var(--brand);font-size:12px;letter-spacing:.18em;font-weight:700;margin-bottom:10px}
+  h1{font-size:27px;line-height:1.35;margin:0 0 10px;letter-spacing:-.01em}
+  .sub{color:var(--ink-3);font-size:13.5px;margin:0}
+  .meta{margin-top:20px;display:flex;flex-wrap:wrap;gap:8px}
+  .tag{font-size:12px;padding:4px 10px;border:1px solid var(--line);border-radius:3px;color:var(--ink-2);background:var(--gray-bg)}
+  h2{font-size:20px;margin:42px 0 6px;padding-top:18px;border-top:2px solid var(--brand)}
+  h2 .num{color:var(--brand);font-variant-numeric:tabular-nums;margin-right:10px}
+  h3{font-size:15.5px;margin:24px 0 8px;color:var(--brand-dark)}
+  p{margin:10px 0}ul,ol{margin:10px 0;padding-left:22px}li{margin:5px 0}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;background:var(--gray-bg);padding:1px 5px;border-radius:3px;color:var(--brand-dark);word-break:break-word}
+  .lead{font-size:16px;color:var(--ink-2)}
+  .verdict{background:var(--brand-soft);border:1px solid var(--brand-line);border-left:4px solid var(--brand);padding:18px 22px;margin:20px 0;border-radius:0 4px 4px 0}
+  .verdict .vtitle{font-size:12px;letter-spacing:.14em;color:var(--brand);font-weight:700;margin-bottom:8px}
+  .warn{background:var(--amber-bg);border:1px solid #EBD9B4;border-left:3px solid var(--amber);padding:12px 16px;font-size:13.5px;color:#6F4A0B;border-radius:0 3px 3px 0;margin:14px 0}
+  .danger{background:var(--red-bg);border:1px solid #F0CECD;border-left:3px solid var(--red);padding:12px 16px;font-size:13.5px;color:#8A2C2F;border-radius:0 3px 3px 0;margin:14px 0}
+  .ok{background:var(--green-bg);border:1px solid #CDE7DA;border-left:3px solid var(--green);padding:12px 16px;font-size:13.5px;color:#1F5C48;border-radius:0 3px 3px 0;margin:14px 0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;background:var(--paper);border:1px solid var(--line);font-size:13px}
+  th,td{border-bottom:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:#F0F6F7;color:var(--brand-dark);font-weight:700;font-size:12px}
+  tr:last-child td{border-bottom:none}
+  td code{font-size:11.5px}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:3px;white-space:nowrap}
+  .p-red{background:var(--red-bg);color:var(--red)}.p-amber{background:var(--amber-bg);color:var(--amber)}
+  .p-green{background:var(--green-bg);color:var(--green)}.p-blue{background:var(--brand-soft);color:var(--brand-dark)}
+  .p-gray{background:var(--gray-bg);color:var(--ink-3)}
+  .toc{background:var(--paper);border:1px solid var(--line);padding:16px 22px;font-size:13.5px;columns:2;column-gap:32px}
+  .toc a{color:var(--ink-2);text-decoration:none;display:block;padding:2px 0}.toc a:hover{color:var(--brand)}
+  .src{font-size:12px;color:var(--ink-3)}
+  .kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0}
+  .kpi div{background:var(--paper);border:1px solid var(--line);border-radius:4px;padding:14px 16px}
+  .kpi b{display:block;font-size:24px;color:var(--brand);line-height:1.3;font-variant-numeric:tabular-nums}
+  .kpi span{font-size:11.5px;color:var(--ink-3)}
+  .foot{margin-top:46px;padding-top:20px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-3)}
+  @media(max-width:720px){.toc{columns:1}h1{font-size:22px}.wrap{padding:0 16px 60px}table{font-size:12px}th,td{padding:8px}.kpi{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="kicker">RDWS · Demo 设计评审</div>
+  <h1>整体设计交叉检查报告</h1>
+  <p class="sub">三面互不通气的独立评审 + 真实浏览器运行时遍历 · 含缺口补齐与回归证据</p>
+  <div class="meta">
+    <span class="tag">日期：2026-11-16</span>
+    <span class="tag">基线：决策台账 v3</span>
+    <span class="tag">对象：demo/rdws-workbench.html</span>
+    <span class="tag">结论：PASS · 4 项决策已确认并落地</span>
+    <span class="tag">仓库：Mayne-Zeng/rdws（GitHub）</span>
+  </div>
+</div></header>
+
+<div class="wrap">
+  <div class="toc">
+    <a href="#s0">0. 结论摘要</a><a href="#s1">1. 检查方法</a>
+    <a href="#s2">2. 三面原结论与交叉印证</a><a href="#s3">3. 功能触点覆盖率</a>
+    <a href="#s4">4. 修复清单（含证据）</a><a href="#s5">5. 运行时实测证据</a>
+    <a href="#s6">6. 决策访谈结论与落地</a><a href="#s7">7. 未改动的边界</a>
+    <a href="#s8">8. 文件与证据索引</a>
+  </div>
+
+  <h2 id="s0"><span class="num">0</span>结论摘要</h2>
+  <div class="verdict">
+    <div class="vtitle">直接回答</div>
+    <p style="margin:0"><strong>整体设计合理；补齐后功能触点 100% 覆盖。</strong>按用户口径「可以没有完整交互，但至少有一个入口或触点」，台账拆出的 <strong>64 项应覆盖功能点全部有触点</strong>（第 65 项 D12「专家裁决升级」属决策流程历史、无产品功能语义，判定为不适用并登记）。其中核心链路全部有可点击入口，安全 / 供应链 / 技术基线类条款以只读字段或只读面板作为触点。</p>
+  </div>
+  <p>三面独立评审的原结论是 <strong>A 条件 PASS / B 条件 PASS / C PASS</strong>。A 面查出 7 项完全缺失、2 项台账口径冲突；B 面查出合并信息零触点、假数据串台、权限门禁失效、状态机脱节；C 面实测 92 个动作 0 孤儿入口、40 个抽样动作 100% 有响应，但发现最低权限角色仍能执行 5 个写操作、390px 下 <code>members</code> 溢出 8px。<strong>上述发现已直接补齐并回归验证</strong>，不是只出报告。</p>
+  <div class="kpi">
+    <div><b>64 / 64</b><span>应覆盖功能点有触点</span></div>
+    <div><b>16 / 16</b><span>视图渲染正常 · 宽度一致</span></div>
+    <div><b>0</b><span>JS 异常 / 外链 / 页面溢出</span></div>
+    <div><b>0</b><span>栅格错行 / 孤儿入口</span></div>
+  </div>
+  <div class="ok"><strong>修复后总体评级：PASS。</strong>初版列出的 5 条待确认口径，经决策分诊后为 <strong>4 条 Tier 3（用户实质决策）+ 1 条 Tier 2 自决</strong>；其中「控件令牌」一项原按技术分叉派独立专家裁决，因命中「验收判据」被升级为 Tier 3。四个 Tier 3 决策已于 2026-11-16 逐个访谈确认、共同理解经用户明确确认，并已全部落地与回归，详见 §6 与 §5 补充回归。</div>
+
+  <h2 id="s1"><span class="num">1</span>检查方法</h2>
+  <table>
+    <tr><th style="width:120px">面</th><th style="width:140px">视角</th><th>输入与方法</th><th style="width:100px">原结论</th></tr>
+    <tr><td>A · 覆盖性</td><td>台账 → Demo gap analysis</td><td>把台账 v3 的 D1–D26、§1.5 九条执行细则、§2 约束、§3 残余风险、§5.1 五条「必须覆盖」拆成 65 个功能点，逐项在 Demo 中找证据，判定 ✅入口 / 🟡只读触点 / ❌缺失，并反向排查与台账冲突的内容。动态渲染部分核读 <code>NAV / RENDER / A / pItem / renderXxx</code>。</td><td><span class="pill p-amber">条件 PASS</span></td></tr>
+    <tr><td>B · 设计合理性</td><td>信息架构 / 作用域 / 流程闭环</td><td>按用户历次强调的 6 条设计约束逐条核查：作用域归属、就近返回与页内面板、单一 960px 栅格与等高、会话级/需求级 tab 区分、提交/合并/变动单条维护、角色与 MR 语义；重点找反向缺陷（直推环境分支、平台代审批、一人一实例等）。</td><td><span class="pill p-amber">条件 PASS</span></td></tr>
+    <tr><td>C · 运行时</td><td>Chrome CDP 真实点击遍历</td><td>headless Chrome 打开 <code>file://</code> 页面，切换 16 视图，双向比对「元素 ↔ handler」，实点 40 个动作并记录 DOM 响应，测角色门禁、面板开闭、控制台异常、外链、1440/390 溢出。</td><td><span class="pill p-green">PASS</span></td></tr>
+  </table>
+  <p class="src">三面互不通气，各自只拿文件路径与自包含背景，不共享他人结论；由主智能体做交叉合并与误报剔除。</p>
+
+  <h2 id="s2"><span class="num">2</span>三面原结论与交叉印证</h2>
+  <h3>2.1 两面以上独立印证（优先级最高，已全部修复）</h3>
+  <table>
+    <tr><th style="width:190px">发现</th><th style="width:110px">印证面</th><th>证据与根因</th></tr>
+    <tr><td>权限门禁未收口</td><td>B · P1 ＋ C 实测</td><td>C 面切到「部署人员」后，<code>commit-selected / push-branch / create-mr-group / set-project / ack-risk</code> 5 个写操作仍可点击生效；B 面独立指出大量 mutation 按钮没有 <code>data-cap</code>。主智能体进一步定位到<strong>根因</strong>：<code>applyRole()</code> 原本在 <code>render()</code> 里跑在 <code>RENDER[S.view]()</code> 之前，视图按钮生成后从未被门禁处理 —— 不是单纯的标注遗漏。</td></tr>
+    <tr><td>「三类平台角色」口径冲突</td><td>A · R1 ＋ B · P2</td><td>台账 §1.5 写「三类平台角色、四类阶段角色」，Demo <code>renderMembers</code> 却写「两类平台管理角色」，且能力矩阵把四类阶段角色压成 3 列。按 §5.1-5「冲突时改原型」修正。</td></tr>
+    <tr><td>移动端 390px 溢出 8px</td><td>C 实测 ＋ 主智能体复现</td><td><code>members</code> 视图两张 <code>.card</code> 右边界 398 &gt; 390；根因是 620px 断点下 <code>.grid2{grid-template-columns:1fr}</code> 被表格 min-content 撑开。</td></tr>
+  </table>
+  <h3>2.2 单面发现、交叉后采纳</h3>
+  <table>
+    <tr><th style="width:190px">发现</th><th style="width:110px">来源</th><th>处置</th></tr>
+    <tr><td>合并信息零维护入口（合入结果 / 合入 commit / MR 映射表回写）</td><td>B · P0</td><td>A 面把 D24 判为 ✅ 属「只看有没有矩阵、没看能不能维护」的误判。交叉后采纳 B：<code>create-mr</code> 与 <code>resolve-conflict</code> 只把状态推到「待审批」，<code>mr-detail</code> 是只读面板、foot 只有「关闭」。已补 <code>record-merge</code> 面板，明确「只回写 GitLab 已审批结果、平台不代审批」。</td></tr>
+    <tr><td>假数据跨表串台</td><td>B · P1</td><td><code>DB.changes</code> 与 <code>DB.repos.mrs</code> 两套硬编码互相矛盾（<code>!482</code> 一为「已推送」一为「已合入」；<code>!490</code> 同时挂 D-1042 与 D-1038），且会同屏暴露在需求档案、变更页、集成矩阵。已收敛为单一事实源，并让三处 MR 入口统一经 <code>createMr()</code> 写映射表。</td></tr>
+    <tr><td>§1.5 安全 / 供应链 / 技术基线条款完全无触点</td><td>A · P0</td><td><code>RemoteAccessPolicy</code>（台账自标 PoC 强制验收）、供应链 P0 剔除项、故障路径 5 条只覆盖 1 条、出口白名单、cherry-pick、密钥轮换、留存策略、全 TS 单栈 / launcher / SQLite 用途等 7 项 ❌ 与多项 🟡 已补成只读字段与只读面板。</td></tr>
+    <tr><td>阶段筛选只 toast 不筛选；推进后状态机自相矛盾</td><td>B · P1</td><td><code>phase</code> 字面量与 <code>STAGES[phaseIdx]</code> 混用（「开发中」vs「开发」），推进后出现「待评审的需求处于开发阶段」。已统一派生并实现真筛选。</td></tr>
+  </table>
+  <h3>2.3 反向缺陷排查（A / B 两面独立核查，均未出现）</h3>
+  <p>无「直接合并 / 直推环境分支」按钮、无平台代替人工审批、无自动 rebase / force push、无一人一实例或每需求一实例、无平台外插件、无 Tauri 薄壳入口、未把「DeepSeek Harness」当项目名。D8 / D22 / D23 / D24 / D4 / D21 / D10 的 UI 语义自洽。</p>
+
+  <h2 id="s3"><span class="num">3</span>功能触点覆盖率</h2>
+  <table>
+    <tr><th style="width:190px">口径</th><th style="width:130px">修复前</th><th style="width:130px">修复后</th><th>说明</th></tr>
+    <tr><td>A 面拆出的功能点</td><td>65 项</td><td>65 项</td><td>D1–D26、§1.5 九条、§2、§3、§5.1 五条的全部可验证子项</td></tr>
+    <tr><td>✅ 可点击入口</td><td>38 项</td><td><strong>39 项</strong></td><td>F43 补 <code>acceptance</code> 验收清单按钮；另有 4 个新面板动作覆盖 B 面新发现的缺口（合并信息 / 归档执行 / HITL 关卡 / 验收清单），属 A 面 65 项之外的新增触点，不计入分母</td></tr>
+    <tr><td>🟡 只读触点（文字 / 字段 / 只读面板）</td><td>20 项</td><td><strong>25 项</strong></td><td>其余 5 个 ❌ 补成只读字段或只读清单；按用户口径仍算「有触点」</td></tr>
+    <tr><td>❌ 完全缺失</td><td><strong>7 项</strong></td><td><strong>0</strong></td><td>F07 / F16 / F21 / F33 / F43 / F45 已补；F24 见下</td></tr>
+    <tr><td>判定为不适用</td><td>—</td><td>1（F24 / D12）</td><td>「Tier 2E 被 BLOCK 升级为 Tier 3」是决策流程历史，无产品功能语义，不补 UI，登记备查</td></tr>
+    <tr><td>覆盖率（✅＋🟡）/ 应覆盖</td><td>58 / 64 = <strong>90.6%</strong></td><td><strong>64 / 64 = 100%</strong></td><td>分母剔除不适用项；修复前 A 面按 65 项口径报 89.2%</td></tr>
+  </table>
+  <div class="ok"><strong>§5.1 的 9 个「必须覆盖」子项</strong>（三层架构、四类阶段角色、需求导入到归档全链路、会话与轨迹、审计、主线同步与多环境 MR / 回退、三级模型作用域与 preset 白名单、<code>.rdws</code> 运行空间、角色与权限）修复前后均为 ✅ 可点击入口；探索稿标注与 R-A / R-B 可视化也一直是 ✅。缺口集中在 §1.5 的执行细则，属「覆盖深度」而非「主链路」问题。</div>
+
+  <h2 id="s4"><span class="num">4</span>修复清单（含证据）</h2>
+  <p class="src">全部改动落在 <code>demo/rdws-workbench.html</code>（单文件、零外链、假数据），未新建文件、未引入依赖、未改台账决策。行号为修复后当前文件的行号。</p>
+  <h3>P0 · 台账一致性与阻断演示的缺陷</h3>
+  <table>
+    <tr><th style="width:200px">项</th><th>改动与证据</th></tr>
+    <tr><td>权限门禁（视觉 + 行为双层）</td><td><code>applyRole()</code> 移到 <code>render()</code> 末尾（1399 起）并改为「只加不减」，保留写锁 / 未勾选 / 只读会话等业务态 disabled；新增 <code>ACTION_CAP</code>（1971）覆盖弹出菜单里没有 <code>data-cap</code> 的入口；事件委托在 handler 前做二次校验。默认演示身份经 Q3 决策定为 <strong>项目管理员</strong>（<code>admin</code>）：主链路可走、平台级配置默认按权限变灰，低权限角色真实收口。</td></tr>
+    <tr><td>合并信息单个维护</td><td>新增 <code>record-merge</code>（2205）：页内一等面板填写合入 commit / 审批人 / 时间，保存后回写 <code>DB.repos.mrs</code> 并同步变更台账；入口分布在仓库与环境矩阵每行、变更页环境合入矩阵每行、MR 详情面板 foot。文案明确「只回写已审批结果、平台不代审批」。</td></tr>
+    <tr><td>BFF 补强 + 供应链 P0 + 故障路径</td><td>平台设置新增「部署与供应链基线（只读）」卡（1850）：<code>loopback only</code> / 主机防火墙 / Token 短有效期与轮换 / <code>RemoteAccessPolicy</code> PoC 强制验收 / 抓包验收 / <code>claude-code-mods</code> 与 CC payload 剔除 / 不依赖 identity-scoped 授权 / MPL-2.0 NOTICE 路径 / 首版非目标 / 品牌事实描述；运行空间新增「故障路径与聚合告警」卡（1793）补齐 5 条故障路径。</td></tr>
+    <tr><td>台账口径冲突</td><td><code>renderMembers</code> 文案改为「三类平台角色 + 四类阶段角色」（1650），能力矩阵补成 6 个角色列（1668）；平台策略卡合并重复的「外部系统」「上游版本」行。</td></tr>
+    <tr><td>数据自洽与 MR 单一事实源</td><td>重写 <code>DB.changes</code>（1112 起）消除与 <code>DB.repos.mrs</code> 的 MR / commit / 需求归属冲突；新增 <code>createMr()</code>（1964），<code>change-mr / create-mr / create-mr-group / resolve-conflict</code> 统一写映射表且不再伪造合入 commit；自检加 <code>mrSingleSource</code> 断言。</td></tr>
+    <tr><td>状态机</td><td>所有阶段展示改由 <code>STAGES[phaseIdx]</code> 派生；<code>advance-demand</code> 的 <code>state</code> 由 <code>phaseIdx</code> 映射；<code>stage-filter</code> 由 toast 改为真筛选（实测 4 行 → 1 行）。</td></tr>
+  </table>
+  <h3>P1 · 缺失入口与流程闭环</h3>
+  <table>
+    <tr><th style="width:200px">项</th><th>改动与证据</th></tr>
+    <tr><td>需求归档执行</td><td><code>archive-demand</code>（2220）：需求档案（归档阶段）/ 需求管理列表行内入口，面板列出导出轨迹摘要、删除 worktree 与 <code>.gitstore</code>、会话转只读、不做自动删除。</td></tr>
+    <tr><td>三张业务 HITL 关卡</td><td><code>hitl-gates</code>（2229）：从「审批 never」会话级浮层进入只读清单，列设计确认 / 测试验收 / 部署批准的触发阶段与审批路由；对话页 <code>hitl-meta</code> 补另两关文字。</td></tr>
+    <tr><td>PoC 验收清单</td><td><code>acceptance</code>（2240）：只读面板列 D1 四项验收 + <code>RemoteAccessPolicy</code> 强制项，并明确 R-A 排除生产档、R-B 由部署方做数据合规确认。</td></tr>
+    <tr><td>只读字段触点补齐（A 面 ❌ / 🟡）</td><td>网络出口白名单（模型页）、cherry-pick（仓库页 + MR 详情）、密钥轮换与留存策略（审计中心）、过滤面 <code>session/list · search · workspace · $events</code>（成员页）、attachSession / Ungrouped（上下文页）、迁移口径细化与禁用内置 worktree 工具（运行空间）、技术栈 / launcher / SQLite 用途 / 回归门禁 / 抓包验收 / 多机 HA 上界 / 首版非目标（平台设置）。</td></tr>
+    <tr><td>面板返回路径</td><td><code>pickDemand / pick-session / open-demand-profile</code> 统一清 <code>S.panel</code>，消除「面板内容 ≠ 面包屑」。</td></tr>
+  </table>
+  <h3>P2 · 打磨与自检</h3>
+  <p>620px 断点 grid 改 <code>minmax(0,1fr)</code> 修 390px 溢出；能力矩阵 CSS 由 5 列扩为 7 列并防 min-content 撑开；写 / 只读胶囊补作用域 tip；<code>__rdwsSelfTest()</code> 增加 6 组语义断言（2350：<code>mrSingleSource / capCovered / newGates / stageRoles / phaseInRange / orphanHandler</code>），避免把「结构自检 ok」误读为「台账合规」。</p>
+
+  <h2 id="s5"><span class="num">5</span>运行时实测证据</h2>
+  <table>
+    <tr><th style="width:270px">指标</th><th style="width:170px">结果</th><th>说明</th></tr>
+    <tr><td><code>document.dataset.ready</code> / <code>__rdwsSelfTest().ok</code></td><td><span class="pill p-green">ok / true</span></td><td>6 组语义断言全 true</td></tr>
+    <tr><td>16 视图渲染 / 内容宽度</td><td><span class="pill p-green">16/16 · 0 异常</span></td><td>全部非空、单一 960px、页面无横向溢出（<code>views_bad=[] / width_bad=[]</code>）</td></tr>
+    <tr><td>新增 4 个入口</td><td><span class="pill p-green">全部可达</span></td><td><code>record-merge</code> 面板可填可保存可关闭、<code>archive-demand</code> / <code>hitl-gates</code> / <code>acceptance</code> 面板均可打开并关闭</td></tr>
+    <tr><td>阶段筛选</td><td>4 行 → 1 行</td><td>点「设计」后高亮态与列表同步</td></tr>
+    <tr><td>MR 单一事实源</td><td><span class="pill p-green">交互前后均 true</span></td><td>点击「生成 MR 组」后 <code>mrSingleSource</code> 仍为 true</td></tr>
+    <tr><td>权限门禁（切「需求人员」）</td><td><span class="pill p-green">全部收口</span></td><td><code>commit-selected / push-branch / create-mr-group / commit-change / set-project / ack-risk / add-project / acceptance</code> 均 disabled；弹出菜单里无 <code>data-cap</code> 的 <code>assign</code> 被 handler 拦截并提示「无此权限」</td></tr>
+    <tr><td>业务态 disabled 不被误清</td><td><span class="pill p-green">通过</span></td><td>未勾选时「提交选中」仍禁用，勾选 2 项后恢复可点</td></tr>
+    <tr><td>栅格错行扫描（16 视图）</td><td><code>GRID_BAD=[]</code></td><td>并列卡片同行对齐</td></tr>
+    <tr><td>390px 页面级溢出</td><td><code>overflow_390=[]</code></td><td>表格在 <code>.tbl-wrap</code> 内自带横向滚动，不计页面溢出</td></tr>
+    <tr><td>JS 异常 / 外链 / 控制台错误</td><td><code>0 / 0 / 0</code></td><td>单文件、零 CDN</td></tr>
+  </table>
+  <p class="src">验证脚本 <code>/tmp/rdws-audit-final.js</code>、视觉脚本 <code>/tmp/rdws-audit-visual.js</code>，结果 <code>/tmp/rdws-audit-final-result.json</code>，截图 <code>/tmp/rdws-audit-shots/</code>（1440 / 390 共 8 张，已逐张目视核对平台设置、成员权限、仓库与环境、提交与合并、运行空间）。上表为决策落地前那一版的实测；下表为 Q1–Q4 落地后的补充回归。</p>
+
+  <h3>决策落地后的补充回归（2026-11-16 晚）</h3>
+  <p class="src">脚本 <code>/tmp/rdws-decisions-verify.js</code> · 结果 <code>/tmp/rdws-decisions-result.json</code> · 截图 <code>/tmp/rdws-decisions-shots/</code>（5 张，含 390px）。上表全量指标在本版仍成立：<code>ready=ok</code>、6 组语义断言全 true、16 视图 0 异常、宽度全 960px、栅格 0 错行、390px 页面级 0 溢出、控制台 0 错误、0 外链。</p>
+  <table>
+    <tr><th style="width:270px">检查项</th><th style="width:170px">结果</th><th>说明</th></tr>
+    <tr><td>Q3 默认身份</td><td><code>admin</code></td><td><code>set-project / ack-risk / add-project / acceptance</code> 四个平台级配置按钮默认 disabled；切到「平台管理员」后 <code>acceptance</code> 可点且面板正常打开</td></tr>
+    <tr><td>Q1 会话菜单收敛</td><td><span class="pill p-green">通过</span></td><td>两个浮层均不再出现 <code>new-session</code> / 「会话编队」/「需求级 · 会话集合」分组 / sys-foot；<code>pick-session / fork-session / replay-session</code> 保留；需求档案的「新建会话」「进入编队管理」入口仍在</td></tr>
+    <tr><td>Q2 顶栏移除同步主线</td><td><span class="pill p-green">通过</span></td><td>工作区视图 <code>#topActions</code> 为空；「仓库与环境」「提交与合并」两处的 <code>sync</code> 按钮仍在</td></tr>
+    <tr><td>Q4 验收口径与触控目标</td><td><span class="pill p-green">通过</span></td><td>设计系统页文案改为「交互控件 ≥40px · 纯展示徽标不适用」，旧「档案栏变抽屉」表述清零；桌面 <code>.cell-btn</code> 与勾选框热区 30px；390px 下可点击 pill / <code>.cell-btn</code> / 勾选框热区均为 40px</td></tr>
+    <tr><td>⑤ 死 CSS 清理</td><td><span class="pill p-green">零回归</span></td><td>全文 <code>dossier</code> 引用归零，旧 760 / 1040 / 820 宽度规则移除；断点表改写为与实现一致；16 视图宽度与栅格仍全绿</td></tr>
+    <tr><td>权限门禁 / 四个新增面板</td><td><span class="pill p-green">全部保持</span></td><td>切「需求人员」后 4 个写操作仍全 disabled；<code>record-merge / archive-demand / hitl-gates / acceptance</code> 面板仍可开可关</td></tr>
+  </table>
+  <div class="warn"><strong>已如实记录的视觉代价</strong>：Q4 让可点击的阶段筛选 pill 在 390px 提到 40px 后，该排胶囊明显变重、由一行折成两行（见 <code>04-demands-390.png</code>）。这是「交互控件 ≥40px」判据的直接结果，不是布局缺陷；若后续觉得密度损失过大，只能重新打开 Q4 的口径，不能静默回调。</div>
+
+  <h2 id="s6"><span class="num">6</span>决策访谈结论与落地</h2>
+  <p>初版留下的 5 条按决策分诊重跑了一遍：<strong>4 条 Tier 3（属于用户的实质决策）+ 1 条 Tier 2 自决</strong>。其中「控件令牌」原本按 Tier 2E 派全新上下文的独立前端专家做对抗裁决，专家结论命中「验收判据」与「已承诺架构语义边界」，按防降档规则<strong>升级为 Tier 3</strong>；专家同时用证据纠正了初版报告的三处事实误判（操作行 pill 已由 <code>:857</code> 纳入令牌、<code>.ts-more</code> 因带 <code>.btn.sm.ghost</code> 实际已达标、可点击 chip 在 ≤1240px 隐藏），真正漏网的只有阶段筛选 pill 19px、<code>.cell-btn</code> 25px、<code>.chg-check</code> 16px 三处。</p>
+  <p>四个 Tier 3 决策按「一次一题」逐个访谈，每题给出场景还原、实质选项与推荐；<strong>用户已对汇总台账明确确认共同理解</strong>，之后才动手。以下为最终台账。</p>
+  <table>
+    <tr><th style="width:52px">标号</th><th style="width:190px">决策</th><th style="width:70px">结论</th><th>落地要点</th></tr>
+    <tr><td>Q1</td><td>会话菜单混入需求级入口</td><td><strong>(b) 严格收敛</strong></td><td>两个会话浮层只留切换 / 派生 / 回放 / 写锁；「新建会话」「会话编队」回需求档案的会话维护区与编队页；删掉「需求级 · 会话集合」分组与底部作用域说明。触点一个不少，代价是对话页多一次点击。</td></tr>
+    <tr><td>Q2</td><td>顶栏同步主线常驻</td><td><strong>(b) 彻底不放</strong></td><td><code>renderHeader</code> 工作区分支不再输出「同步主线」；入口保留在「仓库与环境」冻结基线卡与「提交与合并」工具栏。与 Q1 同构：跨级操作回自己作用域的页面。</td></tr>
+    <tr><td>Q3</td><td>默认演示身份</td><td><strong>(c) 项目管理员</strong></td><td><code>S.role: platform → admin</code>（陈砚）。主链路（会话 / 导入 / 指派 / 审批 / 同步 / 提交 / 推送 / MR / 回退）保持可走；平台级配置默认按权限变灰，需切到平台管理员。默认身份不再是特权账号。</td></tr>
+    <tr><td>Q4</td><td>「触控目标 ≥40px」验收口径</td><td><strong>(a) 收窄判据</strong></td><td>设计系统页改为「交互控件 ≥40px，纯展示徽标不适用」；按 <code>[data-action]</code>／可交互性分类而非类名；把勾选框、表格小按钮、阶段筛选标签在小屏提到 40px；展示用徽标维持紧凑层级。</td></tr>
+    <tr><td>⑤</td><td>死 CSS / 旧宽度 / 断点自述</td><td>Tier 2 自决</td><td>删 <code>--dossier-w</code>、760 / 1040 / 820 旧宽度、整套抽屉 CSS（<code>dossier</code> 引用归零）；把断点表「1080px 档案栏变抽屉」改写为与实现一致的四档描述。运行时零影响、不占用户决策。</td></tr>
+  </table>
+  <h3>Q4 附带的三个实现分叉（执行者自决，不再问用户）</h3>
+  <ul>
+    <li>分类标准用 <code>[data-action]</code>／可交互性，不用类名——避免「叫 pill 就是徽标」把可点击的阶段筛选按钮漏掉。</li>
+    <li>变更表 28px 首列不撑宽：勾选框保留 16px 视觉方块，用 <code>::after</code> 透明热区跟随 <code>--control-h</code>（桌面 30px / 小屏 40px）。</li>
+    <li>桌面侧也让 <code>.cell-btn</code> 跟随 30px，落实「同行控件等高」；小屏随令牌升到 40px。</li>
+  </ul>
+  <p class="src">独立专家用 <code>:496 / :845 / :857 / :1931</code> 等硬证据排除了「全部纳入令牌」（高回归、收益两块是空转）与「只补说明不改尺寸」（把 16px 可点击按钮的触控缺陷写成规范）；但判定「改 :1905 验收口径」必须交用户拍板，故升级为 Q4。</p>
+
+  <h2 id="s7"><span class="num">7</span>未改动的边界</h2>
+  <ul>
+    <li><strong>决策台账 v3 的任何决策未改</strong>；仅在 §6 目录导航补了本报告的文件名一行（与既有「文件导航更新」先例一致）。冲突时仍以台账为准、改原型。</li>
+    <li>R-A（C1 不追认：无 Docker 档不作生产安全边界）与 R-B（D2 口径：模型主请求可能携源码出界）原文口径、可视化与部署清单登记开关保持不变，未把残余风险写成「已解决」。</li>
+    <li>D18 探索稿定位、首版只做浏览器、Tauri 薄壳仅作演进、品牌独立名称、不接后端 / DSH / 模型服务、全部假数据 —— 均未突破。</li>
+    <li>布局与视觉语言未重构：仍是单一 960px 栅格、两行顶部、输入框为唯一浮起卡片、页内一等面板、控件等高；新增内容全部复用既有组件类。</li>
+    <li>Q1–Q4 与 ⑤ 只改 <code>demo/rdws-workbench.html</code> 与本报告；<strong>决策台账 v3 的决策正文一字未动</strong>，四个新决策作为「原型口径」记录在本报告 §6，不写进台账、不升级为产品决策。</li>
+  </ul>
+
+  <h2 id="s8"><span class="num">8</span>文件与证据索引</h2>
+  <table>
+    <tr><th style="width:390px">文件</th><th>用途</th></tr>
+    <tr><td><code>docs/00-decision-ledger.html</code></td><td>决策台账 v3 · 唯一事实来源（本次核对基线）</td></tr>
+    <tr><td><code>demo/rdws-workbench.html</code></td><td>当前设计稿（决策落地后 233,293 字节）· 16 视图 / 单文件 / 零外链</td></tr>
+    <tr><td><code>docs/03-design-crosscheck-report.html</code></td><td>本报告（v2 · 已同步 Q1–Q4 决策与补充回归）</td></tr>
+    <tr><td><code>docs/04-design-baseline.html</code></td><td>设计基线与交接规格 v1 · 令牌 / 组件规格 / 16 视图标注 / a11y 实测 / 一致性走查（后续交付）</td></tr>
+    <tr><td><code>/tmp/rdws-workbench-v18-backup.html</code> · <code>v19-backup.html</code></td><td>交叉检查修复前（218,529 字节）与决策落地前（234,959 字节）的完整备份，可随时回滚</td></tr>
+    <tr><td><code>/tmp/rdws-audit-patch1/2/3.py</code> · <code>rdws-decisions-patch.py</code></td><td>四批精确替换脚本，每处替换均做 <code>count==1</code> 断言</td></tr>
+    <tr><td><code>/tmp/rdws-audit-final.js</code> · <code>rdws-audit-visual.js</code></td><td>首轮 CDP 运行时遍历 / 栅格扫描 / 多端截图脚本</td></tr>
+    <tr><td><code>/tmp/rdws-decisions-verify.js</code></td><td>Q1–Q4 落地专项回归（含小屏触控目标、菜单结构、顶栏、权限），端口 9487</td></tr>
+    <tr><td><code>/tmp/rdws-decisions-result.json</code> · <code>/tmp/rdws-decisions-shots/</code></td><td>决策落地后的机器可读结果 / 5 张 1440 与 390 断点截图</td></tr>
+    <tr><td><code>/tmp/rdws-report-v1-backup.html</code></td><td>本报告初版备份（决策落地前口径）</td></tr>
+  </table>
+
+  <div class="foot">RDWS · 整体设计交叉检查报告 v2 · 2026-11-16。三面独立评审 + 主智能体交叉合并 + 缺口补齐 + 决策访谈（4 个 Tier 3 已确认）+ 两轮 Chrome 实测回归。原型仍为 D18 探索稿、非契约、可推翻；与台账冲突时改原型，不改台账。</div>
+</div>
+</body>
+</html>

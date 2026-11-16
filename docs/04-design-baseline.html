@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RDWS · 设计基线与交接规格 v1</title>
+<style>
+  :root{--brand:#0E7490;--brand-dark:#0B596E;--brand-soft:#E6F3F6;--brand-line:#B9DEE6;
+    --ink:#1C2530;--ink-2:#43505E;--ink-3:#6B7885;--line:#E2E7EB;--bg:#F5F7F8;--paper:#FFF;
+    --red:#B3373A;--red-bg:#FCEDEC;--amber:#9A6410;--amber-bg:#FDF4E3;--green:#24735A;--green-bg:#EAF5F0;--gray-bg:#F0F3F5}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.72 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px 80px}
+  header{background:var(--paper);border-top:4px solid var(--brand);border-bottom:1px solid var(--line);padding:40px 0 30px;margin-bottom:26px}
+  header .wrap{padding-bottom:0}
+  .kicker{color:var(--brand);font-size:12px;letter-spacing:.18em;font-weight:700;margin-bottom:10px}
+  h1{font-size:27px;line-height:1.35;margin:0 0 10px;letter-spacing:-.01em}
+  .sub{color:var(--ink-3);font-size:13.5px;margin:0}
+  .meta{margin-top:18px;display:flex;flex-wrap:wrap;gap:8px}
+  .tag{font-size:12px;padding:4px 10px;border:1px solid var(--line);border-radius:3px;color:var(--ink-2);background:var(--gray-bg)}
+  h2{font-size:20px;margin:40px 0 6px;padding-top:18px;border-top:2px solid var(--brand)}
+  h2 .num{color:var(--brand);font-variant-numeric:tabular-nums;margin-right:10px}
+  h3{font-size:15px;margin:24px 0 8px;color:var(--brand-dark)}
+  p{margin:10px 0}ul,ol{margin:10px 0;padding-left:22px}li{margin:5px 0}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+  code{background:var(--gray-bg);padding:1px 5px;border-radius:3px;color:var(--brand-dark);word-break:break-word}
+  .verdict{background:var(--brand-soft);border:1px solid var(--brand-line);border-left:4px solid var(--brand);padding:16px 20px;margin:18px 0;border-radius:0 4px 4px 0}
+  .verdict .vtitle{font-size:12px;letter-spacing:.14em;color:var(--brand);font-weight:700;margin-bottom:6px}
+  .warn{background:var(--amber-bg);border:1px solid #EBD9B4;border-left:3px solid var(--amber);padding:12px 16px;font-size:13px;color:#6F4A0B;border-radius:0 3px 3px 0;margin:14px 0}
+  .ok{background:var(--green-bg);border:1px solid #CDE7DA;border-left:3px solid var(--green);padding:12px 16px;font-size:13px;color:#1F5C48;border-radius:0 3px 3px 0;margin:14px 0}
+  .danger{background:var(--red-bg);border:1px solid #F0CECD;border-left:3px solid var(--red);padding:12px 16px;font-size:13px;color:#8A2C2F;border-radius:0 3px 3px 0;margin:14px 0}
+  table{width:100%;border-collapse:collapse;margin:12px 0;background:var(--paper);border:1px solid var(--line);font-size:12.5px}
+  th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#F0F6F7;color:var(--brand-dark);font-weight:700;font-size:11.5px}
+  tr:last-child td{border-bottom:none}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:3px;white-space:nowrap}
+  .p-red{background:var(--red-bg);color:var(--red)}.p-amber{background:var(--amber-bg);color:var(--amber)}
+  .p-ok{background:var(--green-bg);color:var(--green)}.p-gray{background:var(--gray-bg);color:var(--ink-3)}
+  .toc{background:var(--paper);border:1px solid var(--line);padding:14px 20px;font-size:13px;columns:2;column-gap:32px}
+  .toc a{color:var(--ink-2);text-decoration:none;display:block;padding:2px 0}.toc a:hover{color:var(--brand)}
+  .kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:16px 0}
+  .kpi div{background:var(--paper);border:1px solid var(--line);border-radius:4px;padding:12px 14px}
+  .kpi b{display:block;font-size:22px;color:var(--brand);line-height:1.3;font-variant-numeric:tabular-nums}
+  .kpi span{font-size:11px;color:var(--ink-3)}
+  .src{font-size:11.5px;color:var(--ink-3)}
+  .foot{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-3)}
+  @media(max-width:720px){.toc{columns:1}h1{font-size:22px}.wrap{padding:0 16px 60px}table{font-size:11.5px}th,td{padding:7px}.kpi{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="kicker">RDWS · DESIGN HANDOFF</div>
+  <h1>设计基线与交接规格 v1</h1>
+  <p class="sub">把已确认的探索稿固化成可交接基线 · 所有数值来自当前代码或真实浏览器实测，不接受自述式规范</p>
+  <div class="meta">
+    <span class="tag">日期：2026-11-16</span>
+    <span class="tag">基线对象：demo/rdws-workbench.html</span>
+    <span class="tag">上游事实源：决策台账 v3</span>
+    <span class="tag">证据：Chrome CDP 实测</span>
+    <span class="tag">仓库：Mayne-Zeng/rdws（GitHub）</span>
+  </div>
+</div></header>
+
+<div class="wrap">
+  <div class="toc">
+    <a href="#s0">0. 这份文件怎么用</a><a href="#s1">1. 一页式设计基线</a>
+    <a href="#s2">2. 可访问性实测报告</a><a href="#s3">3. 16 视图一致性走查</a>
+    <a href="#s4">4. 发现项与优先级清单</a><a href="#s5">5. 交接边界与验证</a>
+    <a href="#s6">6. 文件与证据索引</a>
+  </div>
+
+  <h2 id="s0"><span class="num">0</span>这份文件怎么用</h2>
+  <div class="verdict">
+    <div class="vtitle">定位</div>
+    <p style="margin:0">这是<strong>设计侧交接基线</strong>，服务于台账 §5.2 的单需求 PoC 与后续实现：实现者照 §1 的令牌 / 组件规格 / 视图标注做，照 §2–§3 的实测口径验，照 §4 的清单决定哪些残留要不要收。<strong>本文件不是决策台账</strong>；任何与 <code>docs/00-decision-ledger.html</code> v3 冲突之处，以台账为准并改原型。原型仍是 D18 探索稿、非契约、可推翻。</p>
+  </div>
+  <p>本轮只做「设计基线收口」：<strong>没有改动 Demo、没有改台账决策、没有新增功能</strong>。基线里所有色值、尺寸、断点取自当前 CSS 的 <code>:root</code> 与组件规则；所有 PASS / FAIL、样本数、最低对比度、高度分布取自 headless Chrome 的真实渲染与计算样式，不是人工填报。</p>
+  <div class="kpi">
+    <div><b>2922</b><span>对比度实测样本（明 / 暗各 1461）</span></div>
+    <div><b>0</b><span>WCAG AA 对比度失败项</span></div>
+    <div><b>16 / 16</b><span>视图宽度与栅格一致</span></div>
+    <div><b>0</b><span>JS 异常 / 外链 / 页面溢出</span></div>
+  </div>
+
+  <h2 id="s1"><span class="num">1</span>一页式设计基线</h2>
+  <h3>1.1 色彩令牌（明 / 暗双主题实测值）</h3>
+  <table><tr><th style="width:130px">语义</th><th style="width:150px">令牌</th><th>Light</th><th>Dark</th></tr>
+  <tr><td>品牌主色</td><td class="mono">--brand-500</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#0E7490"></span>#0E7490</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#48B6D1"></span>#48B6D1</td></tr>
+<tr><td>品牌深</td><td class="mono">--brand-700</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#0B596E"></span>#0B596E</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#8AD5E8"></span>#8AD5E8</td></tr>
+<tr><td>品牌浅</td><td class="mono">--brand-50</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#F1F8FA"></span>#F1F8FA</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#102A33"></span>#102A33</td></tr>
+<tr><td>主色上文字</td><td class="mono">--on-brand</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#FFFFFF"></span>#FFFFFF</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#0B2029"></span>#0B2029</td></tr>
+<tr><td>正文</td><td class="mono">--ink-900</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#16212B"></span>#16212B</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#EAF2F5"></span>#EAF2F5</td></tr>
+<tr><td>次文字</td><td class="mono">--ink-600</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#415260"></span>#415260</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#BCCCD4"></span>#BCCCD4</td></tr>
+<tr><td>弱文字</td><td class="mono">--ink-500</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#546572"></span>#546572</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#A3B6C0"></span>#A3B6C0</td></tr>
+<tr><td>描边</td><td class="mono">--line</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#E3EAED"></span>#E3EAED</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#2A3A43"></span>#2A3A43</td></tr>
+<tr><td>画布</td><td class="mono">--canvas</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#FBFDFD"></span>#FBFDFD</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#10181D"></span>#10181D</td></tr>
+<tr><td>卡片</td><td class="mono">--paper</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#FFFFFF"></span>#FFFFFF</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#131C22"></span>#131C22</td></tr>
+<tr><td>侧栏</td><td class="mono">--rail</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#F5F8F9"></span>#F5F8F9</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#162127"></span>#162127</td></tr>
+<tr><td>成功</td><td class="mono">--ok</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#1D7357"></span>#1D7357</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#6CCFA6"></span>#6CCFA6</td></tr>
+<tr><td>警告</td><td class="mono">--warn</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#96600E"></span>#96600E</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#E3B464"></span>#E3B464</td></tr>
+<tr><td>危险</td><td class="mono">--danger</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#AE3437"></span>#AE3437</td><td class="mono"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.12);vertical-align:-2px;margin-right:6px;background:#F08E8E"></span>#F08E8E</td></tr>
+  </table>
+  <p class="src">取数方式：<code>getComputedStyle(document.documentElement).getPropertyValue()</code>，分别在 <code>data-theme=light</code> 与 <code>dark</code> 下各采一次。两主题共用同一套语义令牌名，仅值不同。</p>
+
+  <h3>1.2 布局与形状令牌</h3>
+  <table><tr><th style="width:130px">语义</th><th style="width:190px">令牌</th><th style="width:150px">值</th><th>约束</th></tr>
+  <tr><td>内容宽度</td><td class="mono">--content-w</td><td class="mono"><strong>960px</strong></td><td>全站唯一档；对话 / 表格 / 配置 / 面板共用</td></tr>
+<tr><td>页边距</td><td class="mono">--gutter</td><td class="mono"><strong>24px</strong></td><td>全断点统一</td></tr>
+<tr><td>控件高度</td><td class="mono">--control-h</td><td class="mono"><strong>30px</strong></td><td>≤620px 升到 40px</td></tr>
+<tr><td>侧栏宽度</td><td class="mono">--rail-w</td><td class="mono"><strong>248px</strong></td><td>≤820px 收成图标轨，≤620px 离屏抽屉</td></tr>
+<tr><td>圆角</td><td class="mono">--r-sm / md / lg</td><td class="mono"><strong>6 / 10 / 14px</strong></td><td>小控件 / 输入框 / 面板</td></tr>
+<tr><td>阴影</td><td class="mono">--shadow-1 / 2</td><td class="mono"><strong>0 1px 2px / 0 12px 32px</strong></td><td>输入卡片是画布上唯一浮起层</td></tr>
+<tr><td>缓动</td><td class="mono">--ease</td><td class="mono"><strong>cubic-bezier(.22,.9,.28,1)</strong></td><td>状态切换不跳位</td></tr>
+  </table>
+
+  <h3>1.3 字阶、间距与断点</h3>
+  <table><tr><th style="width:150px">类别</th><th>规格</th></tr>
+   <tr><td>字阶</td><td class="mono">11 / 12 / 12.5 / 13 / 14 / 17 / 20 px</td></tr>
+   <tr><td>字重</td><td class="mono">400 正文 · 600 控件 / 徽标 · 700 标题</td></tr>
+   <tr><td>字体族</td><td class="mono">--f-ui 系统无衬线栈 · --f-mono 等宽栈（代码 / hash / 路径）</td></tr>
+   <tr><td>间距</td><td class="mono">4px 基准 → 4 / 8 / 12 / 16 / 24 / 32；页边距全断点 24px</td></tr>
+   <tr><td>断点</td><td class="mono">≥1240 双栏 + 风险档位可见 · ≤1240 隐藏风险 chip · ≤820 左栏图标轨 · ≤620 离屏抽屉 + 控件 40px</td></tr>
+   <tr><td>密度口径</td><td class="mono">元信息下限 11px · 阅读正文 14px</td></tr>
+  </table>
+
+  <h3>1.4 组件规格与状态</h3>
+  <table><tr><th style="width:170px">组件</th><th style="width:110px">尺寸</th><th style="width:170px">变体</th><th style="width:160px">状态</th><th>实现约束</th></tr>
+  <tr><td><strong>按钮 .btn</strong></td><td class="mono">30px</td><td>primary / 默认 / ghost / sm</td><td>默认 / 悬停 / 禁用 / 处理中</td><td>同行严格等高；禁用态 opacity 降低</td></tr>
+<tr><td><strong>输入 .input / .select</strong></td><td class="mono">30px</td><td>文本 / 数字 / 下拉</td><td>默认 / 聚焦 / 错误 / 禁用</td><td>聚焦 3px 主色环</td></tr>
+<tr><td><strong>分段 .segment</strong></td><td class="mono">30px</td><td>筛选器</td><td>选中 / 未选中</td><td>外框 30px，内部 button 实测 28px（1px 边框 ×2）</td></tr>
+<tr><td><strong>图标按钮 .iconbtn</strong></td><td class="mono">30px</td><td>工具条 / 消息操作</td><td>默认 / 悬停 / on</td><td>消息操作栏实测 25px，见 §4 P1</td></tr>
+<tr><td><strong>卡片 .card</strong></td><td class="mono">自适应</td><td>内容容器</td><td>静态</td><td>14px 圆角 + 1px 描边；并列卡片零纵向 margin</td></tr>
+<tr><td><strong>状态徽标 .pill</strong></td><td class="mono">19px</td><td>p-ok / warn / danger / brand / gray</td><td>纯展示</td><td>操作行内 pill 由 :857 拉到 30px；可点击的按 Q4 小屏 40px</td></tr>
+<tr><td><strong>开关 .switch</strong></td><td class="mono">19px</td><td>on / off</td><td>开 / 关</td><td>实测 19px，见 §4 P1</td></tr>
+<tr><td><strong>勾选 .chg-check</strong></td><td class="mono">16px 视觉</td><td>on / off</td><td>选中 / 未选</td><td>::after 热区 30px / 小屏 40px（Q4 决策）</td></tr>
+<tr><td><strong>表格控件 .cell-btn</strong></td><td class="mono">30px</td><td>可点击单元格</td><td>悬停描边</td><td>桌面跟随 --control-h</td></tr>
+<tr><td><strong>页内面板 .inline-panel</strong></td><td class="mono">960px</td><td>编辑表单 / 只读详情</td><td>打开 / 关闭</td><td>整块内容区切换，无遮罩、就近返回</td></tr>
+<tr><td><strong>Tab .tab / .tab-ico</strong></td><td class="mono">42px 栏</td><td>会话级文字 / 需求级图标</td><td>aria-selected</td><td>工作区 7 个；配置域隐藏</td></tr>
+<tr><td><strong>浮层 .pop</strong></td><td class="mono">自适应</td><td>菜单 / tip</td><td>打开 / 关闭</td><td>Esc 关闭；hover tip 带作用域胶囊</td></tr>
+  </table>
+  <div class="ok"><strong>作用域规则（Q1 / Q2 已确认）</strong>：入口必须跟随作用域——会话级操作只在会话浮层、需求级操作回需求档案与编队页、项目 / 平台级操作在配置区；顶栏不承载跨级写操作。会话级 3 个文字 tab 与需求级 4 个图标 tab 分区表达；表单与详情走页内一等面板，不用右侧抽屉。</div>
+
+  <h3>1.5 16 视图标注</h3>
+  <table><tr><th style="width:100px">key</th><th style="width:100px">名称</th><th style="width:80px">作用域</th><th style="width:200px">职责</th><th style="width:200px">主要组件</th><th>关键入口</th></tr>
+  <tr><td class="mono">chat</td><td><strong>对话</strong></td><td>会话级</td><td>与当前会话交互、业务 HITL「设计确认」</td><td>消息气泡 / 工具折叠 / HITL 卡 / 输入框</td><td>会话切换与操作菜单、发送、派生、回放</td></tr>
+<tr><td class="mono">trace</td><td><strong>轨迹</strong></td><td>会话级</td><td>append-only 事件与哈希锚点</td><td>时间线、文件侧 / PG 侧双卡</td><td>校验哈希、导出摘要、事件详情</td></tr>
+<tr><td class="mono">stats</td><td><strong>统计</strong></td><td>会话级</td><td>仅当前会话用量</td><td>statline 卡</td><td>模型、配额、隔离档、风险登记跳转</td></tr>
+<tr><td class="mono">overview</td><td><strong>需求档案</strong></td><td>需求级</td><td>需求驾驶舱：主线流程与全貌</td><td>S0–S6 流程轴、ov-card、ov-list</td><td>编辑 / 推进、提交与合并、会话维护</td></tr>
+<tr><td class="mono">context</td><td><strong>上下文</strong></td><td>需求级</td><td>agent.inject 注入内容与能力边界</td><td>textarea、preset 卡、平台红线 pre</td><td>保存上下文、校验 cwd、更换模板</td></tr>
+<tr><td class="mono">fleet</td><td><strong>编队</strong></td><td>需求级</td><td>一个需求下多会话与写锁</td><td>会话表、写锁租约</td><td>新建会话、设为写会话、释放写锁</td></tr>
+<tr><td class="mono">changes</td><td><strong>变更</strong></td><td>需求级</td><td>提交 / 合并 / 变动台账</td><td>chg-stats、变更表、环境合入矩阵</td><td>全选、提交、推送、建 MR、diff、维护合入</td></tr>
+<tr><td class="mono">demands</td><td><strong>需求管理</strong></td><td>项目级</td><td>批量导入 / 指派 / 状态机</td><td>工具栏、阶段筛选轴、需求表</td><td>导入、新建、指派、推进、编辑、归档执行</td></tr>
+<tr><td class="mono">members</td><td><strong>成员与权限</strong></td><td>项目级</td><td>三类平台角色 + 四类阶段角色</td><td>角色 chip、能力矩阵、成员表</td><td>切换身份、添加 / 编辑成员、矩阵切换</td></tr>
+<tr><td class="mono">capabilities</td><td><strong>能力模板</strong></td><td>项目级</td><td>平台白名单内的 agent preset</td><td>cfg-grid、白名单表</td><td>新建 / 保存模板、勾选技能</td></tr>
+<tr><td class="mono">models</td><td><strong>模型与供应商</strong></td><td>平台级</td><td>三级模型作用域</td><td>作用域表、供应商表、项目配置</td><td>供应商开关、保存配置、出口白名单</td></tr>
+<tr><td class="mono">repos</td><td><strong>仓库与环境</strong></td><td>项目级</td><td>冻结基线 / MR / 环境合入 / 回退</td><td>基线卡、保护卡、集成矩阵</td><td>同步主线、发起 MR、登记合入、生成 revert 组</td></tr>
+<tr><td class="mono">space</td><td><strong>运行空间</strong></td><td>平台级</td><td>.rdws 目录、双档隔离、故障路径</td><td>目录树、三层架构、只读卡</td><td>零写入校验、doctor、切换隔离档</td></tr>
+<tr><td class="mono">audit</td><td><strong>审计中心</strong></td><td>平台级</td><td>全局审计检索与哈希锚点</td><td>事件表、锚点卡、服务账号卡</td><td>校验哈希、导出 CSV、事件详情</td></tr>
+<tr><td class="mono">platform</td><td><strong>平台设置</strong></td><td>平台级</td><td>项目、平台策略、供应链、风险登记</td><td>只读行卡、开关、部署清单</td><td>新建项目、切换项目、风险登记、验收清单</td></tr>
+<tr><td class="mono">design</td><td><strong>设计系统</strong></td><td>平台级</td><td>令牌 / 字阶 / 断点 / 状态自述</td><td>色卡、字阶、状态样例、断点表</td><td>只读</td></tr>
+  </table>
+  <p class="src">视图 key 与 <code>ALLVIEWS / MENU / SESSION_TABS / DEMAND_TABS</code> 一致；hash 路由 <code>#/&lt;view&gt;/&lt;demandId&gt;</code>。工作区 7 个视图显示 tab 栏，配置域 9 个隐藏 tab 栏。</p>
+
+  <h2 id="s2"><span class="num">2</span>可访问性实测报告</h2>
+  <p><strong>方法</strong>：headless Chrome 通过 CDP 打开真实页面，逐视图注入 WCAG 相对亮度公式（<code>0.2126R + 0.7152G + 0.0722B</code>，sRGB 线性化），对每个含直接文本节点的可见元素取计算样式前景色、向上合成不透明背景色，计算对比度。普通文字阈值 <strong>4.5:1</strong>，大字号（≥24px，或 ≥18.66px 且 ≥700）阈值 <strong>3:1</strong>。每视图最多采样 500 个文本元素；明 / 暗主题各跑 16 视图。</p>
+  <div class="ok"><strong>结论：WCAG AA 对比度全通过。</strong>Light 1461 样本 / 0 失败 / 最低 4.84:1；Dark 1461 样本 / 0 失败 / 最低 5.49:1。设计系统页原先「≥4.5:1」的自述，现在有了逐视图实测证据。暗色主题 16 视图零横向溢出。</div>
+
+  <h3>2.1 Light 逐视图</h3>
+  <table><tr><th style="width:100px">视图</th><th style="width:100px">名称</th><th style="width:90px">样本数</th><th style="width:110px">最低对比度</th><th style="width:80px">失败</th><th>结论</th></tr>
+  <tr><td class="mono">chat</td><td>对话</td><td class="num">58</td><td class="num">4.84:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">trace</td><td>轨迹</td><td class="num">77</td><td class="num">5.26:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">stats</td><td>统计</td><td class="num">47</td><td class="num">5.26:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">overview</td><td>需求档案</td><td class="num">137</td><td class="num">4.84:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">context</td><td>上下文</td><td class="num">59</td><td class="num">4.93:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">fleet</td><td>编队</td><td class="num">89</td><td class="num">4.84:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">changes</td><td>变更</td><td class="num">135</td><td class="num">4.84:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">demands</td><td>需求管理</td><td class="num">70</td><td class="num">4.84:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">members</td><td>成员与权限</td><td class="num">108</td><td class="num">5.26:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">capabilities</td><td>能力模板</td><td class="num">66</td><td class="num">4.90:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">models</td><td>模型与供应商</td><td class="num">59</td><td class="num">4.84:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">repos</td><td>仓库与环境</td><td class="num">111</td><td class="num">4.84:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">space</td><td>运行空间</td><td class="num">118</td><td class="num">4.84:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">audit</td><td>审计中心</td><td class="num">88</td><td class="num">5.26:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">platform</td><td>平台设置</td><td class="num">67</td><td class="num">5.36:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">design</td><td>设计系统</td><td class="num">172</td><td class="num">5.26:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+  </table>
+  <h3>2.2 Dark 逐视图</h3>
+  <table><tr><th style="width:100px">视图</th><th style="width:100px">名称</th><th style="width:90px">样本数</th><th style="width:110px">最低对比度</th><th style="width:80px">失败</th><th>结论</th></tr>
+  <tr><td class="mono">chat</td><td>对话</td><td class="num">58</td><td class="num">6.33:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">trace</td><td>轨迹</td><td class="num">77</td><td class="num">6.33:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">stats</td><td>统计</td><td class="num">47</td><td class="num">6.33:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">overview</td><td>需求档案</td><td class="num">137</td><td class="num">6.33:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">context</td><td>上下文</td><td class="num">59</td><td class="num">6.01:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">fleet</td><td>编队</td><td class="num">89</td><td class="num">6.33:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">changes</td><td>变更</td><td class="num">135</td><td class="num">6.33:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">demands</td><td>需求管理</td><td class="num">70</td><td class="num">7.09:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">members</td><td>成员与权限</td><td class="num">108</td><td class="num">6.33:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">capabilities</td><td>能力模板</td><td class="num">66</td><td class="num">5.49:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">models</td><td>模型与供应商</td><td class="num">59</td><td class="num">7.09:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">repos</td><td>仓库与环境</td><td class="num">111</td><td class="num">6.33:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">space</td><td>运行空间</td><td class="num">118</td><td class="num">6.01:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">audit</td><td>审计中心</td><td class="num">88</td><td class="num">6.33:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">platform</td><td>平台设置</td><td class="num">67</td><td class="num">7.09:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+<tr><td class="mono">design</td><td>设计系统</td><td class="num">172</td><td class="num">6.33:1</td><td class="num">0</td><td><span class="pill p-ok">PASS</span></td></tr>
+  </table>
+
+  <h3>2.3 键盘、焦点、动效、语义</h3>
+  <table><tr><th style="width:220px">检查项</th><th style="width:170px">实测</th><th>说明</th></tr>
+   <tr><td>可聚焦元素</td><td class="mono">307 个</td><td>当前视图 DOM 全量；无正 tabindex（0）、无未命名按钮（0）</td></tr>
+   <tr><td>Tab 焦点序列</td><td><span class="pill p-ok">可达</span></td><td>真实按键连发 10 次：展开侧栏 → 收起侧栏 → 需求管理 → 成员与权限 → 能力模板…，每个焦点元素 <code>outline-width:2px</code></td></tr>
+   <tr><td>:focus-visible 规则</td><td class="mono">3 条</td><td>样式表中实际存在，非空声明</td></tr>
+   <tr><td>reduced-motion</td><td><span class="pill p-ok">生效</span></td><td>模拟 <code>prefers-reduced-motion: reduce</code> 后 <code>animation-name:none</code>、<code>duration:0s</code></td></tr>
+   <tr><td>ARIA / 语义</td><td class="mono">tab 7 · tabpanel 16 · aria-label 74</td><td>7 个 tab 与 aria-selected 一一对应；16 个 tabpanel；<code>main</code> 1 个</td></tr>
+   <tr><td>图标 / 图片语义</td><td><span class="pill p-ok">通过</span></td><td>内联 SVG 全部 <code>aria-hidden</code>（未标注数 0）；无缺 alt 的 img（0）</td></tr>
+   <tr><td>页面级标题 / 导航地标</td><td><span class="pill p-amber">Minor</span></td><td><code>h1</code> 0 个、<code>nav</code> 0 个；视图以 <code>h2</code> 起头、侧栏为 div。见 §4 P2</td></tr>
+  </table>
+
+  <h3>2.4 触控目标实测（Q4 判据：交互控件 ≥40px，纯展示徽标不适用）</h3>
+  <table><tr><th style="width:230px">检查项</th><th style="width:170px">实测</th><th>判定</th></tr>
+   <tr><td>桌面所有视图控件高度</td><td class="mono">24 / 25 / 30 px</td><td>30px 为主档；24 / 25px 为残留例外，见 §4</td></tr>
+   <tr><td>桌面表格控件 .cell-btn</td><td class="mono">30px</td><td><span class="pill p-ok">符合</span> Q4 桌面跟随 30px</td></tr>
+   <tr><td>桌面勾选框热区</td><td class="mono">30px</td><td><span class="pill p-ok">符合</span> 16px 视觉 + <code>::after</code> 热区</td></tr>
+   <tr><td>390px 阶段筛选 pill / .cell-btn</td><td class="mono">40px / 40px</td><td><span class="pill p-ok">符合</span></td></tr>
+   <tr><td>390px 勾选框热区</td><td class="mono">16 px 视觉 / 40px 热区</td><td><span class="pill p-ok">符合</span> 28px 首列未被撑宽</td></tr>
+   <tr><td>390px 全量按钮扫描</td><td class="mono">47 个 · 4 个 &lt;40px</td><td>4 个为 segment 内部 button（38px，外框 40px），见 §4 P2</td></tr>
+  </table>
+  <div class="warn"><strong>判据与落地范围的缝隙（§4 P1）</strong>：Q4 共同理解里明确点名的是「勾选框、表格小按钮、阶段筛选标签」三类；判据本身写的是「交互控件 ≥40px」。实测发现 <code>.switch</code>（19px）、消息操作栏 <code>.iconbtn</code>（25px）、可点击 <code>.ov-item</code>（37–38px）、能力矩阵按钮（35px）、<code>.cfg-item</code>（39px）、目录树 <code>dir-node</code>（23px）在小屏仍未达标。它们是交互控件，按判据应覆盖；本轮如实列出，不擅自扩大改动范围。</div>
+
+  <h2 id="s3"><span class="num">3</span>16 视图一致性走查</h2>
+  <p>逐视图切 hash 渲染，检查内容宽度、起始线、栅格错行、页面级横向溢出、控件高度分布与 tab 结构。配置域隐藏 tab 栏（<code>tabs=0</code>）是预期设计，不计异常。</p>
+  <table><tr><th style="width:100px">视图</th><th style="width:80px">内容宽</th><th style="width:80px">起始线</th><th style="width:90px">栅格错行</th><th style="width:90px">横向溢出</th><th style="width:130px">控件高度分布</th><th>结论</th></tr>
+  <tr><td class="mono">overview</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">chat</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">25,30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">trace</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">context</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">fleet</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">stats</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">24,30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">changes</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">demands</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">members</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">capabilities</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">models</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">repos</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">space</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">audit</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">platform</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">design</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
+  </table>
+  <div class="ok"><strong>跨页一致性：16 / 16 通过。</strong>内容宽度全为 960px、起始线全为 364px、栅格错行 0、页面级横向溢出 0；并列卡片同行对齐，表格在 <code>.tbl-wrap</code> 内自带横向滚动而不拉宽页面。</div>
+  <h3>3.1 状态切换与面板</h3>
+  <table><tr><th style="width:230px">检查项</th><th style="width:230px">切换前</th><th style="width:230px">切换后</th><th>结论</th></tr>
+   <tr><td>HITL 设计确认（待处理 → 已通过）</td><td class="mono">[[1121, 30], [1121, 30], [1121, 30]]</td><td class="mono">[[1121, 30], [1121, 30]]</td><td><span class="pill p-ok">不错位</span> top 1121 / height 30 前后一致；元素数 3→2 是设计态变化</td></tr>
+   <tr><td>页内一等面板（新建需求）</td><td class="mono">—</td><td class="mono">宽 960px · 起始 364px · panel-mode=true</td><td><span class="pill p-ok">同宽同层</span> 与视图共用 960px 栅格</td></tr>
+  </table>
+
+  <h2 id="s4"><span class="num">4</span>发现项与优先级清单</h2>
+  <div class="warn">本轮是「基线收口 + 实测」，<strong>没有修改 Demo</strong>。以下发现按优先级给出精确位置与修复动作，供你决定是否要下一轮一次性收掉；任何一条落地后需重跑 §2–§3 的实测，本文件数据即失效。</div>
+
+  <h3>P1 · Q4「交互控件 ≥40px」判据尚未覆盖到的元素</h3>
+  <table><tr><th style="width:190px">元素（实测高度）</th><th style="width:110px">出现视图数</th><th>性质与建议动作</th></tr>
+   <tr><td class="mono">button.switch（19px）</td><td class="num">供应商 / 隔离档 / 风险登记</td><td>真开关控件，小屏仍 19px。建议在 620px 断点给 <code>.switch</code> 加 40px 透明热区（同 <code>.chg-check</code> 做法），视觉保持 19px。</td></tr>
+   <tr><td class="mono">button.iconbtn（25px）</td><td class="num">5</td><td>消息操作栏的图标按钮被局部规则压到 25px，小屏未跟随 40px。建议清掉局部 height，统一走 <code>--control-h</code>。</td></tr>
+   <tr><td class="mono">div.ov-item（37–38px）</td><td class="num">需求档案最近轨迹 / 环境 MR</td><td>可点击整行，小屏差 2–3px。建议 <code>min-height:40px</code>。</td></tr>
+   <tr><td class="mono">button.yes / .no（35px）</td><td class="num">能力矩阵</td><td>可点击单元格，小屏 35px。建议 <code>min-height:40px</code>。</td></tr>
+   <tr><td class="mono">button.cfg-item（39px）</td><td class="num">能力模板列表</td><td>小屏 39px，差 1px。建议 <code>min-height:40px</code>。</td></tr>
+   <tr><td class="mono">div[dir-node]（23px）</td><td class="num">运行空间目录树</td><td>可点击树节点，小屏 23px。建议小屏 <code>min-height:40px</code> 或改为 button 语义。</td></tr>
+  </table>
+  <p class="src">判定口径：Q4 收窄后的判据是「交互控件 ≥40px，纯展示徽标不适用」。上表元素全部带 <code>data-action</code> 或可点击语义，不属于豁免范围。共同理解里点名的三类已全部达标，这里是判据覆盖面与已落地范围之间的缝隙，不是决策被违反。</p>
+
+  <h3>P2 · 语义与细节</h3>
+  <table><tr><th style="width:220px">发现</th><th>证据与建议</th></tr>
+   <tr><td>缺 h1 / nav 地标</td><td>全站 <code>h1=0</code>、<code>nav=0</code>，视图以 <code>h2</code> 起头，侧栏为 div。建议：给每个视图补一个视觉隐藏的 <code>&lt;h1&gt;</code>（或把视图 <code>h2</code> 提升为 <code>h1</code>），侧栏包 <code>&lt;nav aria-label="主导航"&gt;</code>。不阻断演示，影响读屏体验。</td></tr>
+   <tr><td>内联 height:24px</td><td>统计页 3 个跳转按钮带 <code>style="height:24px"</code>，桌面与小屏都压过令牌（实测 24px）。建议删内联样式，走 <code>--control-h</code>。</td></tr>
+   <tr><td>segment 内部 button 38px</td><td>小屏外框 40px、内部 button 实测 38px（上下各 1px 边框）。属结构性 2px 差，实际点击区接近 40px；若要严格达标，给 <code>.segment button</code> 加 <code>min-height:40px</code> 并改用 <code>box-sizing</code> 抵消边框。</td></tr>
+   <tr><td>390px 阶段筛选 pill</td><td>Q4 已接受的视觉代价：提到 40px 后由一行折成两行、密度变重。若要回调须重新打开 Q4 口径，不能静默改。</td></tr>
+  </table>
+
+  <h3>已接受、非缺陷（避免下一轮被重复报）</h3>
+  <ul>
+    <li><code>.chg-check</code> 视觉 16px 是刻意的：用 <code>::after</code> 提供 30 / 40px 透明热区，避免撑宽变更表 28px 首列（Q4 实现分叉自决）。</li>
+    <li>桌面可点击 pill 19px：Q4 判据只约束小屏触控目标，桌面维持紧凑层级；小屏已实测 40px。</li>
+    <li>操作行 pill 已由 <code>:857</code> 纳入令牌、<code>.ts-more</code> 因带 <code>.btn.sm.ghost</code> 已达标、可点击 chip 在 ≤1240px 隐藏 —— 这三项是上一轮专家纠正过的事实，不是漏网。</li>
+    <li>配置域 <code>tabs=0</code>、工作区 <code>tabs=7</code>：按域隐藏 tab 栏是设计，不是结构缺失。</li>
+  </ul>
+
+  <h2 id="s5"><span class="num">5</span>交接边界与验证</h2>
+  <ul>
+    <li><strong>三条硬约束</strong>：① 单一 <code>--content-w:960px</code> 与 <code>--gutter:24px</code>，任何新页面 / 面板不得再引入第二档宽度；② 交互控件走 <code>--control-h</code>（30 / 40px），新增可点击元素必须同步判据；③ 入口跟随作用域，跨级操作回自己作用域的页面。</li>
+    <li><strong>本轮未改动</strong>：<code>demo/rdws-workbench.html</code>、台账 v3 决策正文、R-A / R-B 残余风险口径。§4 的发现项只登记、不落地。</li>
+    <li><strong>验证方式</strong>：本文件由 <code>/tmp/rdws-baseline-collect.js</code> 与 <code>/tmp/rdws-heights-locate.js</code> 的实测 JSON 生成；文档本身已用真实浏览器打开验证渲染与关键文案。任何 Demo 改动后，重跑这两个脚本并重新生成本文件。</li>
+    <li><strong>PoC 交界</strong>：台账 §5.2 的四项验收（cwd 归属、sources 零写入、≥5 会话 resume/fork/replay、<code>rdws/*</code> push + MR 映射闭环）属于工程验证，不在本文件范围；本文件提供的是它们依赖的界面契约与视觉验收口径。</li>
+  </ul>
+
+  <h2 id="s6"><span class="num">6</span>文件与证据索引</h2>
+  <table><tr><th style="width:400px">文件</th><th>用途</th></tr>
+   <tr><td><code>docs/04-design-baseline.html</code></td><td>本文件 · 设计基线与交接规格 v1</td></tr>
+   <tr><td><code>demo/rdws-workbench.html</code></td><td>基线对象（233,293 字节）· 16 视图 / 单文件 / 零外链</td></tr>
+   <tr><td><code>docs/00-decision-ledger.html</code></td><td>决策台账 v3 · 唯一事实来源</td></tr>
+   <tr><td><code>docs/03-design-crosscheck-report.html</code></td><td>三面交叉检查报告 v2 · Q1–Q4 决策台账与两轮回归</td></tr>
+   <tr><td><code>/tmp/rdws-baseline-collect.js</code> · <code>rdws-a11y-setup.js</code></td><td>CDP 采集脚本（令牌 / 对比度 / 键盘 / 动效 / 语义 / 一致性）与页面内 WCAG 计算函数</td></tr>
+   <tr><td><code>/tmp/rdws-heights-locate.js</code></td><td>控件高度异常元素的归属定位（明 / 暗、1440 / 390）</td></tr>
+   <tr><td><code>/tmp/rdws-baseline-data.json</code> · <code>rdws-heights-data.json</code></td><td>机器可读实测结果，本文件所有数字的唯一来源</td></tr>
+   <tr><td><code>/tmp/rdws-baseline-shots/</code></td><td>5 张证据截图：light 需求档案 / 变更 / 设计系统 / 390 对话，dark 对话 / 平台设置</td></tr>
+  </table>
+
+  <div class="foot">RDWS · 设计基线与交接规格 v1 · 2026-11-16。数值来自当前代码与 Chrome 实测，非自述式规范。原型仍为 D18 探索稿、非契约、可推翻；与台账冲突时改原型，不改台账。</div>
+</div>
+</body>
+</html>

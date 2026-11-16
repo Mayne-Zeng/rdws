@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>基于 DeepSeek Harness 构建企业产研一体化工作区 · 可行性评估</title>
+<style>
+  :root{
+    --brand:#0E7490; --brand-dark:#0B596E; --brand-soft:#E6F3F6; --brand-line:#B9DEE6;
+    --ink:#1C2530; --ink-2:#43505E; --ink-3:#6B7885;
+    --line:#E2E7EB; --bg:#F5F7F8; --paper:#FFFFFF;
+    --red:#B3373A; --red-bg:#FCEDEC; --amber:#9A6410; --amber-bg:#FDF4E3;
+    --green:#24735A; --green-bg:#EAF5F0; --gray-bg:#F0F3F5;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:15px;line-height:1.75;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1060px;margin:0 auto;padding:0 24px 80px}
+  header{background:var(--paper);border-top:4px solid var(--brand);border-bottom:1px solid var(--line);
+    padding:44px 0 34px;margin-bottom:32px}
+  header .wrap{padding-bottom:0}
+  .kicker{color:var(--brand);font-size:12px;letter-spacing:.18em;font-weight:700;margin-bottom:12px}
+  h1{font-size:29px;line-height:1.35;margin:0 0 12px;letter-spacing:-.01em}
+  .sub{color:var(--ink-3);font-size:13.5px;margin:0}
+  .meta{margin-top:22px;display:flex;flex-wrap:wrap;gap:8px}
+  .tag{font-size:12px;padding:4px 10px;border:1px solid var(--line);border-radius:3px;color:var(--ink-2);background:var(--gray-bg)}
+  h2{font-size:20px;margin:44px 0 6px;padding-top:18px;border-top:2px solid var(--brand);letter-spacing:-.01em}
+  h2 .num{color:var(--brand);font-variant-numeric:tabular-nums;margin-right:10px}
+  h3{font-size:16px;margin:28px 0 8px;color:var(--brand-dark)}
+  h4{font-size:14px;margin:20px 0 6px;color:var(--ink)}
+  p{margin:10px 0}
+  ul,ol{margin:10px 0;padding-left:22px}
+  li{margin:5px 0}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;
+    background:var(--gray-bg);padding:1px 5px;border-radius:3px;color:var(--brand-dark);word-break:break-word}
+  .lead{font-size:16px;color:var(--ink-2)}
+  .verdict{background:var(--brand-soft);border:1px solid var(--brand-line);border-left:4px solid var(--brand);
+    padding:20px 24px;margin:24px 0;border-radius:0 4px 4px 0}
+  .verdict strong{color:var(--brand-dark)}
+  .verdict .vtitle{font-size:12px;letter-spacing:.14em;color:var(--brand);font-weight:700;margin-bottom:8px}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin:18px 0}
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:5px;padding:18px 20px}
+  .card .ct{font-weight:700;font-size:14px;margin-bottom:6px}
+  .card p{margin:0;font-size:13.5px;color:var(--ink-2)}
+  table{width:100%;border-collapse:collapse;margin:16px 0;background:var(--paper);
+    border:1px solid var(--line);font-size:13.5px}
+  th,td{border-bottom:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
+  th{background:#F0F6F7;color:var(--brand-dark);font-weight:700;font-size:12.5px;letter-spacing:.02em}
+  tr:last-child td{border-bottom:none}
+  td code{font-size:11.5px}
+  .pill{display:inline-block;font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:3px;white-space:nowrap}
+  .p-high{background:var(--red-bg);color:var(--red)}
+  .p-mid{background:var(--amber-bg);color:var(--amber)}
+  .p-low{background:var(--green-bg);color:var(--green)}
+  .p-info{background:var(--brand-soft);color:var(--brand-dark)}
+  .callout{border-left:3px solid var(--amber);background:var(--amber-bg);padding:12px 16px;margin:16px 0;font-size:13.5px;border-radius:0 3px 3px 0}
+  .danger{border-left:3px solid var(--red);background:var(--red-bg);padding:12px 16px;margin:16px 0;font-size:13.5px;border-radius:0 3px 3px 0}
+  .ok{border-left:3px solid var(--green);background:var(--green-bg);padding:12px 16px;margin:16px 0;font-size:13.5px;border-radius:0 3px 3px 0}
+  .src{font-size:12px;color:var(--ink-3)}
+  .src code{font-size:11.5px;color:var(--ink-3)}
+  .layers{margin:20px 0}
+  .layer{display:flex;align-items:stretch;border:1px solid var(--line);border-bottom:none;background:var(--paper)}
+  .layer:last-child{border-bottom:1px solid var(--line)}
+  .layer .lname{flex:0 0 130px;background:#F0F6F7;border-right:1px solid var(--line);padding:14px 16px;
+    font-weight:700;font-size:13px;color:var(--brand-dark);display:flex;align-items:center}
+  .layer .lbody{padding:14px 18px;font-size:13.5px;color:var(--ink-2)}
+  .layer .lbody b{color:var(--ink)}
+  .layer .lbody .items{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .layer .lbody .items span{font-size:12px;background:var(--gray-bg);border:1px solid var(--line);padding:2px 9px;border-radius:3px}
+  .steps{counter-reset:s;list-style:none;padding:0;margin:18px 0}
+  .steps li{counter-increment:s;position:relative;padding:0 0 18px 42px;margin:0;border-left:1px solid var(--brand-line);margin-left:13px}
+  .steps li:last-child{border-left-color:transparent;padding-bottom:0}
+  .steps li::before{content:counter(s);position:absolute;left:-13px;top:0;width:26px;height:26px;border-radius:50%;
+    background:var(--brand);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .steps b{display:block;font-size:14px;margin-bottom:2px}
+  .steps span{font-size:13.5px;color:var(--ink-2)}
+  .foot{margin-top:50px;padding-top:20px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-3)}
+  .toc{background:var(--paper);border:1px solid var(--line);padding:16px 22px;font-size:13.5px;columns:2;column-gap:32px}
+  .toc a{color:var(--ink-2);text-decoration:none;display:block;padding:2px 0}
+  .toc a:hover{color:var(--brand)}
+  @media(max-width:720px){
+    .grid{grid-template-columns:1fr}.toc{columns:1}h1{font-size:23px}
+    .wrap{padding:0 16px 60px}.layer{flex-direction:column}
+    .layer .lname{flex:auto;border-right:none;border-bottom:1px solid var(--line);padding:10px 14px}
+    table{font-size:12.5px}th,td{padding:8px 8px}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="kicker">技术尽调 · 可行性评估报告</div>
+    <h1>基于 DeepSeek Harness 构建企业内部产研一体化工作区</h1>
+    <p class="sub">开源使用风险 · 二次开发难度 · 五项业务需求逐条核验</p>
+    <div class="meta">
+      <span class="tag">评估日期：2026-11-13</span>
+      <span class="tag">核查对象：<code>deepseek-ai/deepseek-harness</code> @ <code>39163dd</code>（0.2.2-rc.3）</span>
+      <span class="tag">证据方式：源码浅克隆 + 官方中英文档逐份核验</span>
+      <span class="tag">结论：有条件可行</span>
+      <span class="tag">仓库：Mayne-Zeng/rdws（GitHub）</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="toc">
+    <a href="#s0">0. 结论摘要</a>
+    <a href="#s1">1. 核查基线与对象定性</a>
+    <a href="#s2">2. 开源使用风险</a>
+    <a href="#s3">3. 二次开发难度</a>
+    <a href="#s4">4. 五项需求逐条核验</a>
+    <a href="#s5">5. 推荐架构</a>
+    <a href="#s6">6. 分阶段落地与行动清单</a>
+    <a href="#s7">7. 证据索引与待核实项</a>
+  </div>
+
+  <h2 id="s0"><span class="num">0</span>结论摘要</h2>
+  <div class="verdict">
+    <div class="vtitle">总体判定</div>
+    <p style="margin:0 0 10px"><strong>有条件可行（Conditional Go）。</strong>DSH 适合作为「每个需求一个隔离的 AI 执行内核」，<strong>不适合被直接改造成多租户的平台后端</strong>。建议的路线是：<strong>外围自建业务平台（账号 / 项目 / 需求 / RBAC / 编排 / 审计），DSH 以「一需求一实例」的方式被调度</strong>，通过插件与配置扩展，不改内核。</p>
+    <p style="margin:0;font-size:14px;color:var(--ink-2)">开源许可本身不是障碍（MIT），<strong>真正的红线是数据外发、商标、第三方非宽松依赖、以及官方明确声明的「未做安全审计 / 不可用于生产」</strong>。二次开发难度呈两极：<strong>插件级改造较容易，账号体系与多租户隔离必须自建，且工作量主要在你的平台侧而非 DSH 侧</strong>。</p>
+  </div>
+
+  <div class="grid">
+    <div class="card"><div class="ct">问题一：开源使用风险</div><p>主体 MIT，内部使用与私有化改造无 copyleft 义务。但有 4 个必须处理的点：①「DeepSeek Harness」是注册商标，禁用于项目名；② 默认会把完整会话日志随官方模型 API 请求上传；③ 内含 Anthropic Claude Code CLI 二进制，授权是「项目所有者身份范围」而非宽松许可；④ MPL-2.0 / Apache-2.0 依赖的署名与源码提供义务。</p></div>
+    <div class="card"><div class="ct">问题二：二次开发难度</div><p>架构上「一切皆插件」，认证、授权、存储、沙箱、会话持久化、UI 全是可替换 seam，扩展路径清晰；但仓库 382 个包 / 约 3563 个 TS/Python 源文件、强制 Node ≥24.9 + pnpm 11、仍处于 rc 快速迭代（会话格式已到 v4）。<strong>不要 fork 内核</strong>，应锁定版本 + 插件扩展 + 外围平台。</p></div>
+    <div class="card"><div class="ct">最大架构约束</div><p>DSH 是「<strong>单进程 · 单 owner · 单 DSH_HOME · 会话单写者</strong>」模型。默认 Web UI 只监听 loopback、不支持 <code>0.0.0.0</code>，认证是「启动 URL 里的进程 Token → Cookie」，没有账号/租户概念。一个共享大进程承载全公司项目，既不安全也不可扩展。</p></div>
+    <div class="card"><div class="ct">最契合的一点</div><p>你的第 5 条需求几乎与原生模型一一对应：<code>workspace</code> = 规范目录 + 稳定 ID + <strong>有序会话账本</strong>；<code>session</code> = append-only 事件日志，原生支持 resume / fork / replay / 搜索。<strong>需求 : 工作区 = 1 : 1，会话 : 需求 = N : 1</strong>，无需自研会话引擎。</p></div>
+  </div>
+
+  <h2 id="s1"><span class="num">1</span>核查基线与对象定性</h2>
+  <p class="lead">先把对象定义清楚，否则可行性判断会失焦：DSH 是 <strong>Agent Harness（智能体运行时）</strong>，不是模型、不是推理服务、更不是研发管理平台。</p>
+  <table>
+    <tr><th style="width:170px">项目</th><th>核查结果</th><th style="width:230px">证据</th></tr>
+    <tr><td>仓库 / 版本</td><td><code>deepseek-ai/deepseek-harness</code>，<code>0.2.2-rc.3</code>，master 最新提交 2026-11-13 15:37（评估当天仍在合入）</td><td class="src"><code>package.json</code>、<code>git log -1</code></td></tr>
+    <tr><td>主许可</td><td>MIT，Copyright (c) 2026 DeepSeek</td><td class="src"><code>LICENSE</code></td></tr>
+    <tr><td>技术栈</td><td>TypeScript 为主；Node <code>&gt;=24.9.0</code>、pnpm <code>11.28.5</code>；pnpm workspace；Python / TS 双 SDK；原生 Node addon（Landlock 沙箱）</td><td class="src"><code>package.json</code>、<code>native/</code>、<code>python/sdk</code></td></tr>
+    <tr><td>规模</td><td>382 个包目录；约 3563 个 TS/TSX/Python 源文件；浅克隆 251 MB</td><td class="src"><code>packages/</code> 目录清点</td></tr>
+    <tr><td>内核</td><td>Cordis 插件框架（vendored，MIT）。「不存在需要打补丁的特权内核」，模型、工具、会话、沙箱、存储、调度、UI 全是插件</td><td class="src"><code>docs/architecture.zh.md</code> §Cordis</td></tr>
+    <tr><td>运行形态</td><td>profile：<code>web</code> / <code>headless</code> / <code>sdk</code> / <code>sdk-minimal</code> / <code>acp</code>；Web UI 默认 <code>127.0.0.1:3080</code>；桌面端为 <strong>Electron</strong></td><td class="src"><code>docs/architecture.zh.md</code> §应用启动、<code>apps/desktop/package.json</code></td></tr>
+    <tr><td>成熟度</td><td><strong>开发者预览</strong>，官方明示「未来将出现破坏兼容性的变更」；SAFETY 明示「尚未接受安全审计，不得视为安全或可用于生产环境的软件」</td><td class="src"><code>README.zh.md</code> §开发者预览、<code>SAFETY.zh.md</code></td></tr>
+    <tr><td>迭代速度</td><td>27+ 个 release 级持久化变更文档、数十条按日的格式变更记录（v0→v4），3 个月内从 0.0.1-rc.1 到 0.2.2-rc.3</td><td class="src"><code>docs/persistence-changes/releases/</code>、<code>docs/persistence-changes/</code></td></tr>
+  </table>
+  <div class="callout"><strong>定性结论：</strong>把它当「可被编排的 Agent 执行引擎 + 会话引擎」是准确的；把它当「带用户体系的 Web 应用框架」是错的。你的 5 条需求里，只有第 5 条落在 DSH 的能力圈内，其余 4 条都属于外围平台。</div>
+
+  <h2 id="s2"><span class="num">2</span>开源使用风险</h2>
+
+  <h3>2.1 风险矩阵</h3>
+  <table>
+    <tr><th style="width:150px">风险项</th><th style="width:78px">等级</th><th>事实与影响</th><th style="width:190px">处置动作</th></tr>
+    <tr>
+      <td><b>主体许可</b><br>MIT</td><td><span class="pill p-low">低</span></td>
+      <td>允许使用、复制、修改、合并、发布、分发、再许可、售卖，含商业与内部私有部署；无 copyleft。唯一硬性义务：<strong>分发副本或实质部分时保留版权声明与许可证全文</strong>。MIT 同时「按现状提供、不附带任何保证」。</td>
+      <td>保留 <code>LICENSE</code> 与版权头；在自研平台 NOTICE / 关于页中列明。</td>
+    </tr>
+    <tr>
+      <td><b>商标与品牌</b></td><td><span class="pill p-mid">中</span></td>
+      <td>官方《品牌资产使用规范》明确：<strong>「DeepSeek Harness」是 DeepSeek 的注册商标，不建议直接用于项目名称，未经授权使用可能构成商标侵权</strong>；也不要在宣传中造成官方背书 / 合作 / 授权的误解。允许用「基于 DeepSeek Harness 构建」作事实性描述，建议命名用缩写「DSH」。</td>
+      <td>平台取独立品牌名与独立 Logo；修改 Web UI 品牌资源；对外材料只作事实性描述。</td>
+    </tr>
+    <tr>
+      <td><b>会话日志外发</b><br>（最容易被忽略）</td><td><span class="pill p-high">高</span></td>
+      <td><code>dsh-session-log-deepseek</code> 在随附 profile 中默认挂载且 <code>enabled: true</code>，会把规范会话日志（含 system / user / tool 事件，即源码片段、命令输出、文件内容、路径）作为 <code>dsh_session_log</code> 字段随官方 DeepSeek API 请求增量上传，单次上限 8 MiB；关闭后重新开启还会补传关闭期间的事件。另有 OTel 会话遥测后端，默认 collector 为 <code>https://dsh-otel-collector.deepseeksvc.com/v1/logs</code>，且文档明示<strong>「不内置脱敏规则，未挂载监听器时记录原样离开进程，包括内嵌凭据」</strong>。</td>
+      <td><strong>上线前</strong>：profile patch 设 <code>enabled: false</code> 或直接卸载该插件；遥测设 <code>DISABLED</code> 或改内网 collector + 脱敏规则；模型提供方统一指向企业内网网关 / 私有化模型；出口白名单。</td>
+    </tr>
+    <tr>
+      <td><b>第三方非宽松依赖</b></td><td><span class="pill p-mid">中</span></td>
+      <td><code>THIRD_PARTY_NOTICES.md</code> 统计：173 MIT / 23 Apache-2.0 / 8 BSD-3 / 7 ISC / 5 BSD-2 / 2 MPL-2.0 / 1 CC0 / 1 PSF / <strong>9 条「SEE LICENSE IN …」</strong>。其中 8 个 <code>@anthropic-ai/claude-agent-sdk-*</code> 平台包携带 <strong>官方 Claude Code 2.1.263 可执行文件</strong>，声明为非宽松条款；文件写明分发许可来自<strong>「项目所有者身份范围授权（identity-scoped authorization）」，并明确「不把这些条款归类为宽松许可」</strong>。此外 LibreOffice 转换套件为 MPL-2.0，文档明确「接收方必须能取得对应源码与 NOTICE」。</td>
+      <td>企业包中<strong>剔除 Claude Code 兼容层 / mods 相关实验插件及其 SDK 依赖</strong>（功能非必需）；若不分发 LibreOffice 套件则不挂载；Apache-2.0 依赖保留 NOTICE；发布前跑一遍 <code>pnpm licenses list</code> 出合规清单。</td>
+    </tr>
+    <tr>
+      <td><b>开发期依赖</b></td><td><span class="pill p-low">低</span></td>
+      <td><code>eslint-plugin-sonarjs</code>（LGPL-3.0-only）与 <code>lightningcss</code>（MPL-2.0）明确「仅作开发 tooling，不链接进也不随任何 DSH 产物分发」。</td>
+      <td>只要交付物不含构建工具链，无传染风险；锁文件留存备查。</td>
+    </tr>
+    <tr>
+      <td><b>安全成熟度</b></td><td><span class="pill p-high">高</span></td>
+      <td><code>SAFETY.zh.md</code> 原文：实验性开发者预览、<strong>未接受安全审计、不得视为安全或可用于生产</strong>；可执行模型生成的代码与命令、加载第三方插件、访问网络 / 进程 / 凭据 / 文件；<strong>沙箱、审批与权限控制「不保证隔离」，不得作为不可信工作负载的唯一安全控制</strong>。官方建议「一次性 VM、容器或专用环境 + 最小权限 + 备份」。</td>
+      <td>把容器 / VM 硬隔离作为安全边界，DSH 沙箱只是第二层；平台侧独立鉴权、命令审批、审计留痕；禁止生产凭据进入 Agent 环境。</td>
+    </tr>
+    <tr>
+      <td><b>供应链与版本漂移</b></td><td><span class="pill p-mid">中</span></td>
+      <td>rc 阶段 + 明确 breaking changes + 会话格式已迭代到 v4（含迁移链）。评估当天 master 仍有合并提交。跟随 master 会导致自研插件反复失效。</td>
+      <td>锁定单一版本（内部镜像 / vendor 快照），建立升级窗口与回归用例集；自研能力全部落在插件与 patch，不碰 <code>packages/core</code>。</td>
+    </tr>
+  </table>
+
+  <div class="danger"><strong>合规红线（对企业源码 / 需求文档场景）：</strong>在默认配置下把 DSH 接到公网官方模型 API，等同于把会话上下文持续送出企业边界。这不是「许可风险」，是数据出境 / 商业秘密风险，且开关默认开启。<strong>必须在 P0 阶段以配置基线 + 网络策略双重封堵，并做上线前抓包验证。</strong></div>
+
+  <h3>2.2 关于「二次分发」的边界</h3>
+  <p>如果平台仅在<strong>本企业内网自用的服务器上运行</strong>，不向外部主体交付二进制，MIT 的复制 / 署名义务基本只体现在保留源码声明，风险最小。若后续要把改造后的客户端或一体机交付给<strong>集团内其他法人、子公司或客户</strong>，性质可能转为「分发」，此时需逐项复核：MIT 与 Apache 的声明、MPL-2.0 对应源码可得性、以及 Claude Code payload 的授权是否覆盖你的主体 —— 官方已用「identity-scoped」措辞把该授权限定在项目所有者身份上，<strong>不能默认继承</strong>。稳妥做法是发布包中不含这些组件。</p>
+
+  <h2 id="s3"><span class="num">3</span>二次开发难度</h2>
+
+  <h3>3.1 有利因素：扩展点是一等设计目标</h3>
+  <p><code>docs/architecture.zh.md</code> 明确「新行为附加到已有文档记录的扩展点」，并给出归属映射表。与你的需求直接相关的可替换 seam：</p>
+  <table>
+    <tr><th style="width:220px">扩展点</th><th>可做的事</th><th style="width:120px">改造层级</th></tr>
+    <tr><td><code>ctx.connection.authentication.register(provider)</code></td><td>替换默认 Token/Cookie 认证，注入企业身份（SSO / LDAP / OAuth2 校验后签发 Peer）</td><td>插件，不改内核</td></tr>
+    <tr><td><code>PrincipalMap</code> 声明合并</td><td>身份类型默认只有 <code>{ kind: 'owner' }</code>，但类型设计为 merge-extensible，各驱动可声明自己的 <code>kind</code>；可扩展出 <code>enterprise-user</code> 并落盘到会话日志</td><td>类型扩展 + 插件</td></tr>
+    <tr><td><code>ctx.remoteAccess.registerPolicy(kind, policy)</code></td><td>基于 role / binding / resource 的<strong>方法级 RBAC</strong>：Gateway 在解析参数前询问 <code>decide()</code>，列表结果逐项过滤，前端访问快照自动隐藏入口</td><td>插件 + 策略注册</td></tr>
+    <tr><td><code>ctx.sessionPersistence</code> seam</td><td>替换会话持久化后端（随附为每会话一个 <code>.jsonl.zstd</code> 文件），可实现中心化后端</td><td>后端实现，难度高</td></tr>
+    <tr><td><code>ctx.storage</code> / <code>storage-sqlite</code> / <code>storage-json</code></td><td>非会话应用数据（含 workspace 记录）的存储可换后端</td><td>后端实现，中等</td></tr>
+    <tr><td><code>ctx.sandbox</code> / <code>ctx.fs</code> / <code>ctx.shell</code></td><td>把文件系统与子进程指向远程沙箱；官方说明「指向远程沙箱，Bash / PTY / LSP 一并搬过去」</td><td>provider 替换，中等</td></tr>
+    <tr><td><code>ctx.llm</code> 适配器、<code>cordis.patch.yml</code> profile</td><td>接企业内网模型网关；启停插件、覆盖配置、定制 UI 组合</td><td>配置级，低</td></tr>
+    <tr><td>SDK / headless / ACP / <code>@Remote</code></td><td>TS 与 Python SDK 与同一 agent loop；Typert API Gateway 可声明业务方自己的一元 / 流式 Remote 方法；headless 支持一次性任务、Webhook 可外部触发 Session</td><td>平台对接，中等</td></tr>
+  </table>
+  <div class="ok"><strong>判断：</strong>你不需要 fork 内核。官方的扩展哲学是「把插件挂在旁边，而不是给内核打补丁」，这与企业定制的方向一致，是这套方案成立的最大理由。</div>
+
+  <h3>3.2 不利因素：三个绕不开的硬约束</h3>
+  <ol>
+    <li><strong>单进程单 owner 模型。</strong><code>packages/typert/protocol/src/types.ts</code> 的 <code>PrincipalMap</code> 默认只有 <code>owner</code>；README 与 <code>RemoteAccess</code> 文档明确 <strong>owner 恒放行、从不受检查</strong>，非 owner policy 是为 liveshare 只读观众设计的。默认 <code>host-authentication-token</code> 是「启动 URL 带进程 Token → 换 Cookie → 共享一个 Peer」，浏览器与 API 共用凭据，30 天有效期。文档原话：「<em>打印的 URL 携带进程凭据，只应与预期用户分享</em>」「<em>无论是公告 URL 还是栅栏都不保护监听端口本身</em>」。<strong>这不是账号系统，把它改造成企业 RBAC 需要替换认证 provider、为每个 Remote 方法声明资源、写 policy，并规避 owner 旁路 —— 工作量中等偏高且容易留越权口子。</strong></li>
+    <li><strong>会话单写者 + 全局 DSH_HOME。</strong><code>session-persistence</code> 约定「每个后端实例内每个会话只允许一个写入方」，同一 session 二次写打开抛 <code>SessionAlreadyOwnedError</code>；workspace 路径唯一性依赖宿主文件系统 <code>realpath</code>；<code>RemoteAccess</code> 文档甚至建议「需要不同读者使用不同图片存储时，须使用独立 Host 实例及各自的 <code>DSH_HOME</code> 目录」。<strong>结论：无法靠一个巨型共享进程做水平扩展</strong>，必须按需求 / 用户分片成多个实例，并做会话粘性路由。</li>
+    <li><strong>沙箱不是多租户边界。</strong><code>packages/sandbox/README.zh.md</code> 原文：「隔离仅适用于与宿主共享文件系统和内核的子进程；<strong>容器、microVM 与远程执行器会替换整个能力</strong>」。Landlock / bwrap / Seatbelt / Windows 受限令牌都是「同一台机器上的进程约束」，跨用户隔离必须靠容器 / VM 硬边界。</li>
+  </ol>
+
+  <h3>3.3 难度分级（按能力拆）</h3>
+  <table>
+    <tr><th style="width:230px">能力</th><th style="width:72px">难度</th><th>说明</th></tr>
+    <tr><td>接入内网模型网关、关闭会话日志上传与遥测、插件白名单</td><td><span class="pill p-low">低</span></td><td>profile / <code>cordis.patch.yml</code> 配置级，无需改源码</td></tr>
+    <tr><td>品牌替换、菜单与 UI 裁剪、增加业务入口卡片</td><td><span class="pill p-low">低-中</span></td><td>client-ui 插件 + 组合包；注意商标规范</td></tr>
+    <tr><td>批量需求导入、项目/成员/分配表、阶段角色、审计</td><td><span class="pill p-low">中</span></td><td><strong>纯平台侧新建</strong>，与 DSH 解耦，技术选型自由（Java/Node + PG 均可），风险最低</td></tr>
+    <tr><td>企业 SSO 注入 principal、方法级 RBAC policy</td><td><span class="pill p-mid">中-高</span></td><td>需实现 AuthenticationProvider、扩展 PrincipalMap、为 <code>@Remote</code> 端点声明 resources 并注册 policy；要处理 owner 旁路、精确 Fetch 路由 403、事件转发授权等已知限制</td></tr>
+    <tr><td>需求 ↔ workspace ↔ session 编排、多实例调度与会话路由</td><td><span class="pill p-mid">中-高</span></td><td>用 SDK / headless / ACP 对接；需自建实例生命周期、粘性路由、配额与回收</td></tr>
+    <tr><td>多租户共享单进程硬隔离</td><td><span class="pill p-high">高</span></td><td>与 DSH 核心假设冲突，<strong>不建议做</strong>，改用容器分片</td></tr>
+    <tr><td>会话持久化中心化（PG / 对象存储）</td><td><span class="pill p-high">高</span></td><td>需实现完整 <code>SessionPersistence</code> 后端契约（单写者所有权、flush 屏障、事件图 shared-frozen/detached 语义），且要跟着 v4 格式迁移链走</td></tr>
+    <tr><td>长期维护（跟随上游 rc）</td><td><span class="pill p-mid">中·持续</span></td><td>锁版本 + 回归用例；官方已预告 breaking changes，<code>docs/persistence-changes/</code> 需纳入升级评审</td></tr>
+  </table>
+  <p class="src">工作量为定性分级，非人月承诺。实际排期需按「平台侧 / DSH 插件侧 / 运维侧」分别估：平台侧是主体工作量，DSH 侧以配置与插件为主，运维侧（容器编排、镜像、网络）常被低估。</p>
+
+  <h2 id="s4"><span class="num">4</span>五项需求逐条核验</h2>
+  <table>
+    <tr><th style="width:34px">#</th><th style="width:210px">你的需求</th><th style="width:82px">判定</th><th>落地方式与注意点</th></tr>
+    <tr>
+      <td>1</td><td><b>B/S 架构</b>：后端跑主机，浏览器 / 客户端访问（Tauri 外壳？）</td>
+      <td><span class="pill p-low">可行</span></td>
+      <td>官方 <code>web</code> profile 就是 Node HTTP Server + Web UI，支持 <code>--public-url</code> / <code>--trusted-host</code> / 原生 TLS / 反向代理，B/S 路径已被官方支持。<strong>但默认只监听 loopback，且明确「不支持 <code>dsh web --host 0.0.0.0</code>」</strong>，须由反向代理承载外部链路并保留 <code>Host</code>、剥离前缀、转发 WebSocket 升级、改写 Cookie 作用域。<br><strong>关于 Tauri：</strong>官方桌面端是 <strong>Electron</strong>（<code>apps/desktop/package.json</code> 写明 "Electron desktop shell for a bundled dsh runtime"），且壳内打包<strong>完整本地 runtime</strong>，与「后端集中在主机」目标相悖。<strong>建议纯 B/S</strong>；若确需客户端，只做薄壳（Tauri / Electron 均可）承载 SSO、本地文件与终端，<strong>不要再跑一份 DSH</strong>。用 Tauri 替换 Electron 本身不难，但收益有限、不在关键路径。</td>
+    </tr>
+    <tr>
+      <td>2</td><td><b>三类平台角色 + 四类阶段角色，一人多身份</b></td>
+      <td><span class="pill p-mid">需自建</span></td>
+      <td>DSH <strong>没有账号、组织、租户、用户目录</strong>（<code>packages/identity/</code> 下只有 <code>anonymous-user-id</code>）。角色模型（平台管理员 / 项目管理员 / 需求 / 开发 / 测试 / 部署，且一人多身份）应作为平台侧 RBAC 数据模型实现，与 DSH 无关。DSH 侧只保留两层：① 平台服务账号作为受控 Peer；② 用 <code>RemoteAccessPolicy</code> 做方法级兜底校验。<strong>不要把角色语义塞进 DSH 内核</strong>。</td>
+    </tr>
+    <tr>
+      <td>3</td><td><b>一个账号具备多个项目权限</b></td>
+      <td><span class="pill p-low">平台侧</span></td>
+      <td>典型 <code>user × project × role</code> 多对多授权表，平台侧解决。DSH 侧配合：按「需求实例」授权而非按进程授权，实例与项目绑定，天然避免跨项目越权。<code>RemoteAccess</code> 的资源种类（global / session / workspace 等）可作为方法级二次校验的挂载点。</td>
+    </tr>
+    <tr>
+      <td>4</td><td><b>项目管理员批量导入 / 新增需求，并分配开发、测试</b></td>
+      <td><span class="pill p-mid">需自建</span></td>
+      <td>DSH 不提供业务需求管理。平台侧实现 Excel/CSV 批量导入、需求表、字段校验、指派与状态机；创建需求时由编排层<strong>异步</strong>触发：建代码分支 / worktree → 分配 workspace → 拉起 DSH 实例 → 预置 AGENTS.md 与需求上下文。可用 <code>webhookRuntime</code> / headless / SDK 作为触发与回写通道。注意 <code>workspace</code> 路径唯一性基于 <code>fs.realpath</code>，同一目录不能挂两个工作区，规划目录规范时要定死。</td>
+    </tr>
+    <tr>
+      <td>5</td><td><b>每需求一个工作区，其下可创建大量会话持续与 AI 协作研发</b></td>
+      <td><span class="pill p-low">高度契合</span></td>
+      <td><strong>原生能力，几乎零改造。</strong><code>docs/subsystems/workspace.zh.md</code>：workspace = 规范目录路径 + 稳定 UUID + 显示名 + <strong>有序会话账本</strong>；<code>docs/architecture.zh.md</code>：session 为 append-only 事件日志，模型所见即所记录，支持 resume / fork / search / replay / 轨迹检视。映射为 <code>需求 → 1 个 workspace → N 个 session</code> 即可。<strong>但注意</strong>：会话单写者 + 单 DSH_HOME 意味着这些会话应由<strong>同一个专属实例</strong>承载，不能跨进程并发写同一会话；大需求可派生子会话（fork）而非并行写。</td>
+    </tr>
+  </table>
+
+  <h2 id="s5"><span class="num">5</span>推荐架构</h2>
+  <p class="lead">核心决策：<strong>不把 DSH 改造成平台，而是「平台管人与需求、DSH 管执行与会话」</strong>；每个需求对应一个隔离实例，平台做统一入口与鉴权。</p>
+
+  <div class="layers">
+    <div class="layer"><div class="lname">接入层</div><div class="lbody"><b>企业统一入口</b>：浏览器（主）/ 可选 Tauri 薄壳；企业 SSO、网关 TLS、WAF、审计埋点。
+      <div class="items"><span>HTTPS 网关</span><span>SSO / OAuth2</span><span>纯 B/S 优先</span></div></div></div>
+    <div class="layer"><div class="lname">平台层<br><span style="font-weight:400;font-size:11.5px">（自建主体）</span></div><div class="lbody"><b>产研业务中台</b>：用户 / 组织 / 项目 / 角色 / 需求 / 指派 / 状态机 / 批量导入 / 审计 / 配额。BFF 代理 DSH 的 API，<strong>DSH 不直接暴露给浏览器</strong>，避免依赖其未审计的认证边界。
+      <div class="items"><span>PostgreSQL</span><span>RBAC</span><span>需求导入</span><span>BFF / 审计</span></div></div></div>
+    <div class="layer"><div class="lname">编排层</div><div class="lbody"><b>需求 → 实例调度</b>：建分支 / worktree、拉起容器、注入需求上下文与凭据、会话粘性路由、空闲回收、实例健康与配额。记录 <code>sessionId → 实例</code> 映射。
+      <div class="items"><span>K8s / 容器</span><span>实例池</span><span>粘性路由</span><span>生命周期</span></div></div></div>
+    <div class="layer"><div class="lname">执行层<br><span style="font-weight:400;font-size:11.5px">（DSH × N）</span></div><div class="lbody"><b>每需求一个 DSH 实例</b>：独立容器 + 独立 <code>DSH_HOME</code> + 独立代码挂载 + 只读根 / 网络白名单；<code>web</code> 或 <code>sdk</code> profile；workspace ↔ 需求 1:1，会话 N:1；禁用官方日志上传与遥测、插件白名单。
+      <div class="items"><span>workspace</span><span>session 事件日志</span><span>sandbox</span><span>tools / skills</span></div></div></div>
+    <div class="layer"><div class="lname">基础设施层</div><div class="lbody"><b>内网依赖</b>：企业模型网关 / 私有化模型、代码仓库与 CI、制品与对象存储、日志与监控、密钥管理。所有模型调用与数据落点不出企业边界。
+      <div class="items"><span>内网模型网关</span><span>Git / CI</span><span>持久卷</span><span>出口白名单</span></div></div></div>
+  </div>
+
+  <h3>5.1 三条关键取舍</h3>
+  <ul>
+    <li><strong>为何不是「一个大 DSH 进程 + 多账号」：</strong>认证是进程 Token 共享 Peer、owner 恒放行、会话单写者、沙箱只限同宿主子进程 —— 四个假设都指向单用户本地工具。硬改成多租户，等于在别人的核心假设上反复打补丁，且每次上游 breaking change 都要重做。</li>
+    <li><strong>为何用 BFF 而不是替换 DSH 认证：</strong>可以替换 <code>ConnectionAuthentication</code> 并注册 <code>RemoteAccessPolicy</code>，但官方已知限制不少（精确 Fetch 路由对非 owner 一律 403、事件转发泄露 host 绝对路径、条件依赖 args 时快照与判定不一致等）。对内网生产系统，<strong>把鉴权放在平台层、DSH 只信任平台服务账号</strong>更可控，也更容易过安全评审。</li>
+    <li><strong>为何不用 Tauri 重写桌面端：</strong>客户端不是瓶颈；且官方 Electron 壳的价值在于「本地 runtime」，这恰恰与集中式后端冲突。薄壳仅在你确实需要本地文件拖拽、本地终端、离线提示时才有必要。</li>
+  </ul>
+
+  <h2 id="s6"><span class="num">6</span>分阶段落地与优先级行动清单</h2>
+  <ol class="steps">
+    <li><b>P0 · 合规与安全基线（阻塞项，未过不得上线）</b><span>① 锁定 <code>0.2.2-rc.3</code> 内部镜像 / vendor 快照；② profile patch 关闭 <code>dsh-session-log-deepseek</code>、遥测设 <code>DISABLED</code>；③ 模型统一指向内网网关，网络出口白名单，抓包验证无外发；④ 剔除 Claude Code SDK / mods 相关实验插件；⑤ 按《品牌资产使用规范》确定独立品牌名；⑥ 出具 MIT / Apache-2.0 / MPL-2.0 依赖合规清单；⑦ 全实例跑在一次性容器 / VM 中，遵循 SAFETY.md 的最小权限与备份要求。</span></li>
+    <li><b>P1 · 最小闭环验证（PoC，验证「需求 → 工作区 → 多会话」）</b><span>单项目、单需求、单实例：用容器起 <code>dsh web</code>，通过 BFF 代理访问；手工创建一个 workspace，验证在其下创建 / 恢复 / fork 多个 session、轨迹检视、审批与沙箱策略；接内网模型网关完成一次真实需求研发。此阶段<strong>不写 RBAC</strong>，先把 DSH 能力边界跑实。</span></li>
+    <li><b>P2 · 平台侧主体建设</b><span>用户 / 项目 / 角色 / 需求 / 分配 / 批量导入 / 审计的数据模型与接口；企业 SSO；需求状态机；与 <code>需求 ↔ 实例</code> 编排打通；UI 品牌化与入口裁剪。此阶段与 DSH 基本解耦，可独立排期。</span></li>
+    <li><b>P3 · 多实例编排与隔离</b><span>容器模板（独立 <code>DSH_HOME</code> / 代码挂载 / 资源配额）、实例池与空闲回收、会话粘性路由、持久卷与备份、监控告警、配额与成本统计。<strong>先单实例后分片，不要一开始就做分布式会话存储</strong>。</span></li>
+    <li><b>P4 · 可选增强</b><span>若确实需要 DSH 直连浏览器：实现 <code>AuthenticationProvider</code> + <code>enterprise-user</code> principal + <code>RemoteAccessPolicy</code>，并为所有 <code>@Remote</code> 方法补齐 resources 声明。若需要跨会话检索 / 统一报表，再评估自研 <code>SessionPersistence</code> 后端（难度高，建议先把 JSONL 落盘 + 旁路同步到数仓，而非替换 seam）。</span></li>
+  </ol>
+
+  <h3>6.1 优先级行动清单（可直接分派）</h3>
+  <table>
+    <tr><th style="width:56px">优先级</th><th style="width:250px">动作</th><th>验收标准</th><th style="width:96px">责任面</th></tr>
+    <tr><td><span class="pill p-high">P0</span></td><td>数据外发封堵（日志上传 + 遥测 + 模型端点 + 出口）</td><td>抓包与服务端日志双向确认：无任何企业源码 / 需求文本流向外部域名；配置基线纳入镜像构建检查</td><td>安全 / 运维</td></tr>
+    <tr><td><span class="pill p-high">P0</span></td><td>许可与商标合规包</td><td>保留 LICENSE 与版权头；独立品牌名；剔除 Claude Code payload；输出第三方许可清单法务确认</td><td>法务 / 架构</td></tr>
+    <tr><td><span class="pill p-high">P0</span></td><td>版本锁定与升级治理</td><td>内部版本快照 + 回归用例集 + 明确的升级评审流程；不以 master 为部署源</td><td>工程</td></tr>
+    <tr><td><span class="pill p-mid">P1</span></td><td>PoC：单需求单实例多会话</td><td>一个 workspace 下 ≥5 个 session，可恢复 / fork / 回放，审批与沙箱策略生效</td><td>引擎组</td></tr>
+    <tr><td><span class="pill p-mid">P2</span></td><td>平台 RBAC 与批量导入</td><td>三类平台角色 + 四类阶段角色 + 一人多身份 + 一人多项目，批量导入与指派闭环</td><td>平台组</td></tr>
+    <tr><td><span class="pill p-mid">P3</span></td><td>容器化编排与隔离</td><td>多需求并发实例互不可见；单实例故障不影响其他需求；会话路由正确</td><td>运维 / 引擎组</td></tr>
+  </table>
+
+  <h2 id="s7"><span class="num">7</span>证据索引与待核实项</h2>
+  <h3>7.1 一手证据（本地核查副本 <code>.dsh-ref/</code>）</h3>
+  <table>
+    <tr><th style="width:330px">文件</th><th>用于支撑</th></tr>
+    <tr><td><code>LICENSE</code>、<code>BRAND_GUIDELINES.md</code>、<code>THIRD_PARTY_NOTICES.md</code>（L184–206、L290）</td><td>MIT 条款、注册商标限制、Claude Code payload 身份范围授权、MPL/LGPL 边界</td></tr>
+    <tr><td><code>SAFETY.zh.md</code>、<code>README.zh.md</code> §开发者预览</td><td>未安全审计、不可用于生产、沙箱不保证隔离、破坏性变更预告</td></tr>
+    <tr><td><code>docs/architecture.zh.md</code></td><td>Cordis 插件内核、profile/组合包、核心包表、会话日志、能力 seam、新行为归属位置表</td></tr>
+    <tr><td><code>docs/api-gateway.zh.md</code>、<code>packages/api/remote-access/README.zh.md</code></td><td>Typert Remote、方法级 role/binding/policy、owner 恒放行、已知安全限制</td></tr>
+    <tr><td><code>packages/typert/protocol/src/types.ts</code> L448–461</td><td><code>PrincipalMap</code> 仅 owner，注释明确 merge-extensible</td></tr>
+    <tr><td><code>packages/client/connection/README.zh.md</code> L41–51、<code>packages/host/authentication-token/README.zh.md</code></td><td>Token→Cookie 共享 Peer、<code>register(provider)</code> 扩展点、不支持 0.0.0.0、来源栅栏不建立身份</td></tr>
+    <tr><td><code>docs/user/guide/public-deployments.zh.md</code>、<code>packages/host/webserver/README.zh.md</code></td><td>反向代理要求、启动 URL 携带进程凭据、TLS/Host/Cookie 处理、端口保护责任</td></tr>
+    <tr><td><code>docs/subsystems/workspace.zh.md</code>、<code>packages/session/session-persistence/README.zh.md</code></td><td>workspace = 目录 + 稳定 ID + 有序会话账本；会话单写者所有权与持久化 seam 契约</td></tr>
+    <tr><td><code>packages/sandbox/README.zh.md</code></td><td>隔离仅覆盖同宿主子进程；容器 / microVM 替换整个能力</td></tr>
+    <tr><td><code>packages/session/session-log-deepseek/README.zh.md</code>、<code>packages/session/session-telemetry-otel/README.zh.md</code>、<code>packages/session/session-telemetry/README.zh.md</code></td><td>默认上传会话日志、<code>dsh_session_log</code>、OTel collector 端点、不内置脱敏规则</td></tr>
+    <tr><td><code>apps/desktop/package.json</code>、<code>package.json</code></td><td>Electron 桌面壳、Node/pnpm 版本约束、当前版本号</td></tr>
+    <tr><td><code>docs/persistence-changes/</code>、<code>git log -1</code></td><td>迭代速度与破坏性变更频率</td></tr>
+  </table>
+
+  <h3>7.2 待核实 / 假设（进入立项前建议闭环）</h3>
+  <ul>
+    <li><strong>许可条款原文：</strong>8 个 Claude Code 平台包的 <code>LICENSE.md</code> 与 <code>@anthropic-ai/claude-agent-sdk</code> README 许可正文未在仓库内核对，需由法务读取 npm 包内条款，确认「身份范围授权」是否覆盖你的部署主体；本报告按「不覆盖」的保守假设给建议。</li>
+    <li><strong>企业模型网关协议：</strong>DSH 内置适配器支持 OpenAI Chat Completions / OpenAI Responses / Anthropic Messages 三类协议及 Custom Provider，需确认贵司网关实际协议与流式能力、以及长上下文 / 工具调用兼容性。</li>
+    <li><strong>内网环境约束：</strong>Node ≥24.9、pnpm 11、Linux Landlock / bwrap 可用性、容器镜像基线、是否需要国产化 OS / 昇腾环境适配 —— 需在 P0 做一次部署冒烟。</li>
+    <li><strong>工作量：</strong>本报告为定性分级，未做人月估算；需在确定团队规模、是否有 K8s、是否复用现有统一认证后重排。</li>
+    <li><strong>版本时效：</strong>核查基于 2026-11-13 的 master（0.2.2-rc.3）。项目处于 rc 高频迭代，立项时应重新核对 README / SAFETY / THIRD_PARTY_NOTICES 是否有变更。</li>
+  </ul>
+
+  <div class="foot">
+    本报告基于对 <code>deepseek-ai/deepseek-harness</code> 源码与官方文档的一手核查，结论仅针对「企业内部自用产研平台」场景；不构成法律意见，涉及许可与商标事项请以法务复核为准。<br>
+    核查副本位于工作区 <code>.dsh-ref/</code>（浅克隆，251 MB），可直接查阅上表所列文件。
+  </div>
+</div>
+</body>
+</html>

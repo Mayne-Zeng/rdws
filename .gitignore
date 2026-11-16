@@ -1,0 +1,38 @@
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Node / TypeScript（后续单需求 PoC 会用到）
+node_modules/
+dist/
+build/
+coverage/
+.pnpm-store/
+*.tsbuildinfo
+
+# Logs / 本地环境变量与凭据
+*.log
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# RDWS 运行时数据：代码仓库进 git，运行时数据不进
+/.rdws/
+/state/
+/runtime/
+
+# 本地验证产物与备份
+*.bak
+*.backup.html
+*.orig
+.chrome-cdp/

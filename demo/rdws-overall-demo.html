@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RDWS 产研一体化工作区 · 整体 Demo 探索稿</title>
+<style>
+  :root{
+    --brand:#0E7490; --brand-dark:#0B596E; --brand-soft:#E6F3F6; --brand-line:#B9DEE6;
+    --ink:#1C2530; --ink-2:#43505E; --ink-3:#6B7885;
+    --line:#E2E7EB; --bg:#F5F7F8; --paper:#FFFFFF;
+    --red:#B3373A; --red-bg:#FCEDEC; --amber:#9A6410; --amber-bg:#FDF4E3;
+    --green:#24735A; --green-bg:#EAF5F0; --gray-bg:#F0F3F5;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:14px;line-height:1.65;-webkit-font-smoothing:antialiased}
+  button,select,input{font-family:inherit;font-size:inherit}
+  button{cursor:pointer}
+  .banner{background:var(--amber-bg);border-bottom:1px solid #EBD9B4;color:var(--amber);
+    font-size:12px;padding:7px 20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .banner b{font-weight:700;letter-spacing:.04em}
+  .topbar{background:var(--paper);border-bottom:1px solid var(--line);display:flex;align-items:center;
+    gap:16px;padding:0 20px;height:58px;position:sticky;top:0;z-index:20}
+  .logo{display:flex;align-items:center;gap:9px;font-weight:700;font-size:15px;color:var(--brand-dark);white-space:nowrap}
+  .logo .mark{width:22px;height:22px;border-radius:4px;background:var(--brand);position:relative;flex:none}
+  .logo .mark::after{content:"";position:absolute;left:5px;top:5px;width:12px;height:12px;border:2px solid #fff;border-radius:2px}
+  .logo small{font-weight:400;color:var(--ink-3);font-size:11px;display:block;line-height:1.1}
+  .top-spacer{flex:1}
+  .ctl{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-2);white-space:nowrap}
+  select,.inp{border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:4px;padding:5px 8px;font-size:12.5px}
+  .avatar{width:28px;height:28px;border-radius:50%;background:var(--brand-soft);color:var(--brand-dark);
+    display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex:none}
+  .shell{display:flex;min-height:calc(100vh - 88px)}
+  .side{width:206px;flex:none;background:var(--paper);border-right:1px solid var(--line);padding:14px 10px}
+  .side .grp{font-size:11px;color:var(--ink-3);letter-spacing:.1em;padding:10px 10px 5px}
+  .nav{display:block;width:100%;text-align:left;border:0;background:none;color:var(--ink-2);
+    padding:9px 11px;border-radius:4px;font-size:13px;margin-bottom:2px;display:flex;justify-content:space-between;align-items:center}
+  .nav:hover{background:var(--gray-bg)}
+  .nav.on{background:var(--brand-soft);color:var(--brand-dark);font-weight:700}
+  .nav.locked{opacity:.38;cursor:not-allowed}
+  .nav .lock{font-size:10px;color:var(--ink-3)}
+  .main{flex:1;min-width:0;padding:24px 28px 60px;max-width:1240px}
+  .view{display:none}.view.on{display:block}
+  .vhead{margin-bottom:18px}
+  .vhead h1{font-size:21px;margin:0 0 4px;letter-spacing:-.01em}
+  .vhead p{margin:0;color:var(--ink-3);font-size:12.5px}
+  .grid{display:grid;gap:14px}
+  .g4{grid-template-columns:repeat(4,1fr)}.g3{grid-template-columns:repeat(3,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}.g21{grid-template-columns:1.35fr 1fr}
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:5px;padding:16px 18px}
+  .card h3{font-size:14px;margin:0 0 10px;color:var(--ink)}
+  .card .hint{font-size:12px;color:var(--ink-3);margin:0 0 12px}
+  .kpi .n{font-size:26px;font-weight:700;color:var(--brand-dark);line-height:1.2;font-variant-numeric:tabular-nums}
+  .kpi .l{font-size:12px;color:var(--ink-3);margin-top:2px}
+  .kpi .d{font-size:11.5px;color:var(--ink-2);margin-top:8px;border-top:1px solid var(--line);padding-top:8px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:middle}
+  th{color:var(--ink-3);font-weight:700;font-size:11.5px;letter-spacing:.03em;background:#FAFCFD}
+  tr:last-child td{border-bottom:none}
+  tr.click{cursor:pointer}tr.click:hover{background:var(--brand-soft)}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:3px;white-space:nowrap}
+  .p-blue{background:var(--brand-soft);color:var(--brand-dark)}
+  .p-green{background:var(--green-bg);color:var(--green)}
+  .p-amber{background:var(--amber-bg);color:var(--amber)}
+  .p-red{background:var(--red-bg);color:var(--red)}
+  .p-gray{background:var(--gray-bg);color:var(--ink-3)}
+  .btn{border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:4px;
+    padding:7px 13px;font-size:12.5px;font-weight:700}
+  .btn:hover{background:var(--brand-dark)}
+  .btn.sec{background:var(--paper);color:var(--brand-dark);border-color:var(--brand-line)}
+  .btn.sec:hover{background:var(--brand-soft)}
+  .btn.ghost{background:none;border:1px solid var(--line);color:var(--ink-2);font-weight:400}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn.sm{padding:4px 9px;font-size:11.5px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .tagline{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+  .tagline span{font-size:11px;background:var(--gray-bg);border:1px solid var(--line);padding:2px 8px;border-radius:3px;color:var(--ink-2)}
+  .note{font-size:12px;color:var(--ink-3);margin-top:10px}
+  .callout{background:var(--brand-soft);border:1px solid var(--brand-line);border-left:3px solid var(--brand);
+    padding:11px 14px;font-size:12.5px;color:var(--ink-2);border-radius:0 4px 4px 0;margin:14px 0}
+  .warn{background:var(--amber-bg);border:1px solid #EBD9B4;border-left:3px solid var(--amber);
+    padding:11px 14px;font-size:12.5px;color:#6F4A0B;border-radius:0 4px 4px 0;margin:14px 0}
+  .danger-note{background:var(--red-bg);border:1px solid #F0CECD;border-left:3px solid var(--red);
+    padding:11px 14px;font-size:12.5px;color:#8A2C2F;border-radius:0 4px 4px 0;margin:14px 0}
+  .split{display:grid;grid-template-columns:250px 1fr;gap:14px}
+  .sess{background:var(--paper);border:1px solid var(--line);border-radius:5px;overflow:hidden}
+  .sess .sh{padding:11px 14px;border-bottom:1px solid var(--line);font-size:12px;color:var(--ink-3)}
+  .sitem{padding:11px 14px;border-bottom:1px solid var(--line);cursor:pointer;font-size:12.5px}
+  .sitem:last-child{border-bottom:none}
+  .sitem:hover{background:var(--gray-bg)}
+  .sitem.on{background:var(--brand-soft);border-left:3px solid var(--brand);padding-left:11px}
+  .sitem .t{font-weight:700;color:var(--ink)}
+  .sitem .m{font-size:11px;color:var(--ink-3);margin-top:3px}
+  .chat{background:var(--paper);border:1px solid var(--line);border-radius:5px;min-height:430px;display:flex;flex-direction:column}
+  .chat .ch{padding:11px 16px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .chat .ch b{font-size:13px}
+  .chat .body{padding:16px;flex:1;overflow:auto;max-height:430px}
+  .msg{margin-bottom:14px;max-width:88%}
+  .msg .who{font-size:11px;color:var(--ink-3);margin-bottom:4px}
+  .msg .bub{background:var(--gray-bg);border:1px solid var(--line);border-radius:4px;padding:10px 13px;font-size:12.5px;white-space:pre-wrap}
+  .msg.ai .bub{background:var(--brand-soft);border-color:var(--brand-line)}
+  .tool{background:#FBFCFD;border:1px solid var(--line);border-radius:4px;padding:9px 12px;font-size:11.5px;margin:8px 0;font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--ink-2)}
+  .hitl{background:var(--amber-bg);border:1px solid #EBD9B4;border-radius:4px;padding:11px 13px;font-size:12.5px;margin:10px 0}
+  .hitl b{color:#6F4A0B}
+  .chat .foot{padding:10px 14px;border-top:1px solid var(--line);display:flex;gap:8px}
+  .chat .foot input{flex:1;border:1px solid var(--line);border-radius:4px;padding:7px 10px;background:var(--paper);color:var(--ink)}
+  .tree{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.85;
+    background:#FBFCFD;border:1px solid var(--line);padding:14px 16px;border-radius:4px;overflow-x:auto;white-space:pre;color:var(--ink-2)}
+  .tree b{color:var(--brand-dark)}
+  .scope{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+  .scope button{border:1px solid var(--line);background:var(--paper);color:var(--ink-2);padding:6px 12px;border-radius:4px;font-size:12.5px}
+  .scope button.on{background:var(--brand-soft);border-color:var(--brand-line);color:var(--brand-dark);font-weight:700}
+  .lockrow{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);font-size:12.5px}
+  .lockrow:last-child{border-bottom:none}
+  .modal{display:none;position:fixed;inset:0;background:rgba(28,37,48,.42);z-index:50;align-items:center;justify-content:center;padding:20px}
+  .modal.on{display:flex}
+  .modal .box{background:var(--paper);border-radius:6px;width:min(560px,100%);padding:22px 24px;border:1px solid var(--line)}
+  .modal h3{margin:0 0 6px;font-size:16px}
+  .modal .sub{font-size:12px;color:var(--ink-3);margin-bottom:16px}
+  .modal label{display:block;font-size:12px;color:var(--ink-2);margin:10px 0 4px}
+  .modal input,.modal select,.modal textarea{width:100%;border:1px solid var(--line);border-radius:4px;padding:7px 9px;background:var(--paper);color:var(--ink)}
+  .toast{position:fixed;right:22px;bottom:22px;background:var(--ink);color:#fff;padding:11px 16px;border-radius:4px;
+    font-size:12.5px;z-index:60;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none;max-width:360px}
+  .toast.on{opacity:1;transform:none}
+  .bar{height:6px;background:var(--gray-bg);border-radius:3px;overflow:hidden;margin-top:6px}
+  .bar i{display:block;height:100%;background:var(--brand)}
+  .legend{font-size:11.5px;color:var(--ink-3);margin-top:8px}
+  .foot-note{margin-top:26px;padding-top:16px;border-top:1px solid var(--line);font-size:11.5px;color:var(--ink-3)}
+  @media(max-width:900px){
+    .g4,.g3,.g2,.g21,.split{grid-template-columns:1fr}
+    .shell{flex-direction:column}
+    .side{width:100%;border-right:0;border-bottom:1px solid var(--line);display:flex;gap:4px;overflow-x:auto;padding:8px}
+    .side .grp{display:none}.nav{width:auto;white-space:nowrap;margin:0}
+    .main{padding:18px 14px 50px}
+    .topbar{height:auto;padding:9px 14px;flex-wrap:wrap}
+  }
+</style>
+</head>
+<body>
+
+<div class="banner">
+  <b>探索稿 · 非契约 · 可推翻</b>
+  <span>本页为 D17 整体 Demo 原型，全部为假数据、不连接任何后端或 DSH 实例；页面结构、字段与状态机均未按实现契约锁定，冲突时以决策台账为准。</span>
+</div>
+
+<div class="topbar">
+  <div class="logo"><span class="mark"></span><span>RDWS<small>产研一体化工作区</small></span></div>
+  <div class="ctl">项目
+    <select id="projectSel">
+      <option value="A">project-A · 统一认证平台</option>
+      <option value="B">project-B · 计费中台</option>
+    </select>
+  </div>
+  <div class="top-spacer"></div>
+  <div class="ctl">当前身份
+    <select id="roleSel">
+      <option value="admin">平台管理员</option>
+      <option value="pm">项目管理员</option>
+      <option value="req">需求人员</option>
+      <option value="dev" selected>开发人员</option>
+      <option value="qa">测试人员</option>
+      <option value="ops">部署人员</option>
+    </select>
+  </div>
+  <div class="avatar" id="avatar">张</div>
+</div>
+
+<div class="shell">
+  <nav class="side" id="side">
+    <div class="grp">工作空间</div>
+    <button class="nav on" data-view="overview">总览</button>
+    <button class="nav" data-view="demands">需求工作台</button>
+    <button class="nav" data-view="workspace">需求 · AI 会话</button>
+    <button class="nav" data-view="trace">轨迹与审计</button>
+    <div class="grp">工程与发布</div>
+    <button class="nav" data-view="release">代码与发布</button>
+    <button class="nav" data-view="models">模型与能力配置</button>
+    <button class="nav" data-view="runtime">目录与运行空间</button>
+    <div class="grp">平台</div>
+    <button class="nav" data-view="admin">角色与权限</button>
+  </nav>
+
+  <main class="main">
+
+    <section class="view on" id="v-overview">
+      <div class="vhead"><h1>总览</h1><p>project-A · 统一认证平台 · 一个项目一个 DSH 实例，工作区按需求隔离</p></div>
+      <div class="grid g4">
+        <div class="card kpi"><div class="n">5</div><div class="l">活跃需求</div><div class="d">2 个待分配 · 1 个待集成</div></div>
+        <div class="card kpi"><div class="n">21</div><div class="l">AI 会话</div><div class="d">当前 3 个运行中</div></div>
+        <div class="card kpi"><div class="n">1</div><div class="l">DSH 实例</div><div class="d">项目级 · 端口 3080 · 内网</div></div>
+        <div class="card kpi"><div class="n">3</div><div class="l">环境分支</div><div class="d">dev / test / prod 长期存在</div></div>
+      </div>
+      <div class="grid g21" style="margin-top:14px">
+        <div class="card">
+          <h3>需求进展</h3>
+          <p class="hint">状态机：待分配 → 开发中 → 测试中 → 待集成 → 已归档</p>
+          <table>
+            <tr><th>需求</th><th>阶段</th><th>能力模板</th><th>会话</th><th>进度</th></tr>
+            <tr class="click" onclick="go('demands')"><td>DEM-1042 单点登录改造</td><td><span class="pill p-blue">开发中</span></td><td>全量</td><td>6</td><td><div class="bar"><i style="width:62%"></i></div></td></tr>
+            <tr class="click" onclick="go('demands')"><td>DEM-1043 登录页视觉重构</td><td><span class="pill p-gray">待分配</span></td><td>纯设计</td><td>0</td><td><div class="bar"><i style="width:8%"></i></div></td></tr>
+            <tr class="click" onclick="go('demands')"><td>DEM-1039 回归测试脚本</td><td><span class="pill p-amber">测试中</span></td><td>纯测试</td><td>3</td><td><div class="bar"><i style="width:78%"></i></div></td></tr>
+            <tr class="click" onclick="go('demands')"><td>DEM-1036 网关灰度配置</td><td><span class="pill p-green">待集成</span></td><td>全量</td><td>4</td><td><div class="bar"><i style="width:92%"></i></div></td></tr>
+          </table>
+        </div>
+        <div class="card">
+          <h3>实例与隔离档位</h3>
+          <p class="hint">当前为无 Docker 的开发 / 功能验证档</p>
+          <div class="lockrow"><span>实例</span><b>project-A · dsh-web</b></div>
+          <div class="lockrow"><span>DSH_HOME</span><span class="pill p-gray">runtime/dsh/p-A</span></div>
+          <div class="lockrow"><span>隔离档位</span><span class="pill p-amber">平台层隔离</span></div>
+          <div class="lockrow"><span>沙箱 / 审批</span><b>workspace-write + never</b></div>
+          <div class="lockrow"><span>模型网关</span><b>内网网关 A（示例）</b></div>
+          <div class="warn" style="margin-top:12px">已登记残余风险：无 Docker 档下 AI 子进程与 sources 同主机同内核，隔离依靠 OS 权限 + bwrap + 路径守卫。官方 SAFETY 声明沙箱不得作为不可信工作负载的唯一安全控制；本档不作为生产 / 不可信负载的安全边界，风险由部署方承担。</div>
+          <div class="row"><button class="btn sec sm" onclick="go('runtime')">查看运行空间</button><button class="btn ghost sm" onclick="toast('切换隔离档位需要重新渲染实例配置，此处为演示占位')">切换档位</button></div>
+        </div>
+      </div>
+      <div class="callout">身份与权限由平台 BFF 统一兜住，DSH 不直接暴露给浏览器；平台侧记录「真人 / 角色 / 需求 / 会话」，会话轨迹权威留在实例本地 append-only 日志，PG 只存映射与审计索引。</div>
+    </section>
+
+    <section class="view" id="v-demands">
+      <div class="vhead"><h1>需求工作台</h1><p>批量导入 · 单个新增 · 指派开发与测试 · 能力模板在需求进入开发前设定</p></div>
+      <div class="row" style="margin-bottom:14px">
+        <button class="btn" id="btnImport" onclick="openModal()">批量导入需求</button>
+        <button class="btn sec" id="btnNew" onclick="openModal('new')">新增单个需求</button>
+        <button class="btn ghost" onclick="toast('已按当前项目与角色过滤需求列表')">刷新</button>
+        <span class="legend" id="demandHint"></span>
+      </div>
+      <div class="card">
+        <table>
+          <tr><th>编号 / 标题</th><th>阶段</th><th>开发</th><th>测试</th><th>能力模板</th><th>需求分支</th><th>会话</th><th>操作</th></tr>
+          <tr class="click" onclick="go('workspace')"><td><b>DEM-1042</b> 单点登录改造</td><td><span class="pill p-blue">开发中</span></td><td>张伟</td><td>李娜</td><td>全量</td><td><code>rdws/DEM-1042</code></td><td>6</td><td><button class="btn sec sm" onclick="event.stopPropagation();go('workspace')">进入工作区</button></td></tr>
+          <tr><td><b>DEM-1043</b> 登录页视觉重构</td><td><span class="pill p-gray">待分配</span></td><td>—</td><td>—</td><td>纯设计</td><td><code>rdws/DEM-1043</code></td><td>0</td><td><button class="btn sec sm" onclick="toast('已打开指派面板（演示占位）')">指派</button></td></tr>
+          <tr><td><b>DEM-1039</b> 回归测试脚本</td><td><span class="pill p-amber">测试中</span></td><td>王磊</td><td>李娜</td><td>纯测试</td><td><code>rdws/DEM-1039</code></td><td>3</td><td><button class="btn sec sm" onclick="go('workspace')">进入工作区</button></td></tr>
+          <tr><td><b>DEM-1036</b> 网关灰度配置</td><td><span class="pill p-green">待集成</span></td><td>张伟</td><td>陈曦</td><td>全量</td><td><code>rdws/DEM-1036</code></td><td>4</td><td><button class="btn sec sm" onclick="go('release')">去集成</button></td></tr>
+          <tr><td><b>DEM-1030</b> 用户中心字段扩展</td><td><span class="pill p-gray">已归档</span></td><td>王磊</td><td>陈曦</td><td>全量</td><td>已保留</td><td>8</td><td><button class="btn ghost sm" onclick="toast('归档需求只读')">查看</button></td></tr>
+        </table>
+        <div class="note">需求目录 = 1 个 DSH workspace；其下可创建任意多个会话。能力模板生成 agent preset，<b>修改只影响之后新建的会话</b>；白名单之外的插件 / 技能 / MCP 一律禁止。</div>
+      </div>
+    </section>
+
+    <section class="view" id="v-workspace">
+      <div class="vhead"><h1>需求 DEM-1042 · AI 会话工作区</h1><p>单点登录改造 · 一个工作区，六个会话 · 会话 header cwd 精确绑定需求目录</p></div>
+      <div class="callout" style="margin-top:0">
+        <b>workspace</b> <code>.rdws/projects/project-A/demands/DEM-1042</code>　·
+        <b>worktrees</b> <code>worktrees/auth-service</code>, <code>worktrees/gateway</code>　·
+        <b>分支</b> <code>rdws/DEM-1042</code>　·
+        <b>模型</b> 内网网关 A / auth-code-v2　·
+        <b>沙箱</b> workspace-write + never
+      </div>
+      <div class="split">
+        <div class="sess">
+          <div class="sh">会话账本（有序 · 6）</div>
+          <div id="sessList"></div>
+        </div>
+        <div class="chat">
+          <div class="ch"><b id="chatTitle">S-2 接口改造实现</b><span class="pill p-blue" id="chatState">运行中</span>
+            <span class="pill p-gray" id="chatMode">写会话</span>
+            <span style="flex:1"></span>
+            <button class="btn sec sm" id="btnNewSess" onclick="toast('已新建会话：cwd 绑定当前需求目录，能力模板 = 全量')">新建会话</button>
+          </div>
+          <div class="body" id="chatBody"></div>
+          <div class="chat foot"><input id="chatInput" placeholder="向 AI 描述本需求的任务（演示：输入后回车）"><button class="btn" onclick="sendMsg()">发送</button></div>
+        </div>
+      </div>
+      <div class="warn">业务 HITL 关卡由平台显式声明（设计确认 / 测试验收 / 部署批准），仅具备该需求权限的人员可处理；工具级审批默认关闭、不逐条弹窗。同一需求同一时刻只有一个写会话，其余会话为只读 / 评审模式。</div>
+    </section>
+
+    <section class="view" id="v-trace">
+      <div class="vhead"><h1>轨迹与审计</h1><p>会话轨迹权威是实例本地 append-only JSONL；PG 只存身份映射、审计索引与摘要</p></div>
+      <div class="grid g21">
+        <div class="card">
+          <h3>会话事件时间线 · S-2</h3>
+          <p class="hint">模型所见即已记录，可按来源筛选、回放与 fork</p>
+          <table>
+            <tr><th>时间</th><th>来源</th><th>事件</th><th>摘要</th></tr>
+            <tr><td>10:02</td><td><span class="pill p-gray">system</span></td><td>request/header</td><td>加载需求上下文与能力模板</td></tr>
+            <tr><td>10:02</td><td><span class="pill p-blue">user</span></td><td>user/message</td><td>改造登录回调，兼容旧 token</td></tr>
+            <tr><td>10:03</td><td><span class="pill p-gray">tool</span></td><td>tool/call</td><td>read auth-service/callback.ts</td></tr>
+            <tr><td>10:04</td><td><span class="pill p-green">assistant</span></td><td>assistant/message</td><td>给出改造方案与影响面</td></tr>
+            <tr><td>10:06</td><td><span class="pill p-gray">tool</span></td><td>tool/call</td><td>edit auth-service/callback.ts</td></tr>
+            <tr><td>10:09</td><td><span class="pill p-gray">tool</span></td><td>tool/call</td><td>bash npm test -- --filter=auth</td></tr>
+            <tr><td>10:11</td><td><span class="pill p-amber">hitl</span></td><td>business/checkpoint</td><td>设计确认 · 由张伟（开发）处理</td></tr>
+          </table>
+          <div class="row" style="margin-top:12px"><button class="btn sec sm" onclick="toast('已按来源重放该会话轨迹（演示占位）')">回放</button><button class="btn ghost sm" onclick="toast('已从该事件 fork 出新会话')">从此 fork</button></div>
+        </div>
+        <div class="card">
+          <h3>审计索引（PG）</h3>
+          <p class="hint">真人 / 角色 / 需求 / 动作 / 结果，可回答「谁让 AI 改了这行」</p>
+          <table>
+            <tr><th>真人</th><th>角色</th><th>动作</th><th>结果</th></tr>
+            <tr><td>张伟</td><td>开发</td><td>发起 S-2 会话</td><td><span class="pill p-green">允许</span></td></tr>
+            <tr><td>李娜</td><td>测试</td><td>查看 DEM-1042 轨迹</td><td><span class="pill p-green">允许</span></td></tr>
+            <tr><td>王磊</td><td>开发</td><td>写入 DEM-1042 工作树</td><td><span class="pill p-red">拒绝 · 写锁</span></td></tr>
+            <tr><td>张伟</td><td>开发</td><td>业务关卡：设计确认</td><td><span class="pill p-green">批准</span></td></tr>
+            <tr><td>平台服务账号</td><td>系统</td><td>代答 DSH 审批</td><td><span class="pill p-blue">已记录</span></td></tr>
+          </table>
+          <div class="lockrow" style="margin-top:12px"><span>文件哈希锚点</span><span class="pill p-green">已写入 PG append-only 审计表</span></div>
+          <div class="note">哈希由独立校验任务计算、与会话文件分离存储；写锚点者无权改写会话文件。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="v-release">
+      <div class="vhead"><h1>代码与发布</h1><p>sources 为只读 mirror · GitLab 主仓为事实源 · 环境分支长期存在、只走 MR</p></div>
+      <div class="grid g3">
+        <div class="card"><h3>主线同步</h3><p class="hint">冻结 baseCommit，按需显式同步</p>
+          <div class="lockrow"><span>基线</span><b>develop @ a1b2c3d</b></div>
+          <div class="lockrow"><span>主线领先</span><b>12 次提交</b></div>
+          <div class="lockrow"><span>同步方式</span><b>fetch + merge（不 rebase）</b></div>
+          <div class="row" style="margin-top:12px"><button class="btn sec sm" onclick="toast('已触发同步主线：fetch + merge，冲突将交由当前会话处理')">同步主线</button></div>
+        </div>
+        <div class="card"><h3>需求分支</h3><p class="hint">平台服务账号只 push 非保护 rdws/*</p>
+          <div class="lockrow"><span>DEM-1042</span><span class="pill p-blue">auth-service · gateway</span></div>
+          <div class="lockrow"><span>DEM-1039</span><span class="pill p-blue">auth-service</span></div>
+          <div class="lockrow"><span>DEM-1036</span><span class="pill p-blue">gateway</span></div>
+          <div class="row" style="margin-top:12px"><button class="btn sec sm" onclick="toast('已把需求分支 push 到 GitLab rdws/* 命名空间')">推送分支</button></div>
+        </div>
+        <div class="card"><h3>事实源</h3><p class="hint">本地不写主仓</p>
+          <div class="lockrow"><span>sources/</span><span class="pill p-gray">bare mirror · 只读</span></div>
+          <div class="lockrow"><span>更新方式</span><b>syncer fetch</b></div>
+          <div class="lockrow"><span>工作树</span><b>demand/.gitstore + worktrees</b></div>
+          <div class="note">git 对象 444 只读、硬链接共享；需求目录可重建、不搬运。</div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h3>环境集成矩阵</h3>
+        <p class="hint">映射表按「需求 × 版本 × 仓库 × 环境 × 合入 commit」记录；回退按版本选择、以需求为聚合视图</p>
+        <table>
+          <tr><th>需求 / 版本</th><th>dev / develop / main</th><th>test</th><th>prod / master</th><th>操作</th></tr>
+          <tr><td><b>DEM-1042</b> v2</td><td><span class="pill p-green">已合入 · MR!284</span></td><td><span class="pill p-green">已合入 · MR!291</span></td><td><span class="pill p-gray">未合入</span></td><td><button class="btn sec sm" onclick="toast('已创建 MR：DEM-1042 v2 → prod/master，等待人工审批')">发起 MR</button></td></tr>
+          <tr><td><b>DEM-1036</b> v1</td><td><span class="pill p-green">已合入 · MR!279</span></td><td><span class="pill p-amber">审批中 · MR!290</span></td><td><span class="pill p-gray">未合入</span></td><td><button class="btn ghost sm" onclick="toast('MR 审批中，普通开发无 push 权限')">查看</button></td></tr>
+          <tr><td><b>DEM-1030</b> v3</td><td><span class="pill p-green">已合入</span></td><td><span class="pill p-green">已合入</span></td><td><span class="pill p-green">已合入 · MR!265</span></td><td><button class="btn ghost sm" onclick="toast('已按版本生成 revert MR 组：prod/master、test（多仓库聚合）')">一键回退</button></td></tr>
+        </table>
+        <div class="note">回退不是平台直推：按映射表生成一组 revert MR，由有权限的人审批合入；多仓库一组 MR 允许部分成功但必须聚合告警。</div>
+      </div>
+    </section>
+
+    <section class="view" id="v-models">
+      <div class="vhead"><h1>模型与能力配置</h1><p>平台级 / 项目级 / 个人级三层作用域 · 安全基线不参与覆盖</p></div>
+      <div class="scope" id="scopeTabs">
+        <button class="on" data-scope="platform">平台级</button>
+        <button data-scope="project">项目级</button>
+        <button data-scope="personal">个人级</button>
+      </div>
+      <div class="grid g21">
+        <div class="card" id="scopePanel"></div>
+        <div class="card">
+          <h3>能力模板（agent preset 白名单）</h3>
+          <p class="hint">需求导入 / 编辑时设定，后续可调整；只影响之后新建的会话</p>
+          <table>
+            <tr><th>模板</th><th>工具 / 技能 / MCP 子集</th><th>典型需求</th></tr>
+            <tr><td>纯设计</td><td>read · grep · 文档技能 · 无写工具</td><td>DEM-1043</td></tr>
+            <tr><td>纯开发</td><td>read · edit · bash · 代码技能</td><td>DEM-1042</td></tr>
+            <tr><td>纯测试</td><td>read · test 技能 · 只读 MCP</td><td>DEM-1039</td></tr>
+            <tr><td>全量</td><td>白名单内全部</td><td>DEM-1036</td></tr>
+          </table>
+          <div class="danger-note" style="margin-top:12px">平台白名单之外的插件、技能、MCP 一律禁止。DSH 自带 worktree 工具已禁用，需求工作树由平台编排层创建。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="v-runtime">
+      <div class="vhead"><h1>目录与运行空间</h1><p>运行时数据与业务数据分离 · 代码仓库 rdws/ 与运行时 .rdws/ 严格区分</p></div>
+      <div class="grid g21">
+        <div class="card">
+          <h3>.rdws 结构</h3>
+          <div class="tree"><b>.rdws/</b>                       运行时数据，不进代码仓库
+├── <b>config/</b>                 可版本化配置（不含密钥）
+│   ├── platform.yaml          模型网关 / SSO / 配额 / 审计
+│   ├── policies/              沙箱 / 命令 / 工具策略
+│   ├── profiles/              DSH profile 模板与 patch 渲染输入
+│   └── projects/project-A.yaml
+├── <b>projects/</b>              项目即租户（原名 workspaces 已改）
+│   └── project-A/
+│       ├── <b>sources/</b>        bare mirror · 唯一只读入口
+│       │   ├── auth-service.git
+│       │   └── gateway.git
+│       └── <b>demands/</b>
+│           └── DEM-1042/       ← 1 个 DSH workspace
+│               ├── demand.yaml / AGENTS.md / context/
+│               ├── .gitstore/  需求私有 bare（硬链接）
+│               ├── worktrees/  AI 唯一可写代码区
+│               └── artifacts/  设计 / 测试 / 部署产物
+├── <b>runtime/dsh/p-A/</b>       = 该实例 DSH_HOME
+│   ├── profiles/rdws/cordis.patch.yml
+│   ├── .credentials.yaml       权限 600
+│   ├── sessions/               append-only JSONL（权威）
+│   └── storage/                workspace 注册表（SQLite）
+└── <b>state/</b>                 索引快照与导出（主数据在 PG）</div>
+        </div>
+        <div class="card">
+          <h3>实例与隔离档位</h3>
+          <div class="lockrow"><span>分片粒度</span><b>项目级实例</b></div>
+          <div class="lockrow"><span>会话归属</span><b>cwd = demand 目录</b></div>
+          <div class="lockrow"><span>单写者</span><b>同一 session 一个写句柄</b></div>
+          <div class="lockrow"><span>隔离档位</span><span class="pill p-amber">平台层隔离（开发档）</span></div>
+          <div class="lockrow"><span>Docker 强隔离档</span><span class="pill p-gray">可选增强</span></div>
+          <div class="warn" style="margin-top:12px"><b>已登记残余风险（C1 不追认）</b><br>用户未追认「生产必须强制 Docker 强隔离」。无 Docker 档仅作为开发与功能验证档；面向真实项目组或生产数据时，隔离强度由部署方自行评估并承担风险，PoC 不覆盖生产档验收。</div>
+          <div class="row"><button class="btn sec sm" onclick="toast('rdwsctl doctor --repair-worktrees：已按映射表校验并重建工作树')">运行 doctor</button><button class="btn ghost sm" onclick="go('overview')">返回总览</button></div>
+        </div>
+      </div>
+      <div class="callout">平台库 PostgreSQL 单机（本地服务进程）；SQLite 仅用于每个 DSH_HOME 内部的 storage-sqlite 与 session-query-sqlite。外部系统（统一认证、审计、GitLab、代码平台）统一走 HTTP 对接。</div>
+    </section>
+
+    <section class="view" id="v-admin">
+      <div class="vhead"><h1>角色与权限</h1><p>三类平台角色 + 四类阶段角色 · 一人多身份 · 一账号多项目</p></div>
+      <div class="grid g2">
+        <div class="card">
+          <h3>角色能力矩阵</h3>
+          <table>
+            <tr><th>角色</th><th>需求</th><th>工作区</th><th>发布</th><th>平台配置</th></tr>
+            <tr><td>平台管理员</td><td>全部</td><td>全部</td><td>全部</td><td>可编辑</td></tr>
+            <tr><td>项目管理员</td><td>导入 / 指派</td><td>查看</td><td>MR / 回退</td><td>项目级</td></tr>
+            <tr><td>需求人员</td><td>编辑文档</td><td>只读会话</td><td>—</td><td>—</td></tr>
+            <tr><td>开发人员</td><td>查看</td><td>写会话</td><td>同步主线</td><td>个人级模型</td></tr>
+            <tr><td>测试人员</td><td>查看</td><td>只读 / 测试会话</td><td>查看</td><td>个人级模型</td></tr>
+            <tr><td>部署人员</td><td>查看</td><td>—</td><td>环境合入 / 回退</td><td>—</td></tr>
+          </table>
+          <div class="note">切换顶栏「当前身份」可以看到菜单与按钮随权限变化；DSH 内部仍是单一 owner，所有判断由平台 BFF 完成。</div>
+        </div>
+        <div class="card">
+          <h3>一人多身份 / 一账号多项目</h3>
+          <p class="hint">示例账号：张伟</p>
+          <div class="lockrow"><span>project-A · 统一认证平台</span><span class="pill p-blue">开发人员</span></div>
+          <div class="lockrow"><span>project-B · 计费中台</span><span class="pill p-green">测试人员</span></div>
+          <div class="lockrow"><span>project-B · 计费中台</span><span class="pill p-amber">部署人员</span></div>
+          <div class="lockrow"><span>全局</span><span class="pill p-gray">非平台管理员</span></div>
+          <div class="callout" style="margin-top:12px">账号身份是平台级，项目是授权与数据隔离域；不在目录里建 user 目录。角色、分配、状态机与批量导入属平台侧自建能力，DSH 不感知。</div>
+          <div class="row"><button class="btn sec sm" onclick="toast('已打开成员与角色分配（演示占位）')">分配角色</button><button class="btn ghost sm" onclick="go('demands')">查看需求工作台</button></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="foot-note">RDWS 整体 Demo 探索稿 · 2026-11-15 · 全部为假数据，不连接任何后端 / DSH 实例 / 模型服务。页面与字段非契约、可推翻；以已确认决策台账为准。技术基线：DSH 0.2.2-rc.3（锁定版本）。</div>
+  </main>
+</div>
+
+<div class="modal" id="modal">
+  <div class="box">
+    <h3 id="mTitle">批量导入需求</h3>
+    <div class="sub" id="mSub">支持 CSV / Excel；导入后按需求生成 workspace 与能力模板</div>
+    <label>选择文件</label><input value="demands-2026Q4.csv" readonly>
+    <label>默认能力模板</label><select><option>纯开发</option><option>纯设计</option><option>纯测试</option><option>全量（平台白名单内）</option></select>
+    <label>基线分支</label><select><option>develop（推荐）</option><option>main</option></select>
+    <label>指派规则</label><input value="按需求标签自动匹配开发与测试人员" >
+    <div class="row" style="margin-top:16px;justify-content:flex-end">
+      <button class="btn ghost" onclick="closeModal()">取消</button>
+      <button class="btn" onclick="closeModal();toast('已导入 12 条需求：生成 workspace、冻结 baseCommit、创建 rdws/* 分支')">开始导入</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  var roles = {
+    admin:{name:'平台',views:['overview','demands','workspace','trace','release','models','runtime','admin'],edit:true},
+    pm:{name:'项管',views:['overview','demands','workspace','trace','release','models','runtime'],edit:true},
+    req:{name:'需求',views:['overview','demands','workspace','trace'],edit:false},
+    dev:{name:'张',views:['overview','demands','workspace','trace','release','models','runtime'],edit:false},
+    qa:{name:'李',views:['overview','demands','workspace','trace','release'],edit:false},
+    ops:{name:'陈',views:['overview','demands','trace','release','runtime'],edit:false}
+  };
+  var sessions = [
+    {id:'S-1',t:'需求拆解与设计',m:'已归档 · 只读 · 12 轮',state:'已归档',mode:'只读',msgs:[
+      {w:'张伟',k:'user',b:'拆解 DEM-1042 的改造范围，列出受影响的接口与测试点。'},
+      {w:'AI · auth-code-v2',k:'ai',b:'已梳理 3 个接口与 2 处 token 兼容逻辑，输出设计说明到 artifacts/design/。'}]},
+    {id:'S-2',t:'接口改造实现',m:'运行中 · 写会话 · 8 轮',state:'运行中',mode:'写会话',msgs:[
+      {w:'张伟',k:'user',b:'改造登录回调，兼容旧 token，并补上单元测试。'},
+      {w:'AI · auth-code-v2',k:'ai',b:'我会先读取现有实现，再给出改造方案。'},
+      {w:'tool',k:'tool',b:'read  worktrees/auth-service/src/callback.ts'},
+      {w:'AI · auth-code-v2',k:'ai',b:'方案：在校验链路增加旧 token 兼容分支，保持新 token 签发不变。影响 2 个文件、需补 4 个用例。'},
+      {w:'tool',k:'tool',b:'edit  worktrees/auth-service/src/callback.ts\ntool  bash  npm test -- --filter=auth'},
+      {w:'平台 · 业务 HITL',k:'hitl',b:'关卡：设计确认 — 仅 DEM-1042 授权人员可处理（张伟 · 开发）。超时按拒绝处理。'},
+      {w:'AI · auth-code-v2',k:'ai',b:'测试通过 4/4。改动已提交到需求分支 rdws/DEM-1042，可在「代码与发布」发起 MR。'}]},
+    {id:'S-3',t:'单元测试补全',m:'已完成 · 只读 · 5 轮',state:'已完成',mode:'只读',msgs:[
+      {w:'李娜',k:'user',b:'补充旧 token 过期与刷新场景的用例。'},
+      {w:'AI · auth-code-v2',k:'ai',b:'已补 4 个用例，覆盖过期、刷新、并发与回退。'}]},
+    {id:'S-4',t:'代码评审问题修复',m:'已完成 · 只读 · 3 轮',state:'已完成',mode:'只读',msgs:[
+      {w:'AI · auth-code-v2',k:'ai',b:'按 MR!284 评审意见修正命名与异常分支，已同步到需求分支。'}]},
+    {id:'S-5',t:'差异分析（只读）',m:'运行中 · 只读 · 2 轮',state:'运行中',mode:'只读',msgs:[
+      {w:'李娜',k:'user',b:'对比 DEM-1042 v1 与 v2 的差异，列出需回归的接口。'},
+      {w:'AI · auth-code-v2',k:'ai',b:'差异集中在 callback.ts 与 token-guard.ts，建议回归登录、刷新、登出三条链路。'}]},
+    {id:'S-6',t:'部署清单确认（HITL）',m:'待处理 · 业务关卡',state:'待处理',mode:'业务关卡',msgs:[
+      {w:'平台 · 业务 HITL',k:'hitl',b:'关卡：部署批准 — 仅部署人员可处理。批准后生成 prod/master 的 MR。'}]}
+  ];
+  var scopeData = {
+    platform:{t:'平台级配置',h:'供应商注册表、协议、端点、凭据与安全基线；项目级 / 个人级不可覆盖锁定项',rows:[
+      ['内网模型网关 A','OpenAI Chat Completions','只写凭据 · 已启用'],
+      ['自定义网关 B','OpenAI Responses','只写凭据 · 已启用'],
+      ['企业网关 C','Anthropic Messages','只写凭据 · 已启用'],
+      ['自定义网关 D','Gemini API','只写凭据 · 已启用']],
+      locks:[['会话日志上传（dsh_session_log）','关闭 · 平台级锁定'],['OTel 会话遥测','DISABLED · 平台级锁定'],['第三方插件市场','禁用 · 白名单'],['Claude Code payload','已剔除']]},
+    project:{t:'项目级配置',h:'从平台白名单挑本项目可用子集，并配默认模型与配额',rows:[
+      ['可用供应商','内网网关 A / 自定义网关 B','已选 2 / 4'],
+      ['默认模型','auth-code-v2','可编辑'],
+      ['单需求会话配额','20','可编辑'],
+      ['每日 token 预算','120 万','可编辑']],
+      locks:[['继承规则','平台白名单 → 项目子集'],['平台下线供应商','标记冲突并告警']]},
+    personal:{t:'个人级配置',h:'只在允许集合内选本次会话用哪个模型，走会话级注入',rows:[
+      ['当前会话模型','auth-code-v2','会话级'],
+      ['可选模型','auth-code-v2 / auth-lite / qa-checker','来自项目子集'],
+      ['推理强度','默认','会话级'],
+      ['自带供应商 / 自有 Key','不允许','平台策略']],
+      locks:[['凭据','不下放到个人'],['变更生效范围','只影响之后新建的会话']]}
+  };
+  var cur = 0, curView = 'overview', curScope = 'platform';
+
+  function $(id){return document.getElementById(id)}
+  function toast(msg){var t=$('toast');t.textContent=msg;t.classList.add('on');clearTimeout(t._tm);t._tm=setTimeout(function(){t.classList.remove('on')},3000)}
+  window.toast=toast;
+  window.go=function(v){
+    var r=roles[$('roleSel').value];
+    if(r.views.indexOf(v)<0){toast('当前身份无权访问该页面');return}
+    curView=v;
+    var ns=document.querySelectorAll('.nav');
+    for(var i=0;i<ns.length;i++){ns[i].classList.toggle('on',ns[i].getAttribute('data-view')===v)}
+    var vs=document.querySelectorAll('.view');
+    for(var j=0;j<vs.length;j++){vs[j].classList.toggle('on',vs[j].id==='v-'+v)}
+    window.scrollTo(0,0);
+  };
+  window.openModal=function(kind){
+    if(!roles[$('roleSel').value].edit){toast('当前身份不能导入或新建需求');return}
+    $('mTitle').textContent=kind==='new'?'新增单个需求':'批量导入需求';
+    $('mSub').textContent=kind==='new'?'填写需求信息并选择能力模板，创建后生成 workspace':'支持 CSV / Excel；导入后按需求生成 workspace 与能力模板';
+    $('modal').classList.add('on');
+  };
+  window.closeModal=function(){$('modal').classList.remove('on')};
+  window.sendMsg=function(){
+    var i=$('chatInput');if(!i.value.trim())return;
+    var s=sessions[cur];
+    if(s.mode!=='写会话'){toast('该会话为 '+s.mode+'，不可写入');i.value='';return}
+    s.msgs.push({w:'张伟',k:'user',b:i.value.trim()});
+    s.msgs.push({w:'AI · auth-code-v2',k:'ai',b:'已接收任务，将在当前需求工作树内继续（演示响应）。'});
+    i.value='';renderChat();
+  };
+
+  function renderSessions(){
+    var h='';
+    for(var i=0;i<sessions.length;i++){
+      var s=sessions[i];
+      h+='<div class="sitem'+(i===cur?' on':'')+'" onclick="pickSess('+i+')"><div class="t">'+s.id+' · '+s.t+'</div><div class="m">'+s.m+'</div></div>';
+    }
+    $('sessList').innerHTML=h;
+  }
+  window.pickSess=function(i){cur=i;renderSessions();renderChat()};
+  function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+  function renderChat(){
+    var s=sessions[cur];
+    $('chatTitle').textContent=s.id+' · '+s.t;
+    $('chatState').textContent=s.state;
+    $('chatState').className='pill '+(s.state==='运行中'?'p-blue':s.state==='待处理'?'p-amber':'p-gray');
+    $('chatMode').textContent=s.mode;
+    $('chatMode').className='pill '+(s.mode==='写会话'?'p-green':'p-gray');
+    var h='';
+    for(var i=0;i<s.msgs.length;i++){
+      var m=s.msgs[i];
+      if(m.k==='tool'){h+='<div class="tool">'+esc(m.b).replace(/\n/g,'<br>')+'</div>';continue}
+      if(m.k==='hitl'){h+='<div class="hitl"><b>'+esc(m.w)+'</b><br>'+esc(m.b)+'</div>';continue}
+      h+='<div class="msg '+(m.k==='ai'?'ai':'')+'"><div class="who">'+esc(m.w)+'</div><div class="bub">'+esc(m.b)+'</div></div>';
+    }
+    $('chatBody').innerHTML=h;
+    $('chatBody').scrollTop=$('chatBody').scrollHeight;
+  }
+  function renderScope(){
+    var d=scopeData[curScope],h='<h3>'+d.t+'</h3><p class="hint">'+d.h+'</p>';
+    h+='<table><tr><th>项</th><th>值</th><th>状态</th></tr>';
+    for(var i=0;i<d.rows.length;i++){h+='<tr><td>'+d.rows[i][0]+'</td><td>'+d.rows[i][1]+'</td><td><span class="pill p-blue">'+d.rows[i][2]+'</span></td></tr>'}
+    h+='</table><div style="margin-top:14px">';
+    for(var j=0;j<d.locks.length;j++){h+='<div class="lockrow"><span>'+d.locks[j][0]+'</span><span class="pill '+(curScope==='platform'?'p-red':'p-gray')+'">'+d.locks[j][1]+'</span></div>'}
+    h+='</div>';
+    if(curScope==='platform'){h+='<div class="danger-note" style="margin-top:12px">关闭会话日志上传只是移除附加字段：模型请求本身仍携带源码片段与文件内容。若供应商在公网，等同源码出企业边界 —— 此为已登记的残余风险，部署方须在清单显式确认。</div>'}
+    $('scopePanel').innerHTML=h;
+  }
+  function applyRole(){
+    var r=roles[$('roleSel').value];
+    $('avatar').textContent=r.name;
+    var ns=document.querySelectorAll('.nav');
+    for(var i=0;i<ns.length;i++){
+      var v=ns[i].getAttribute('data-view'),ok=r.views.indexOf(v)>=0;
+      ns[i].classList.toggle('locked',!ok);
+      ns[i].disabled=!ok;
+      var lk=ns[i].querySelector('.lock');
+      if(!ok){if(!lk){lk=document.createElement('span');lk.className='lock';ns[i].appendChild(lk)}lk.textContent='无权'}
+      else if(lk){lk.remove()}
+    }
+    $('btnImport').disabled=!r.edit;$('btnNew').disabled=!r.edit;
+    $('btnNewSess').disabled=r.views.indexOf('workspace')<0;
+    $('demandHint').textContent=r.edit?'当前身份可导入 / 新建 / 指派需求':'当前身份仅可查看与进入自己被授权的需求';
+    if(r.views.indexOf(curView)<0){window.go('overview')}
+  }
+  var navs=document.querySelectorAll('.nav');
+  for(var a=0;a<navs.length;a++){navs[a].addEventListener('click',function(){window.go(this.getAttribute('data-view'))})}
+  var tabs=document.querySelectorAll('#scopeTabs button');
+  for(var b=0;b<tabs.length;b++){tabs[b].addEventListener('click',function(){
+    curScope=this.getAttribute('data-scope');
+    for(var k=0;k<tabs.length;k++){tabs[k].classList.toggle('on',tabs[k]===this)}
+    renderScope();
+  })}
+  $('roleSel').addEventListener('change',applyRole);
+  $('projectSel').addEventListener('change',function(){toast('已切换到 '+$('projectSel').options[$('projectSel').selectedIndex].text+'（一账号多项目）')});
+  $('chatInput').addEventListener('keydown',function(e){if(e.key==='Enter')window.sendMsg()});
+  $('modal').addEventListener('click',function(e){if(e.target===this)window.closeModal()});
+  renderSessions();renderChat();renderScope();applyRole();
+})();
+</script>
+</body>
+</html>

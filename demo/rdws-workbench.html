@@ -42,6 +42,7 @@ html[data-theme="dark"]{
   --shadow-2:0 12px 32px rgba(0,0,0,.42);
 }
 *,*::before,*::after{box-sizing:border-box}
+.sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 html,body{height:100%}
 body{margin:0;background:var(--paper);color:var(--ink-900);font-family:var(--f-ui);font-size:13px;line-height:1.6;-webkit-font-smoothing:antialiased;overflow:hidden}
 button,input,textarea,select{font:inherit;color:inherit}
@@ -291,7 +292,7 @@ h3.sub:first-child{margin-top:0}
 .hitl.done .hitl-hd strong,.hitl.done .hitl-hd .ico{color:var(--ok)}
 .hitl.done .hitl-meta{color:var(--ok)}
 .msg-actions{display:flex;align-items:center;gap:3px;margin-top:14px;padding-top:8px;border-top:1px solid var(--line-2)}
-.msg-actions .iconbtn{width:25px;height:25px}
+.msg-actions .iconbtn{width:var(--control-h);height:var(--control-h)}
 .msg-actions .spacer{flex:1}
 .msg-actions .stat{font-size:11px;color:var(--ink-400);padding:0 6px}
 
@@ -591,6 +592,7 @@ html[data-theme="dark"] .toast{background:var(--brand-500);color:var(--on-brand)
 .cell-btn:hover:not(:disabled){border-color:var(--brand-300);background:var(--brand-50);color:var(--brand-700)}
 .cell-btn .ico{width:12px;height:12px;color:var(--ink-400)}
 .switch{position:relative;width:34px;height:19px;border-radius:10px;background:var(--line-strong);flex:none;transition:background .18s;display:inline-block;vertical-align:middle}
+.switch::before{content:"";position:absolute;left:50%;top:50%;width:var(--control-h);height:var(--control-h);transform:translate(-50%,-50%);border-radius:8px}
 .switch::after{content:"";position:absolute;left:2px;top:2px;width:15px;height:15px;border-radius:50%;background:#fff;box-shadow:var(--shadow-1);transition:transform .18s var(--ease)}
 .switch.on{background:var(--brand-500)}
 .switch.on::after{transform:translateX(15px)}
@@ -827,7 +829,7 @@ html[data-theme="dark"] .toast{background:var(--brand-500);color:var(--on-brand)
 /* v15：控件高度令牌 —— 同一行内所有可交互控件严格等高 */
 :root{--control-h:30px}
 .btn,.btn.sm,.btn.ghost,.btn.primary{height:var(--control-h)}
-.segment{height:var(--control-h)}
+.segment{height:var(--control-h);border:0;box-shadow:inset 0 0 0 1px var(--line-strong)}
 .segment button{height:100%}
 .ctrl,.ctrl.square{height:var(--control-h)}
 .ctrl.square{width:var(--control-h)}
@@ -846,6 +848,9 @@ html[data-theme="dark"] .toast{background:var(--brand-500);color:var(--on-brand)
   .segment button{height:100%}
   /* 按可交互性分类：带 data-action 的徽标形态控件也是交互控件，纯展示徽标保持紧凑 */
   .pill[data-action],.chip[data-action]{min-height:var(--control-h)}
+  /* Q4 判据覆盖缝隙收口：其余可点击元素的小屏触控目标 */
+  .ov-item,.cfg-item,.matrix .yes,.matrix .no{min-height:var(--control-h)}
+  [data-action=dir-node]{min-height:var(--control-h);display:flex;align-items:center}
 }
 
 /* v16：需求档案主线流程轴（显眼且克制：一主色 + 中性灰） */
@@ -896,6 +901,7 @@ html[data-theme="dark"] .toast{background:var(--brand-500);color:var(--on-brand)
 </style>
 </head>
 <body>
+<h1 class="sr-only">RDWS 产研工作台</h1>
 <svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
 <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="12" r="2"/><path d="M6 7v10M8 12h8"/></symbol>
 <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
@@ -957,7 +963,7 @@ html[data-theme="dark"] .toast{background:var(--brand-500);color:var(--on-brand)
 <div class="app chat-view" id="app">
 
   <!-- ============ 左栏 ============ -->
-  <aside class="rail" id="rail" aria-label="主导航">
+  <nav class="rail" id="rail" aria-label="主导航">
     <div class="rail-topbar">
       <button class="brand-mark" id="brandMark" data-action="expand-rail" aria-label="展开侧栏" data-tip="rdws · 产研一体化工作区" data-tip-sub="侧栏折叠后，此图标会变为展开入口" data-tip-scope="探索稿 · 假数据">
         <svg class="ico logo" aria-hidden="true"><use href="#i-branch"/></svg>
@@ -991,7 +997,7 @@ html[data-theme="dark"] .toast{background:var(--brand-500);color:var(--on-brand)
         <svg class="ico sm" aria-hidden="true"><use href="#i-down"/></svg>
       </button>
     </div>
-  </aside>
+  </nav>
 
   <!-- ============ 主区 ============ -->
   <main class="main">
@@ -1602,9 +1608,9 @@ function renderStats(){
     <div class="statline"><span class="k">哈希锚点</span><span class="v">${DB.runtime.verify?'已校验':'未运行'}</span><span class="note">PG append-only 表</span></div></div>
   </div>
   <h3 class="sub">项目 / 平台级信息在别处</h3>
-  <div class="card"><div class="statline"><span class="k">项目配额与模型</span><span class="v">${DB.scope.quota}%</span><span class="note"><button class="btn sm ghost" style="height:24px" data-action="go" data-view="models">模型与供应商 ${ic('chev')}</button></span></div>
-   <div class="statline"><span class="k">实例与隔离档位</span><span class="v">${DB.runtime.isolation==='docker'?'Docker 强隔离':'本地基础档'}</span><span class="note"><button class="btn sm ghost" style="height:24px" data-action="go" data-view="space">运行空间 ${ic('chev')}</button></span></div>
-   <div class="statline"><span class="k">R-A / R-B 残余风险</span><span class="v">平台级</span><span class="note"><button class="btn sm ghost" style="height:24px" data-action="go" data-view="platform">风险登记 ${ic('chev')}</button></span></div></div>
+  <div class="card"><div class="statline"><span class="k">项目配额与模型</span><span class="v">${DB.scope.quota}%</span><span class="note"><button class="btn sm ghost" data-action="go" data-view="models">模型与供应商 ${ic('chev')}</button></span></div>
+   <div class="statline"><span class="k">实例与隔离档位</span><span class="v">${DB.runtime.isolation==='docker'?'Docker 强隔离':'本地基础档'}</span><span class="note"><button class="btn sm ghost" data-action="go" data-view="space">运行空间 ${ic('chev')}</button></span></div>
+   <div class="statline"><span class="k">R-A / R-B 残余风险</span><span class="v">平台级</span><span class="note"><button class="btn sm ghost" data-action="go" data-view="platform">风险登记 ${ic('chev')}</button></span></div></div>
   ${activitySection('统计操作记录')}`;
 }
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RDWS · 设计基线与交接规格 v1</title>
+<title>RDWS · 设计基线与交接规格 v2</title>
 <style>
   :root{--brand:#0E7490;--brand-dark:#0B596E;--brand-soft:#E6F3F6;--brand-line:#B9DEE6;
     --ink:#1C2530;--ink-2:#43505E;--ink-3:#6B7885;--line:#E2E7EB;--bg:#F5F7F8;--paper:#FFF;
@@ -51,14 +51,13 @@
 <body>
 <header><div class="wrap">
   <div class="kicker">RDWS · DESIGN HANDOFF</div>
-  <h1>设计基线与交接规格 v1</h1>
+  <h1>设计基线与交接规格 v2</h1>
   <p class="sub">把已确认的探索稿固化成可交接基线 · 所有数值来自当前代码或真实浏览器实测，不接受自述式规范</p>
   <div class="meta">
-    <span class="tag">日期：2026-11-16</span>
+    <span class="tag">日期：2026-11-16 · 实测数据刷新于 2026-11-17</span>
     <span class="tag">基线对象：demo/rdws-workbench.html</span>
     <span class="tag">上游事实源：决策台账 v3</span>
     <span class="tag">证据：Chrome CDP 实测</span>
-    <span class="tag">仓库：Mayne-Zeng/rdws（GitHub）</span>
   </div>
 </div></header>
 
@@ -66,7 +65,7 @@
   <div class="toc">
     <a href="#s0">0. 这份文件怎么用</a><a href="#s1">1. 一页式设计基线</a>
     <a href="#s2">2. 可访问性实测报告</a><a href="#s3">3. 16 视图一致性走查</a>
-    <a href="#s4">4. 发现项与优先级清单</a><a href="#s5">5. 交接边界与验证</a>
+    <a href="#s4">4. 已收口项与验证</a><a href="#s5">5. 交接边界与验证</a>
     <a href="#s6">6. 文件与证据索引</a>
   </div>
 
@@ -213,29 +212,29 @@
    <tr><td>reduced-motion</td><td><span class="pill p-ok">生效</span></td><td>模拟 <code>prefers-reduced-motion: reduce</code> 后 <code>animation-name:none</code>、<code>duration:0s</code></td></tr>
    <tr><td>ARIA / 语义</td><td class="mono">tab 7 · tabpanel 16 · aria-label 74</td><td>7 个 tab 与 aria-selected 一一对应；16 个 tabpanel；<code>main</code> 1 个</td></tr>
    <tr><td>图标 / 图片语义</td><td><span class="pill p-ok">通过</span></td><td>内联 SVG 全部 <code>aria-hidden</code>（未标注数 0）；无缺 alt 的 img（0）</td></tr>
-   <tr><td>页面级标题 / 导航地标</td><td><span class="pill p-amber">Minor</span></td><td><code>h1</code> 0 个、<code>nav</code> 0 个；视图以 <code>h2</code> 起头、侧栏为 div。见 §4 P2</td></tr>
+   <tr><td>页面级标题 / 导航地标</td><td><span class="pill p-ok">通过</span></td><td><code>h1</code> 1 个（视觉隐藏页级标题）、<code>nav</code> 1 个（侧栏主导航）；视图 <code>h2</code> 在其下形成正确层级</td></tr>
   </table>
 
   <h3>2.4 触控目标实测（Q4 判据：交互控件 ≥40px，纯展示徽标不适用）</h3>
   <table><tr><th style="width:230px">检查项</th><th style="width:170px">实测</th><th>判定</th></tr>
-   <tr><td>桌面所有视图控件高度</td><td class="mono">24 / 25 / 30 px</td><td>30px 为主档；24 / 25px 为残留例外，见 §4</td></tr>
+   <tr><td>桌面所有视图控件高度</td><td class="mono">19 / 30 px</td><td>30px 为控件主档；19px 均为有透明热区的豁免视觉尺寸（switch / stage-filter pill / chg-check）</td></tr>
    <tr><td>桌面表格控件 .cell-btn</td><td class="mono">30px</td><td><span class="pill p-ok">符合</span> Q4 桌面跟随 30px</td></tr>
    <tr><td>桌面勾选框热区</td><td class="mono">30px</td><td><span class="pill p-ok">符合</span> 16px 视觉 + <code>::after</code> 热区</td></tr>
    <tr><td>390px 阶段筛选 pill / .cell-btn</td><td class="mono">40px / 40px</td><td><span class="pill p-ok">符合</span></td></tr>
    <tr><td>390px 勾选框热区</td><td class="mono">16 px 视觉 / 40px 热区</td><td><span class="pill p-ok">符合</span> 28px 首列未被撑宽</td></tr>
-   <tr><td>390px 全量按钮扫描</td><td class="mono">47 个 · 4 个 &lt;40px</td><td>4 个为 segment 内部 button（38px，外框 40px），见 §4 P2</td></tr>
+   <tr><td>390px 全量按钮扫描</td><td class="mono">47 个 · 0 个 &lt;40px</td><td><span class="pill p-ok">全部达标</span> P1 六类与 segment 内部 button 均已收口</td></tr>
   </table>
-  <div class="warn"><strong>判据与落地范围的缝隙（§4 P1）</strong>：Q4 共同理解里明确点名的是「勾选框、表格小按钮、阶段筛选标签」三类；判据本身写的是「交互控件 ≥40px」。实测发现 <code>.switch</code>（19px）、消息操作栏 <code>.iconbtn</code>（25px）、可点击 <code>.ov-item</code>（37–38px）、能力矩阵按钮（35px）、<code>.cfg-item</code>（39px）、目录树 <code>dir-node</code>（23px）在小屏仍未达标。它们是交互控件，按判据应覆盖；本轮如实列出，不擅自扩大改动范围。</div>
+  <div class="ok"><strong>判据覆盖缝隙已收口。</strong>Q4 点名的三类原本已达标；上一版实测发现的 <code>.switch</code>、消息栏 <code>.iconbtn</code>、<code>.ov-item</code>、能力矩阵按钮、<code>.cfg-item</code>、<code>dir-node</code> 六类，已按 §4 清单全部修复并复测，390px 下 47 个可点击元素 0 个低于 40px。</div>
 
   <h2 id="s3"><span class="num">3</span>16 视图一致性走查</h2>
   <p>逐视图切 hash 渲染，检查内容宽度、起始线、栅格错行、页面级横向溢出、控件高度分布与 tab 结构。配置域隐藏 tab 栏（<code>tabs=0</code>）是预期设计，不计异常。</p>
   <table><tr><th style="width:100px">视图</th><th style="width:80px">内容宽</th><th style="width:80px">起始线</th><th style="width:90px">栅格错行</th><th style="width:90px">横向溢出</th><th style="width:130px">控件高度分布</th><th>结论</th></tr>
   <tr><td class="mono">overview</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
-<tr><td class="mono">chat</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">25,30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">chat</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
 <tr><td class="mono">trace</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
 <tr><td class="mono">context</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
 <tr><td class="mono">fleet</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
-<tr><td class="mono">stats</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">24,30px</td><td><span class="pill p-ok">一致</span></td></tr>
+<tr><td class="mono">stats</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
 <tr><td class="mono">changes</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
 <tr><td class="mono">demands</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
 <tr><td class="mono">members</td><td class="num">960</td><td class="num">364</td><td class="num">0</td><td>无</td><td class="mono">30px</td><td><span class="pill p-ok">一致</span></td></tr>
@@ -254,47 +253,47 @@
    <tr><td>页内一等面板（新建需求）</td><td class="mono">—</td><td class="mono">宽 960px · 起始 364px · panel-mode=true</td><td><span class="pill p-ok">同宽同层</span> 与视图共用 960px 栅格</td></tr>
   </table>
 
-  <h2 id="s4"><span class="num">4</span>发现项与优先级清单</h2>
-  <div class="warn">本轮是「基线收口 + 实测」，<strong>没有修改 Demo</strong>。以下发现按优先级给出精确位置与修复动作，供你决定是否要下一轮一次性收掉；任何一条落地后需重跑 §2–§3 的实测，本文件数据即失效。</div>
+  <h2 id="s4"><span class="num">4</span>已收口项与验证</h2>
+  <div class="ok"><strong>上一版 §4 的 P1 / P2 已全部修复并重测。</strong>P1 六类触控目标、P2 语义与内联样式均按清单落地；重跑实测后，390px 下 47 个可点击元素 <strong>0 个低于 40px</strong>，<code>h1=1 / nav=1</code>，WCAG 对比度、栅格、溢出仍全绿。</div>
 
-  <h3>P1 · Q4「交互控件 ≥40px」判据尚未覆盖到的元素</h3>
-  <table><tr><th style="width:190px">元素（实测高度）</th><th style="width:110px">出现视图数</th><th>性质与建议动作</th></tr>
-   <tr><td class="mono">button.switch（19px）</td><td class="num">供应商 / 隔离档 / 风险登记</td><td>真开关控件，小屏仍 19px。建议在 620px 断点给 <code>.switch</code> 加 40px 透明热区（同 <code>.chg-check</code> 做法），视觉保持 19px。</td></tr>
-   <tr><td class="mono">button.iconbtn（25px）</td><td class="num">5</td><td>消息操作栏的图标按钮被局部规则压到 25px，小屏未跟随 40px。建议清掉局部 height，统一走 <code>--control-h</code>。</td></tr>
-   <tr><td class="mono">div.ov-item（37–38px）</td><td class="num">需求档案最近轨迹 / 环境 MR</td><td>可点击整行，小屏差 2–3px。建议 <code>min-height:40px</code>。</td></tr>
-   <tr><td class="mono">button.yes / .no（35px）</td><td class="num">能力矩阵</td><td>可点击单元格，小屏 35px。建议 <code>min-height:40px</code>。</td></tr>
-   <tr><td class="mono">button.cfg-item（39px）</td><td class="num">能力模板列表</td><td>小屏 39px，差 1px。建议 <code>min-height:40px</code>。</td></tr>
-   <tr><td class="mono">div[dir-node]（23px）</td><td class="num">运行空间目录树</td><td>可点击树节点，小屏 23px。建议小屏 <code>min-height:40px</code> 或改为 button 语义。</td></tr>
+  <h3>P1 · Q4 判据覆盖缝隙（已收口）</h3>
+  <table><tr><th style="width:210px">元素</th><th style="width:270px">修复动作</th><th>实测结果</th></tr>
+   <tr><td class="mono">button.switch（视觉 19px）</td><td><code>::before</code> 透明热区跟随 <code>--control-h</code>，视觉不变</td><td><span class="pill p-ok">达标</span></td></tr>
+   <tr><td class="mono">消息栏 .iconbtn（25px）</td><td>去掉局部高特异性规则，统一走 <code>--control-h</code></td><td><span class="pill p-ok">达标</span> 30 / 40px</td></tr>
+   <tr><td class="mono">.ov-item（37–38px）</td><td>620px 断点 <code>min-height:40px</code></td><td><span class="pill p-ok">达标</span></td></tr>
+   <tr><td class="mono">.yes / .no（35px）</td><td>能力矩阵单元格 <code>min-height:40px</code></td><td><span class="pill p-ok">达标</span></td></tr>
+   <tr><td class="mono">.cfg-item（39px）</td><td>模板列表项 <code>min-height:40px</code></td><td><span class="pill p-ok">达标</span></td></tr>
+   <tr><td class="mono">[dir-node]（23px）</td><td>目录树节点小屏 <code>min-height:40px</code> + flex 居中</td><td><span class="pill p-ok">达标</span></td></tr>
   </table>
-  <p class="src">判定口径：Q4 收窄后的判据是「交互控件 ≥40px，纯展示徽标不适用」。上表元素全部带 <code>data-action</code> 或可点击语义，不属于豁免范围。共同理解里点名的三类已全部达标，这里是判据覆盖面与已落地范围之间的缝隙，不是决策被违反。</p>
+  <p class="src">口径不变：Q4 判据是「交互控件 ≥40px，纯展示徽标不适用」。共同理解点名的三类原本已达标，本轮把判据覆盖面补齐到全部可点击元素。</p>
 
-  <h3>P2 · 语义与细节</h3>
-  <table><tr><th style="width:220px">发现</th><th>证据与建议</th></tr>
-   <tr><td>缺 h1 / nav 地标</td><td>全站 <code>h1=0</code>、<code>nav=0</code>，视图以 <code>h2</code> 起头，侧栏为 div。建议：给每个视图补一个视觉隐藏的 <code>&lt;h1&gt;</code>（或把视图 <code>h2</code> 提升为 <code>h1</code>），侧栏包 <code>&lt;nav aria-label="主导航"&gt;</code>。不阻断演示，影响读屏体验。</td></tr>
-   <tr><td>内联 height:24px</td><td>统计页 3 个跳转按钮带 <code>style="height:24px"</code>，桌面与小屏都压过令牌（实测 24px）。建议删内联样式，走 <code>--control-h</code>。</td></tr>
-   <tr><td>segment 内部 button 38px</td><td>小屏外框 40px、内部 button 实测 38px（上下各 1px 边框）。属结构性 2px 差，实际点击区接近 40px；若要严格达标，给 <code>.segment button</code> 加 <code>min-height:40px</code> 并改用 <code>box-sizing</code> 抵消边框。</td></tr>
-   <tr><td>390px 阶段筛选 pill</td><td>Q4 已接受的视觉代价：提到 40px 后由一行折成两行、密度变重。若要回调须重新打开 Q4 口径，不能静默改。</td></tr>
+  <h3>P2 · 语义与细节（已收口）</h3>
+  <table><tr><th style="width:220px">项</th><th>修复动作与实测</th></tr>
+   <tr><td>缺 h1 / nav 地标</td><td>新增视觉隐藏的页级 <code>&lt;h1&gt;</code>（<code>.sr-only</code>），侧栏 <code>&lt;aside&gt;</code> 改 <code>&lt;nav aria-label="主导航"&gt;</code>；实测 <code>h1=1 / nav=1</code>，视图 <code>h2</code> 在其下形成正确层级。</td></tr>
+   <tr><td>内联 height:24px</td><td>统计页 3 处内联样式删除，统一走 <code>--control-h</code>；控件高度分布从 24 / 25 / 30px 收敛为 19（豁免视觉）/ 30px。</td></tr>
+   <tr><td>segment 内部 button 38px</td><td>外框边框改为 <code>inset box-shadow</code>（不占布局），内容区即 40px；实测 390px 全量 47 个按钮 0 个低于 40px。</td></tr>
+   <tr><td>390px 阶段筛选 pill 折两行</td><td><span class="pill p-gray">保持</span> Q4 已接受的视觉代价，未回调；如需回调须重新打开 Q4 口径。</td></tr>
   </table>
 
   <h3>已接受、非缺陷（避免下一轮被重复报）</h3>
   <ul>
-    <li><code>.chg-check</code> 视觉 16px 是刻意的：用 <code>::after</code> 提供 30 / 40px 透明热区，避免撑宽变更表 28px 首列（Q4 实现分叉自决）。</li>
-    <li>桌面可点击 pill 19px：Q4 判据只约束小屏触控目标，桌面维持紧凑层级；小屏已实测 40px。</li>
-    <li>操作行 pill 已由 <code>:857</code> 纳入令牌、<code>.ts-more</code> 因带 <code>.btn.sm.ghost</code> 已达标、可点击 chip 在 ≤1240px 隐藏 —— 这三项是上一轮专家纠正过的事实，不是漏网。</li>
+    <li><code>.chg-check</code> 视觉 16px 与 <code>.switch</code> 视觉 19px 都刻意保留紧凑外观，热区由 <code>::after</code> / <code>::before</code> 提供 30 / 40px；实测热区达标。</li>
+    <li>桌面可点击 pill 19px、目录树节点桌面 23px：Q4 判据约束的是小屏触控目标；两者小屏均已达标（40px），桌面维持紧凑层级。</li>
+    <li>操作行 pill 已由 <code>:857</code> 纳入令牌、<code>.ts-more</code> 因带 <code>.btn.sm.ghost</code> 已达标、可点击 chip 在 ≤1240px 隐藏 —— 上一轮专家纠正过的事实，不是漏网。</li>
     <li>配置域 <code>tabs=0</code>、工作区 <code>tabs=7</code>：按域隐藏 tab 栏是设计，不是结构缺失。</li>
   </ul>
 
   <h2 id="s5"><span class="num">5</span>交接边界与验证</h2>
   <ul>
     <li><strong>三条硬约束</strong>：① 单一 <code>--content-w:960px</code> 与 <code>--gutter:24px</code>，任何新页面 / 面板不得再引入第二档宽度；② 交互控件走 <code>--control-h</code>（30 / 40px），新增可点击元素必须同步判据；③ 入口跟随作用域，跨级操作回自己作用域的页面。</li>
-    <li><strong>本轮未改动</strong>：<code>demo/rdws-workbench.html</code>、台账 v3 决策正文、R-A / R-B 残余风险口径。§4 的发现项只登记、不落地。</li>
+    <li><strong>改动边界</strong>：本轮只改 <code>demo/rdws-workbench.html</code> 的 P1/P2 相关 CSS / 语义与本文件；台账 v3 决策正文、R-A / R-B 残余风险口径未动。§4 的发现项已按清单全部落地并重测。</li>
     <li><strong>验证方式</strong>：本文件由 <code>/tmp/rdws-baseline-collect.js</code> 与 <code>/tmp/rdws-heights-locate.js</code> 的实测 JSON 生成；文档本身已用真实浏览器打开验证渲染与关键文案。任何 Demo 改动后，重跑这两个脚本并重新生成本文件。</li>
     <li><strong>PoC 交界</strong>：台账 §5.2 的四项验收（cwd 归属、sources 零写入、≥5 会话 resume/fork/replay、<code>rdws/*</code> push + MR 映射闭环）属于工程验证，不在本文件范围；本文件提供的是它们依赖的界面契约与视觉验收口径。</li>
   </ul>
 
   <h2 id="s6"><span class="num">6</span>文件与证据索引</h2>
   <table><tr><th style="width:400px">文件</th><th>用途</th></tr>
-   <tr><td><code>docs/04-design-baseline.html</code></td><td>本文件 · 设计基线与交接规格 v1</td></tr>
+   <tr><td><code>docs/04-design-baseline.html</code></td><td>本文件 · 设计基线与交接规格 v2（P1/P2 收口后重测）</td></tr>
    <tr><td><code>demo/rdws-workbench.html</code></td><td>基线对象（233,293 字节）· 16 视图 / 单文件 / 零外链</td></tr>
    <tr><td><code>docs/00-decision-ledger.html</code></td><td>决策台账 v3 · 唯一事实来源</td></tr>
    <tr><td><code>docs/03-design-crosscheck-report.html</code></td><td>三面交叉检查报告 v2 · Q1–Q4 决策台账与两轮回归</td></tr>
@@ -304,7 +303,7 @@
    <tr><td><code>/tmp/rdws-baseline-shots/</code></td><td>5 张证据截图：light 需求档案 / 变更 / 设计系统 / 390 对话，dark 对话 / 平台设置</td></tr>
   </table>
 
-  <div class="foot">RDWS · 设计基线与交接规格 v1 · 2026-11-16。数值来自当前代码与 Chrome 实测，非自述式规范。原型仍为 D18 探索稿、非契约、可推翻；与台账冲突时改原型，不改台账。</div>
+  <div class="foot">RDWS · 设计基线与交接规格 v2 · 2026-11-17。数值来自当前代码与 Chrome 实测，非自述式规范。原型仍为 D18 探索稿、非契约、可推翻；与台账冲突时改原型，不改台账。</div>
 </div>
 </body>
 </html>

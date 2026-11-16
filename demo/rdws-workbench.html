@@ -521,6 +521,7 @@ html[data-theme="dark"] .toast{background:var(--brand-500);color:var(--on-brand)
 .proj-sq{width:26px;height:26px;border-radius:7px;background:var(--brand-100);color:var(--brand-700);display:grid;place-items:center;font-size:11px;font-weight:700;flex:none}
 .proj-card-nm{display:block;font-size:12.5px;font-weight:680;color:var(--ink-900);line-height:1.3}
 .proj-card-mt{display:block;font-size:11px;color:var(--ink-500);line-height:1.4}
+.proj-card-main .iconbtn{margin-left:auto;flex:none}
 .proj-card-stats{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line-2);background:var(--rail)}
 .proj-card-stat{padding:7px 4px;text-align:center;border-right:1px solid var(--line-2)}
 .proj-card-stat:last-child{border-right:0}
@@ -1282,6 +1283,7 @@ function renderRail(){
   <div class="proj-card-main" title="项目在登录时选定；调整请到系统设置 › 平台设置">
    <span class="proj-sq">${p.short}</span>
    <span style="min-width:0"><span class="proj-card-nm">${esc(p.name)}</span><span class="proj-card-mt">实例 ${p.inst} · ${p.members} 人</span></span>
+   ${isWorkspace()?`<button class="iconbtn" data-action="quick-new-session" data-cap="session" aria-label="在当前需求下新建会话" data-tip="新建会话" data-tip-sub="在当前需求 ${demand().id} 下新建 · 继承 preset「${esc(demand().preset)}」与模型「${esc(session().model)}」" data-tip-scope="需求级 · ${demand().id}">${ic('msg')}</button>`:''}
   </div>
   <div class="proj-card-stats">
    <div class="proj-card-stat" data-action="stat-demand" title="查看需求管理"><b>${list.length}</b><span>需求</span></div>
@@ -1345,8 +1347,7 @@ function renderTabs(){
    <span class="ts-ico">${ic('msg')}</span>
    <button class="ts-name" data-action="session-switch-menu" aria-haspopup="true" aria-label="切换会话" data-tip="${esc(s.name)}" data-tip-sub="${esc(s.model)} · ${s.turns} 轮 · ${esc(s.time)} · 点击切换会话" data-tip-scope="${d.id} · ${d.sessions.length} 个会话"><span class="ts-label">${esc(s.name)}</span>${ic('down','sm')}</button>
    <span class="smode${w?' w':''}" data-tip="${w?'写会话':'只读会话'}" data-tip-sub="${w?'持有需求写锁，可修改工作树':'用于设计 / 评审 / 测试分析'}" data-tip-scope="当前会话" aria-label="${w?'写会话':'只读会话'}">${w?'写':'读'}</span>
-   <span class="ts-meta">${esc(s.model)} · ${s.turns} 轮</span>
-   <button class="btn sm ghost ts-more" data-action="session-actions" aria-haspopup="true" aria-label="会话操作" data-tip="会话操作" data-tip-sub="派生 / 回放 / 写锁作用于当前会话；新建会话作用于整个需求" data-tip-scope="按作用域分组">${ic('sliders')}<span class="lbl">会话操作</span>${ic('down','sm')}</button>
+   <button class="btn sm ghost ts-more" data-action="session-actions" aria-haspopup="true" aria-label="会话操作" data-tip="会话操作" data-tip-sub="派生 / 回放 / 写锁作用于当前会话" data-tip-scope="按作用域分组">${ic('sliders')}<span class="lbl">会话操作</span>${ic('down','sm')}</button>
   </div>`:'';
  tabs.innerHTML=`<div class="tab-group" role="tablist" aria-label="会话级视图">${left}</div>`+sess+`<div class="tab-demand" role="tablist" aria-label="需求级视图">${right}</div>`;
 }
@@ -1386,7 +1387,7 @@ function renderComposer(){
 function renderStatus(){
  const q=`<span class="sitem2 opt">${ic('target')}<span class="num" id="statQuota">配额 ${DB.scope.quota}%</span></span>`;
  $('#statusLeft').innerHTML=isWorkspace()
-  ? `<span class="sitem2">${ic('refresh')}<span class="num">12 轮 204 步 · 198 tok/s</span></span><span class="sitem2 opt">${ic('db')}<span class="num">100M tok · 缓存命中 98.4%</span></span>${q}`
+  ? `<span class="sitem2">${ic('msg')}<span class="num">${esc(session().model)} · ${session().turns} 轮 / 204 步 · 198 tok/s</span></span><span class="sitem2 opt">${ic('db')}<span class="num">2.8M tok · 缓存命中 98.4%</span></span>${q}`
   : `<span class="sitem2">${ic('server')}<span class="num">${esc(project().name)} · ${project().inst}</span></span><span class="sitem2 opt">${ic('code')}<span class="num">DSH ${DB.platform.version}</span></span><span class="sitem2 opt">${ic('shield')}<span class="num">${DB.runtime.isolation==='docker'?'Docker 强隔离':'本地基础档'}</span></span>${q}`;
 }
 function applyRole(){
@@ -1967,7 +1968,7 @@ const ACTION_CAP={
  'toggle-provider':'config','toggle-isolation':'config','run-doctor':'config','verify-source':'config','acceptance':'config','ack-risk':'config','set-project':'config','add-project':'config',
  'new-template':'config','save-template':'config','toggle-skill':'config','tpl-write':'config','assign-template':'import',
  'do-assign':'import','archive-demand':'import','assign':'import','preset-for':'import','new-demand':'import','import':'import','edit-demand':'import','advance-demand':'import','add-member':'import','edit-member':'import','mm-toggle':'import',
- 'new-session':'session','set-writer':'session','release-lock':'session','fork-session':'session','save-context':'session','use-template':'session','set-model':'session','send':'session',
+ 'quick-new-session':'session','new-session':'session','set-writer':'session','release-lock':'session','fork-session':'session','save-context':'session','use-template':'session','set-model':'session','send':'session',
  'hitl-approve':'approve','hitl-reject':'approve','hitl-reset':'approve'
 };
 const A={
@@ -2029,15 +2030,22 @@ const A={
  refresh:()=>{render();toast('已刷新（假数据）')},
 
  /* 对话 */
+ 'quick-new-session':()=>{const d=demand(),src=session();
+  let i=1;while(d.sessions.some(x=>x.name==='新会话 '+i))i++;
+  const id='s'+(Date.now()%100000),model=src.model||DB.scope.personalModel,name='新会话 '+i;
+  d.sessions.unshift({id,name,mode:'只读',model,preset:d.preset,turns:0,time:'刚刚'});
+  S.session=id;DB.scope.personalModel=model;
+  log('在需求 '+d.id+' 下快速新建会话「'+name+'」· 继承 preset「'+d.preset+'」与模型「'+model+'」');
+  render();toast('已在 '+d.id+' 新建「'+name+'」· 继承 '+d.preset+' / '+model+'（只读）')},
  'new-session':()=>openPanel('在当前需求下新建会话',
   `<div class="field"><label>所属需求</label><input class="input" value="${esc(demand().id+' · '+demand().title)}" disabled><div class="hint">会话必须挂在需求下，平台不提供全局「新会话」入口。</div></div>
    <div class="field"><label>会话名称</label><input class="input" id="nsName" placeholder="例如：3.2 回归用例补充"></div>
-   <div class="field"><label>能力模板</label><select class="select" id="nsTpl">${DB.templates.map(t=>`<option>${esc(t.name)}</option>`).join('')}</select><div class="hint">按 D21，模板只影响之后新建的会话。</div></div>
+   <div class="field"><label>能力模板</label><select class="select" id="nsTpl">${DB.templates.map(t=>`<option${t.name===demand().preset?' selected':''}>${esc(t.name)}</option>`).join('')}</select><div class="hint">按 D21，模板只影响之后新建的会话。</div></div>
    <div class="field"><label>会话模式</label><div class="radio-row"><button class="radio-chip on" data-action="ns-mode" data-v="只读">只读（推荐）</button><button class="radio-chip" data-action="ns-mode" data-v="写">写会话</button></div><div class="hint">同一时刻只允许一个写会话；选择写会释放原有写锁。</div></div>`,null,
   ()=>{const n=$('#nsName').value.trim();if(!n){toast('请填写会话名称');return false}
    const mode=($('#panelBody .radio-chip.on')||{dataset:{v:'只读'}}).dataset.v;
    const d=demand();if(mode==='写')d.sessions.forEach(s=>s.mode='只读');
-   const id='s'+(Date.now()%100000);d.sessions.unshift({id,name:n,mode,model:$('#nsTpl').value,turns:0,time:'刚刚'});
+   const id='s'+(Date.now()%100000);d.sessions.unshift({id,name:n,mode,model:DB.scope.personalModel,preset:$('#nsTpl').value,turns:0,time:'刚刚'});
    S.session=id;log('在需求 '+d.id+' 下新建会话「'+n+'」（'+mode+'）');render();toast(mode==='写'?'写会话已创建（假数据）':'已创建只读会话；如需写入请在「会话编队」里设为写会话');return true}),
  'ns-mode':el=>{el.parentElement.querySelectorAll('.radio-chip').forEach(x=>x.classList.toggle('on',x===el))},
  'set-writer':el=>{const d=demand(),id=el.dataset.sid||S.session;d.sessions.forEach(s=>s.mode=s.id===id?'写':'只读');S.session=id;log('把写锁交给会话「'+(d.sessions.find(s=>s.id===id)||{}).name+'」');render();toast('已切换写会话')},

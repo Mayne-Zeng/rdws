@@ -142,7 +142,7 @@
 
   <h3>1.5 16 视图标注</h3>
   <table><tr><th style="width:100px">key</th><th style="width:100px">名称</th><th style="width:80px">作用域</th><th style="width:200px">职责</th><th style="width:200px">主要组件</th><th>关键入口</th></tr>
-  <tr><td class="mono">chat</td><td><strong>对话</strong></td><td>会话级</td><td>与当前会话交互、业务 HITL「设计确认」</td><td>消息气泡 / 工具折叠 / HITL 卡 / 输入框</td><td>会话切换与操作菜单、发送、派生、回放</td></tr>
+  <tr><td class="mono">chat</td><td><strong>对话</strong></td><td>会话级</td><td>与当前会话交互、业务 HITL「设计确认」</td><td>消息气泡 / 工具折叠 / HITL 卡 / 输入框</td><td>项目卡快捷新建会话、会话切换与操作菜单、发送、派生、回放</td></tr>
 <tr><td class="mono">trace</td><td><strong>轨迹</strong></td><td>会话级</td><td>append-only 事件与哈希锚点</td><td>时间线、文件侧 / PG 侧双卡</td><td>校验哈希、导出摘要、事件详情</td></tr>
 <tr><td class="mono">stats</td><td><strong>统计</strong></td><td>会话级</td><td>仅当前会话用量</td><td>statline 卡</td><td>模型、配额、隔离档、风险登记跳转</td></tr>
 <tr><td class="mono">overview</td><td><strong>需求档案</strong></td><td>需求级</td><td>需求驾驶舱：主线流程与全貌</td><td>S0–S6 流程轴、ov-card、ov-list</td><td>编辑 / 推进、提交与合并、会话维护</td></tr>
@@ -206,11 +206,11 @@
 
   <h3>2.3 键盘、焦点、动效、语义</h3>
   <table><tr><th style="width:220px">检查项</th><th style="width:170px">实测</th><th>说明</th></tr>
-   <tr><td>可聚焦元素</td><td class="mono">307 个</td><td>当前视图 DOM 全量；无正 tabindex（0）、无未命名按钮（0）</td></tr>
+   <tr><td>可聚焦元素</td><td class="mono">308 个</td><td>当前视图 DOM 全量；无正 tabindex（0）、无未命名按钮（0）</td></tr>
    <tr><td>Tab 焦点序列</td><td><span class="pill p-ok">可达</span></td><td>真实按键连发 10 次：展开侧栏 → 收起侧栏 → 需求管理 → 成员与权限 → 能力模板…，每个焦点元素 <code>outline-width:2px</code></td></tr>
    <tr><td>:focus-visible 规则</td><td class="mono">3 条</td><td>样式表中实际存在，非空声明</td></tr>
    <tr><td>reduced-motion</td><td><span class="pill p-ok">生效</span></td><td>模拟 <code>prefers-reduced-motion: reduce</code> 后 <code>animation-name:none</code>、<code>duration:0s</code></td></tr>
-   <tr><td>ARIA / 语义</td><td class="mono">tab 7 · tabpanel 16 · aria-label 74</td><td>7 个 tab 与 aria-selected 一一对应；16 个 tabpanel；<code>main</code> 1 个</td></tr>
+   <tr><td>ARIA / 语义</td><td class="mono">tab 7 · tabpanel 16 · aria-label 75</td><td>7 个 tab 与 aria-selected 一一对应；16 个 tabpanel；<code>main</code> 1 个</td></tr>
    <tr><td>图标 / 图片语义</td><td><span class="pill p-ok">通过</span></td><td>内联 SVG 全部 <code>aria-hidden</code>（未标注数 0）；无缺 alt 的 img（0）</td></tr>
    <tr><td>页面级标题 / 导航地标</td><td><span class="pill p-ok">通过</span></td><td><code>h1</code> 1 个（视觉隐藏页级标题）、<code>nav</code> 1 个（侧栏主导航）；视图 <code>h2</code> 在其下形成正确层级</td></tr>
   </table>
@@ -286,7 +286,7 @@
   <h2 id="s5"><span class="num">5</span>交接边界与验证</h2>
   <ul>
     <li><strong>三条硬约束</strong>：① 单一 <code>--content-w:960px</code> 与 <code>--gutter:24px</code>，任何新页面 / 面板不得再引入第二档宽度；② 交互控件走 <code>--control-h</code>（30 / 40px），新增可点击元素必须同步判据；③ 入口跟随作用域，跨级操作回自己作用域的页面。</li>
-    <li><strong>改动边界</strong>：本轮只改 <code>demo/rdws-workbench.html</code> 的 P1/P2 相关 CSS / 语义与本文件；台账 v3 决策正文、R-A / R-B 残余风险口径未动。§4 的发现项已按清单全部落地并重测。</li>
+    <li><strong>改动边界</strong>：本轮改 <code>demo/rdws-workbench.html</code> 的 P1/P2 修复与会话区调整（项目卡快捷新建、会话信息收拢、一步新建），以及本文件；台账 v3 决策正文、R-A / R-B 残余风险口径未动。§4 的发现项已按清单全部落地并重测。</li>
     <li><strong>验证方式</strong>：本文件由 <code>/tmp/rdws-baseline-collect.js</code> 与 <code>/tmp/rdws-heights-locate.js</code> 的实测 JSON 生成；文档本身已用真实浏览器打开验证渲染与关键文案。任何 Demo 改动后，重跑这两个脚本并重新生成本文件。</li>
     <li><strong>PoC 交界</strong>：台账 §5.2 的四项验收（cwd 归属、sources 零写入、≥5 会话 resume/fork/replay、<code>rdws/*</code> push + MR 映射闭环）属于工程验证，不在本文件范围；本文件提供的是它们依赖的界面契约与视觉验收口径。</li>
   </ul>

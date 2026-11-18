@@ -9,6 +9,7 @@ import {
 } from '@rdws/contracts';
 import { Icon, api, roleLabels } from '../lib/ui.tsx';
 import { RequirementForm } from './requirement-form.tsx';
+import { RequirementImport } from './requirement-import.tsx';
 import { RequirementPage } from './requirement.tsx';
 import { MembersPage } from './administration.tsx';
 import { RepositoriesPage } from './repositories.tsx';
@@ -66,6 +67,7 @@ export function ProjectWorkspace({
   ].includes(current ?? '')
     ? (current as View)
     : 'requirements';
+  const importing = view === 'requirements' && search.get('panel') === 'import';
   const [mobile, setMobile] = useState(false),
     [filter, setFilter] = useState(''),
     [protectedForm, setProtectedForm] = useState(false),
@@ -124,7 +126,7 @@ export function ProjectWorkspace({
   }, [mobile, smallScreen]);
   const client = useQueryClient();
   const requirements = useQuery({
-    queryKey: ['requirements', project.id],
+    queryKey: ['requirements', project.id, userId, sessionId],
     queryFn: ({ signal }) =>
       api<{ requirements: RequirementSummary[]; canCreate: boolean }>(
         `/api/projects/${project.id}/requirements`,
@@ -133,6 +135,14 @@ export function ProjectWorkspace({
     refetchInterval: 2000,
     enabled: projectMatches,
   });
+  const requirementListStatus = (
+    requirements.error as { status?: number } | null
+  )?.status;
+  const importAuthorized =
+    !!requirements.data?.canCreate &&
+    requirementListStatus !== 401 &&
+    requirementListStatus !== 403 &&
+    requirementListStatus !== 404;
   function navigate(next: View, id = selected) {
     if (protectedForm) return;
     setSearch({
@@ -152,6 +162,7 @@ export function ProjectWorkspace({
   const demandView =
     !!selected &&
     view !== 'create' &&
+    !importing &&
     view !== 'repos' &&
     view !== 'members' &&
     view !== 'capabilities';
@@ -466,9 +477,11 @@ export function ProjectWorkspace({
                   ? '能力模板'
                   : view === 'repos'
                     ? '仓库与环境'
-                    : view === 'create'
-                      ? '新建需求'
-                      : (summary?.title ?? '需求管理')}
+                    : importing
+                      ? '批量导入需求'
+                      : view === 'create'
+                        ? '新建需求'
+                        : (summary?.title ?? '需求管理')}
             </div>
           </div>
           <span className="pill local-badge">
@@ -580,6 +593,30 @@ export function ProjectWorkspace({
               />
             ) : view === 'repos' ? (
               <RepositoriesPage key={project.id} projectId={project.id} />
+            ) : importing ? (
+              requirements.isPending ? (
+                <Loading text="正在核对导入权限" />
+              ) : importAuthorized ? (
+                <RequirementImport
+                  key={JSON.stringify([sessionId, userId, project.id])}
+                  projectId={project.id}
+                  userId={userId}
+                  sessionId={sessionId}
+                  onProtectedChange={setProtectedForm}
+                  onClose={() => navigate('requirements', '')}
+                  onOpen={(id) => navigate('overview', id)}
+                  onCreated={() =>
+                    void client.invalidateQueries({
+                      queryKey: ['requirements', project.id],
+                    })
+                  }
+                />
+              ) : (
+                <Alert
+                  theme="warning"
+                  message="当前项目权限不可用，请核对后再批量导入。"
+                />
+              )
             ) : view === 'create' ? (
               <RequirementForm
                 key={project.id + ':' + userId}
@@ -647,10 +684,30 @@ export function ProjectWorkspace({
                     </p>
                   </div>
                   {requirements.data?.canCreate && (
-                    <Button tag="button" onClick={() => navigate('create', '')}>
-                      <Icon name="plus" />
-                      创建需求
-                    </Button>
+                    <div className="form-actions">
+                      <Button
+                        tag="button"
+                        variant="outline"
+                        onClick={() => {
+                          if (protectedForm) return;
+                          setSearch({
+                            project: project.id,
+                            view: 'requirements',
+                            panel: 'import',
+                          });
+                          setMobile(false);
+                        }}
+                      >
+                        批量导入
+                      </Button>
+                      <Button
+                        tag="button"
+                        onClick={() => navigate('create', '')}
+                      >
+                        <Icon name="plus" />
+                        创建需求
+                      </Button>
+                    </div>
                   )}
                 </div>
                 <div className="list-toolbar">

@@ -354,7 +354,7 @@
     <tr data-source="I2" data-owner="F05" data-point="scope.environment-automation"><td>I2 / 自动多环境编排</td><td><a href="05-development-backlog.md#单独保留的后续任务">F05</a></td><td>T10</td><td>T10 的环境映射／人工 MR 交付不等于 F05 自动编排。</td></tr>
     <tr data-source="I2-STATE I6-STAGE" data-owner="T11" data-point="business.stage"><td>I2-STATE I6-STAGE / 阶段与任务维护</td><td><a href="05-development-backlog.md#主计划任务">T11</a></td><td>T01</td><td>已有按钮跳转／回退、本人任务状态；无阶段审批，未来需求维护沿用此约束。</td></tr>
     <tr data-source="I2-AUTH" data-owner="T03" data-point="business.identity"><td>I2-AUTH / 身份与作用域</td><td><a href="05-development-backlog.md#主计划任务">T03</a></td><td>T02 T07 T17</td><td>预置身份与当前角色校验已存在；多项目、成员维护和撤权入口待 T03，代码写另受 T07 控制。</td></tr>
-    <tr data-source="I3-TASK I6-TASK" data-owner="T11" data-point="business.task-assignment"><td>I3-TASK I6-TASK / 子任务及后续人员变化</td><td><a href="05-development-backlog.md#主计划任务">T11</a></td><td>T03</td><td>已有单层／单负责人／初始分派；创建后成员与负责人维护、批量导入规则在 T11 先澄清。</td></tr>
+    <tr data-source="I3-TASK I6-TASK" data-owner="T11" data-point="business.task-assignment"><td>I3-TASK I6-TASK / 子任务及后续人员变化</td><td><a href="05-development-backlog.md#主计划任务">T11</a></td><td>T03</td><td>沿用单层／单负责人／初始分派，已验证<a href="#t11-personnel-delivery-20261119">人员变更与显式任务承接</a>、<a href="#t11-import-delivery-20261119">批量导入</a>。</td></tr>
     <tr data-source="I3-WRITE" data-owner="T07" data-point="execution.single-writer"><td>I3-WRITE / 单写与停止后交接</td><td><a href="05-development-backlog.md#主计划任务">T07</a></td><td>T05 T06</td><td>共享需求工作树、本人有效开发分派、独占资格；进程停稳才交接，租约过期不作为停止证据。</td></tr>
     <tr data-source="I3-CONTEXT I6-CONTEXT" data-owner="T12" data-point="context.current-facts"><td>I3-CONTEXT I6-CONTEXT / 动态上下文</td><td><a href="05-development-backlog.md#主计划任务">T12</a></td><td>T02 T07</td><td>已有每步一致快照和当前运行身份；未来编辑背景不替代 PG 事实，不新增已排除的消费索引。</td></tr>
     <tr data-source="I3-DELIVERY" data-owner="T08" data-point="delivery.immutable-snapshot"><td>I3-DELIVERY / 不可变交付快照</td><td><a href="05-development-backlog.md#主计划任务">T08</a></td><td>T09 T10</td><td>候选／实际合入及原提交、集成提交、merge／squash SHA 分开；尚无实体或界面。</td></tr>
@@ -453,7 +453,7 @@
     <tr data-gap="T00-G5" data-owner="T07"><td>T00-G5 / 停止确认与写租约</td><td><a href="05-development-backlog.md#主计划任务">T07</a></td><td>有 cancel/job/terminal/Shell 服务定义，尚无本仓库 WriteLease、子进程停稳和安全交接实证。</td><td>以现有分派／本人会话绑定执行句柄，验证旧进程确实停止、失败保持只读、恢复重验身份。</td><td>T07 写入口；不能把租约过期、cancel 回执或服务锁释放当作停止证明。</td></tr>
     <tr data-gap="T00-G6" data-owner="T13"><td>T00-G6 / 配置 API 的授权接线</td><td><a href="05-development-backlog.md#主计划任务">T13</a></td><td>原生配置／凭据／选模型 API 已定位；RDWS 尚无安全配置写入口或分层 UI，当前 bridge 默认拒绝。</td><td>T13 方案定义作用域、锁定项与 non-owner 服务能力；T14 配合明确需求 preset 引用／生成，专项真实验证。</td><td>T13/T14 完整能力与 Q7 继承；不妨碍当前固定 GLM 只读会话。</td></tr>
     <tr data-gap="T00-G7" data-owner="T19"><td>T00-G7 / 分发／依赖／许可</td><td><a href="05-development-backlog.md#主计划任务">T19</a></td><td>既有依赖风险记录未关闭，本轮未重跑 audit；未提供 API 生产分发包，office/libreoffice 依赖存在。</td><td>针对最终分发产物核验 Claude payload 剔除、适用 MPL 源码/NOTICE 和许可证、依赖风险及端口／遥测锁定；按发布闸门处理。</td><td>T19 对外可分发准出及相关 T22 证据；既有功能通过不代替生产或合规验收。</td></tr>
-    <tr data-gap="T00-G8" data-owner="T11"><td>T00-G8 / 导入与人员规则</td><td><a href="05-development-backlog.md#主计划任务">T11</a></td><td><a href="#t11-maintenance-acceptance-20261119">已确认同页预览修正与整批提交，以及未完成任务的显式承接</a>。</td><td>实现前细化导入格式和字段校验，按 I3／I6 验证提交、角色授权和分派历史。</td><td>T11 对应实现，不阻塞无关已批准能力。</td></tr>
+    <tr data-gap="T00-G8" data-owner="T11"><td>T00-G8 / 导入与人员规则</td><td><a href="05-development-backlog.md#主计划任务">T11</a></td><td><a href="#t11-maintenance-acceptance-20261119">已确认同页预览修正与整批提交，以及未完成任务的显式承接</a>。</td><td>已关闭。已验证 <a href="#t11-import-delivery-20261119">CSV／XLSX 入库</a>和<a href="#t11-personnel-delivery-20261119">人员授权与分派历史</a>。</td><td>T11 完成，T12 还需 T14。</td></tr>
     <tr data-gap="T00-G10" data-owner="T15"><td>T00-G10 / 计量与配额规则</td><td><a href="05-development-backlog.md#主计划任务">T15</a></td><td>维度、阈值、计量来源及超限行为尚未细化。</td><td>T15 在实现前取得规格及用户所属取舍；不从帧数伪造 token、成本。</td><td>T15 配额与统计完整验收。</td></tr>
     <tr data-gap="T00-G11" data-owner="T18"><td>T00-G11 / 归档与保留策略</td><td><a href="05-development-backlog.md#主计划任务">T18</a></td><td>保留周期、归档导出、备份和可清理目标尚未确认。</td><td>T18 先确认保留和删除规则；任何破坏性执行继续受单独授权约束。</td><td>T18 归档／清理执行；现有数据继续保留。</td></tr>
     <tr data-gap="T00-G9" data-owner="T01"><td>T00-G9 / 用户侧验收</td><td><a href="05-development-backlog.md#主计划任务">T01</a></td><td>T02 开发和内部证据在 4ecf870，用户 Demo 一致性尚未确认。</td><td>保持 T02 待验收；T01/T22 按各自用户验收门槛闭环，后续仅引用来源中已明确验证的子能力。</td><td>不以 T00 完成冒称 T02/T01/T22 已验收或 T07 写入口已满足全部前置。</td></tr>
@@ -833,7 +833,7 @@
   <h3 id="t11-maintenance-acceptance-20261119">11.21 T11 已确认的导入与人员维护</h3>
   <p>2026-11-19 用户确认需求批量导入采用同页的上传、预览、修正与整批提交。上传后动态显示解析和校验进度，下方逐条呈现需求明细、状态与可定位的问题。用户可在同页修正并重新校验。预览和校验阶段不写业务数据。全部通过后由用户显式整批提交入库，提交结果继续在同页逐条呈现。</p>
   <p>参与者和开发负责人维护按当前项目角色授权。移除参与者或更换负责人时，相关未完成子任务须显式交给当前具备资格的接手人，并保留原分派记录。验收覆盖无资格接手、已有分派记录保留，以及原有阶段与任务按钮权限。</p>
-  <p>本节为已确认的目标契约。导入格式、字段校验与具体实施尚待 T11 规格和验证。</p>
+  <p>导入格式和字段校验见 <a href="#t11-import-plan-20261119">§11.21.5</a>，验证见 <a href="#t11-import-delivery-20261119">§11.21.6</a>。</p>
 
   <h4 id="t11-details-plan-20261119">11.21.1 需求档案资料编辑</h4>
   <p>Change / R3，基线 <code>7a8adef</code>。沿 T11、I2-AUTH、I3-CONTEXT 和 I6-COMMAND 交付档案中标题、说明和验收标准的编辑、核对与历史。参与者和负责人维护仍须在实施前明确未完成任务承接、已有 Native 会话撤权和恢复定序。批量导入继续按 §11.21 细化。</p>
@@ -869,6 +869,23 @@
   <p><code>caffeinate -i pnpm test tests/integration/requirement-personnel.test.ts tests/integration/context-sync.test.ts</code> 通过（2 文件、20 项）。覆盖参与角色、任务分组和逐项改派、无变化与过期预览、终态历史、旧详情和列表拒绝、真实 PostgreSQL 账户及需求锁排序、提交结果异常、本人失权、由另一受影响账号触发原命令核对和排队同键。回环上游实际传递双向 WS 帧，验证两个独立命令并存、回滚只释放对应栅栏及邻需求继续传帧。</p>
   <p>实际本机 Native 与合成供应商验证同一需求旧两登录的 BFF 桥关闭，一个已准入回合完成，旧身份无法继续发起推理，同项目另一需求继续调用，新负责人读取新上下文。注入 Native 通知失败，实际旧 Peer 按短租约到期。另验证需求级栅栏拦住读后未准出的上下文。<code>caffeinate -i pnpm test:e2e tests/e2e/requirement-personnel.spec.ts</code> 通过（1 项），390px 深色表单复核通过。T11 批量导入仍待交付。</p>
   <p><code>caffeinate -i pnpm check</code> 返回 0（24 文件、154 项，类型、lint、格式和构建通过）。首轮浏览器回归中旧资料编辑的截图定位命中两块面板，定位明确到原资料表单后复跑 <code>caffeinate -i pnpm test:e2e</code> 返回 0（31 项，55.3 秒）。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 个追溯点、16 视图）。</p>
+
+  <h4 id="t11-import-plan-20261119">11.21.5 需求批量导入</h4>
+  <p>Change / R3，基线 <code>e02bad9</code>。按 T11、§11.21、I3-TASK、I6-COMMAND、T05 和 Demo 的 CSV／Excel 入口交付完整导入流程。采用 UTF-8 CSV 与 Excel <code>.xlsx</code>，字段取现有创建契约。能力模板和 Native 会话继续由已登记流程处理。本轮无迁移、生产依赖和对外写入。</p>
+  <ol>
+    <li>项目需求管理同页导入。必填列为需求标题、开发负责人，可选需求说明、验收标准、需求经理、开发人员、测试人员及初始子任务，提供 CSV 模板。题头重复、未知或缺必填列时说明位置与格式要求，空行忽略，缺少末尾允许列的行按空值进入编辑。登录名去首尾空白并按仓库规则小写，多个账号按分号或换行，账号多角色合并。子任务按换行，每项默认给开发负责人。说明和验收可空，沿用单条创建字段长度和每需求 50 个参与账号、100 个任务。CSV 支持 BOM、引号、转义逗号和多行字段，拒绝非法 UTF-8。XLSX 处理实际工作表关系、共享／内联字符串与存在的单元格，多个工作表由用户选择。数字、日期、公式和错误值显示对应行列，用户先将原单元格转为文本。<a href="https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/structure-of-a-spreadsheetml-document">SpreadsheetML 结构</a>、<a href="https://compression.spec.whatwg.org/">浏览器解压规范</a>。</li>
+    <li>浏览器只读文件流，按实际字节及解析到的有效行反馈。CSV 和 XLSX 原文件均限 2 MiB，流读取超限即取消。XLSX 另限 ZIP 条目 512、单部分 4 MiB、总 8 MiB，实际解压分块超出即取消，不按声明尺寸分配。接受标准 ZIP32 的常规存储和 DEFLATE 工作簿，核对目录、部分路径和声明大小，解压仅内存。工作表至多 100、关系 256、共享字符串 20000、选定表存在单元格 4096，校验行列索引不扩展稀疏坐标。拒绝外部或跨包目标、非法 XML、DTD 及自定义实体声明，保留 XML 基础转义，数据以文本显示。生成提交数据前校验字段长度及集合数量，重复引用同一共享字符串也计入限制。换文件、工作表、退出或换登录取消旧工作。BFF 两精确导入路由独立 2 MiB，浏览器按编码后请求量预判。每批最多 50 行、200 初始任务、500 个角色填报项，超限提示在提交前拆分。预览分块执行只读校验，按已核对的行计数。编辑或作用域变化取消并作废旧结果，全部实际通过才开放提交。</li>
+    <li>精确预览和提交路由在读取请求体前复用 Origin、当前 Cookie、观察会话与项目创建权限，预校验请求结构和原字段类型、NUL 与孤立代理。预览为 READ ONLY，零回执、事件、基线捕获、文件和 Native。提交前归一化阶段在锁外。锁内按登录、去重目标账号、项目角色取锁，重新核对各行归一化登录名和当前有效角色。沿用冻结的同一组已验证项目基线。单条和批量共享同一创建入库路径，按表批量插入需求、成员、初始任务、历史、计划及原回执。使用仓库锁定 PostgreSQL 18 的事务时间上限（8 秒）、锁等待（3 秒），末次等待后同步复核原会话有效期、累计时间和项目撤权栅栏再提交。Git 读取在事务外。整批全部合法才写业务表，非法行返回确定拒绝回执，事务执行失败整体回滚。</li>
+    <li>原命令键绑定真人、项目和导入操作，摘要保留有序内容和稳定原行号。同文核对原终态，异文 409，已提交的回执先于候选或镜像重新读取。受权的业务结果、拒绝和冲突均在出站复验当前创建权、对应每个已登记需求的读权、有效期和作用域栅栏，no-store。工作树准备走现有单需求入口，批次返回已入库 ID 及未配置、待准备或就绪的实际状态，原键重放只读状态。原命令和内容发送前按账号项目落在会话存储，存储失败不发送。刷新只恢复原稿与待核对，用户明确重试时若原请求未提交可首次创建。网络未知、鉴权失败保留，收据必须完整匹配原批次和行标识才解除。确定拒绝保留单元编辑区和实际错误，修改后重新校验并发起新批次。</li>
+    <li>验证两种实际文件、多工作表选择、公式和结构拒绝、同页修正、分块进度及旧响应取消、真实项目角色复验、无回执在预览、合法超过 64 KiB 及启用上限。隔离数据库和回环夹具验证最后一行失败全批业务零写、有效大批、同键并发和异文、永久拒绝回执、提交后撤权及真实镜像的冻结计划，工作树就绪与待准备分别读回。浏览器验证桌面与窄屏、可定位状态、显式提交、原命令已提交或未送达的恢复。执行聚焦、<code>pnpm check</code>、<code>pnpm test:e2e</code>、<code>pnpm validate:baseline</code> 及方案／交付复核。撤回入口保留需求、工作树和回执。</li>
+  </ol>
+
+  <h4 id="t11-import-delivery-20261119">11.21.6 批量导入交付证据</h4>
+  <p>需求管理已提供同页 CSV 和 XLSX 批量导入。浏览器读取文件并逐行呈现预览，BFF 按当前项目角色校验文本行。单条和批量创建沿用同一入库路径。整批成功后逐项显示需求链接与工作树状态，待准备的工作树从单需求入口发起。未新增迁移和生产依赖。</p>
+  <p>正确性和安全两面方案复审均为 APPROVE。独立交付复审 APPROVE，核对了列表暂时不可用时保留草稿和回执、按实际回执需求复核权限、首行显示解析进度，以及待核对后退出再恢复原命令。</p>
+  <p><code>caffeinate -i pnpm test tests/integration/requirement-import.test.ts tests/integration/business-flow.test.ts tests/integration/demand-worktrees.test.ts</code> 通过（3 文件、28 项）。隔离 PostgreSQL 验证只读预览、整批拒绝和回滚、权限撤回、原键并发和重放。隔离签名 Git 夹具验证同批冻结基线，以及工作树准备后各需求状态独立读回。</p>
+  <p><code>caffeinate -i pnpm test:e2e tests/e2e/requirement-import.spec.ts</code> 通过（1 项），覆盖实际 CSV 和共享／内联字符串 XLSX、公式定位、多工作表、校验进度、同页修正、入库回执、刷新后主动重试及暂时读回失败。复核 390px 明暗界面无横向溢出。</p>
+  <p><code>caffeinate -i pnpm check</code> 返回 0（25 文件、164 项，类型、lint、格式和构建通过）。构建仍提示主包超过 500 kB。<code>caffeinate -i pnpm test:e2e</code> 返回 0（32 项，约 1 分钟）。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 个追溯点、16 视图）。交付以本地 <code>feat: import requirements with atomic batch receipts</code> 为准。</p>
 
   <h2 id="s0"><span class="num">0</span>评审结论</h2>
   <div class="verdict">

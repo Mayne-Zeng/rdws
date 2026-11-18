@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import websocket from '@fastify/websocket';
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
@@ -8,6 +8,12 @@ import {
   BusinessCommand,
   RequirementDetailsInput,
   RequirementPersonnelInput,
+  RequirementImportInput,
+  RequirementImportPreviewInput,
+  importColumns,
+  importLimits,
+  type RequirementImportRow,
+  type RequirementImportReceipt,
   personnelRoles,
   type RequirementPersonnelReceipt,
   TemplateBindingInput,
@@ -71,6 +77,13 @@ type Database = ReturnType<typeof connectDatabase>['db'];
 type Auth = ReturnType<typeof createAuth>;
 const templateBindingPath = '/api/requirements/:id/capability-template';
 const personnelPath = '/api/requirements/:id/personnel';
+const importPreviewPath =
+  '/api/projects/:projectId/requirements/import/preview';
+const importCommitPath = '/api/projects/:projectId/requirements/import/commit';
+const isImportRequest = (request: FastifyRequest) =>
+  request.method === 'POST' &&
+  (request.routeOptions.url === importPreviewPath ||
+    request.routeOptions.url === importCommitPath);
 const isTemplateBindingRequest = (request: FastifyRequest) =>
   request.routeOptions.url === templateBindingPath &&
   (request.method === 'GET' || request.method === 'POST');
@@ -653,6 +666,7 @@ export async function registerWorkbench(
           !(
             key === 'x-rdws-edit-session' &&
             (isTemplateBindingRequest(request) ||
+              isImportRequest(request) ||
               (request.routeOptions.url === personnelPath &&
                 (request.method === 'GET' || request.method === 'POST')) ||
               (request.method === 'GET' &&
@@ -675,6 +689,7 @@ export async function registerWorkbench(
       demandList?: boolean;
       platformOnly?: boolean;
       memberOnly?: boolean;
+      importReply?: string[];
       demandAccess?: {
         requirementId: string;
         projectId: string;
@@ -690,6 +705,7 @@ export async function registerWorkbench(
       epoch: number;
       requirementId?: string;
       demandList?: boolean;
+      importReply?: string[];
     },
     ignore?: string,
   ) {
@@ -701,15 +717,22 @@ export async function registerWorkbench(
       requirementId,
       demandList,
     } = scope;
+    const importDemandChanged = scope.importReply?.some(
+      (id) =>
+        blocked(userId, projectId, ignore, id) ||
+        changed(userId, projectId, epoch, id),
+    );
     if (
       stopping ||
       closingSessions.has(authSessionId) ||
       blocked(userId, projectId, ignore, requirementId, demandList) ||
-      changed(userId, projectId, epoch, requirementId, demandList)
+      changed(userId, projectId, epoch, requirementId, demandList) ||
+      importDemandChanged
     )
       businessError(401, '当前权限正在变更，请刷新后重试');
   }
   app.addHook('preHandler', async (request, reply) => {
+    if (isImportRequest(request)) return;
     const personnel = request.routeOptions.url === personnelPath;
     if (request.routeOptions.url === templateBindingPath || personnel)
       reply.header('cache-control', 'no-store');
@@ -752,8 +775,15 @@ export async function registerWorkbench(
     if (
       scope &&
       (reply.statusCode < 400 ||
-        (scope.requirementId && reply.statusCode === 409))
+        ((scope.requirementId || scope.importReply) &&
+          reply.statusCode === 409))
     ) {
+      if (scope.importReply)
+        await business.authorizeImport(
+          scope,
+          scope.projectId!,
+          scope.importReply,
+        );
       if (scope.demandAccess) {
         const { requirementId, projectId, authority } = scope.demandAccess;
         await business.authorizeRequirement(
@@ -1465,6 +1495,155 @@ export async function registerWorkbench(
       ),
     };
   });
+  const importRoute = {
+    bodyLimit: importLimits.bytes,
+    attachValidation: true,
+    async onRequest(request: FastifyRequest, reply: FastifyReply) {
+      reply.header('cache-control', 'no-store');
+      const epoch = authorizationEpoch;
+      const who = await actor(request.headers);
+      verifyEditLogin(request, who.authSessionId);
+      const { projectId } = request.params as { projectId: string };
+      const scope = { ...who, projectId, epoch, importReply: [] as string[] };
+      assertResponse(scope);
+      await business.authorizeImport(who, projectId);
+      assertResponse(scope);
+      responseScopes.set(request, scope);
+    },
+    async preValidation(request: FastifyRequest, reply: FastifyReply) {
+      const raw: unknown = request.body;
+      const commit = request.routeOptions.url === importCommitPath;
+      const columns = Object.keys(importColumns);
+      if (
+        !isRecord(raw) ||
+        !onlyKeys(raw, commit ? ['commandId', 'rows'] : ['rows']) ||
+        (commit && typeof raw.commandId !== 'string') ||
+        !Array.isArray(raw.rows) ||
+        raw.rows.length > importLimits.rows ||
+        !raw.rows.every(
+          (row) =>
+            isRecord(row) &&
+            onlyKeys(row, ['row', ...columns]) &&
+            typeof row.row === 'number' &&
+            columns.every(
+              (field) =>
+                typeof row[field] === 'string' &&
+                !/[\0\p{Surrogate}]/u.test(row[field]),
+            ),
+        ) ||
+        new Set(raw.rows.map((row) => row.row)).size !== raw.rows.length
+      )
+        return reply.code(400).send({
+          code: 'invalid-import',
+          error: '导入行的编号、字段或文本格式不正确',
+        });
+    },
+  };
+  app.post<{ Body: { rows: RequirementImportRow[] } }>(
+    importPreviewPath,
+    {
+      ...importRoute,
+      schema: { body: RequirementImportPreviewInput },
+    },
+    async (request, reply) => {
+      if (request.validationError)
+        return reply.code(400).send({
+          code: 'invalid-import',
+          error: '导入行的编号、字段或文本格式不正确',
+        });
+      const scope = requestDemandScope(request);
+      return business.previewImport(scope, scope.projectId, request.body.rows);
+    },
+  );
+  app.post<{ Body: RequirementImportInput }>(
+    importCommitPath,
+    {
+      ...importRoute,
+      schema: { body: RequirementImportInput },
+    },
+    async (request, reply) => {
+      if (request.validationError)
+        return reply.code(400).send({
+          code: 'invalid-import',
+          error: '导入行的编号、字段或文本格式不正确',
+        });
+      const scope = requestDemandScope(request);
+      const input = request.body;
+      let receipt = await business.findImportReceipt(
+        scope,
+        scope.projectId,
+        input,
+      );
+      if (!receipt) {
+        let baselines:
+          Awaited<ReturnType<typeof mirrors.captureBaselines>> | undefined;
+        try {
+          baselines = await mirrors.captureBaselines(scope.projectId);
+        } catch {
+          receipt = await business.findImportReceipt(
+            scope,
+            scope.projectId,
+            input,
+          );
+          if (!receipt) businessError(503, '暂未取得已验基线，请核对原批次');
+        }
+        if (!receipt && baselines) {
+          assertResponse(scope);
+          receipt = await business.commitImport(
+            scope,
+            scope.projectId,
+            input,
+            baselines,
+            () => assertResponse(scope),
+          );
+        }
+      }
+      if (receipt === 'conflict')
+        return reply.code(409).send({
+          code: 'command-conflict',
+          error: '操作标识已用于不同内容，请重新校验后提交',
+        });
+      if (!receipt) businessError(503, '导入结果待核对，请重试原批次');
+      if (receipt.status === 'rejected') return receipt;
+      const ids = receipt.rows.map((row) => row.id);
+      const scoped = { ...scope, importReply: ids };
+      responseScopes.set(request, scoped);
+      await business.authorizeImport(scope, scope.projectId, ids);
+      assertResponse(scoped);
+      const registered = await db
+        .select()
+        .from(schema.requirementWorktreePlan)
+        .where(inArray(schema.requirementWorktreePlan.requirementId, ids));
+      const plans = new Map(
+        registered.map((row) => [row.requirementId, row.repositories]),
+      );
+      const rows: Extract<
+        RequirementImportReceipt,
+        { status: 'created' }
+      >['rows'] = [];
+      for (let offset = 0; offset < receipt.rows.length; offset += 4) {
+        assertResponse(scoped);
+        rows.push(
+          ...(await Promise.all(
+            receipt.rows.slice(offset, offset + 4).map(async (row) => {
+              const plan = plans.get(row.id);
+              const workspaceState = plan
+                ? (await worktreesFor(scope.projectId).ready(
+                    scope.projectId,
+                    row.id,
+                    plan,
+                  ))
+                  ? 'ready'
+                  : 'pending'
+                : 'unconfigured';
+              return { ...row, workspaceState } as const;
+            }),
+          )),
+        );
+      }
+      return { ...receipt, rows };
+    },
+  );
   app.post(
     '/api/projects/:projectId/requirements',
     { schema: { body: RequirementInput } },

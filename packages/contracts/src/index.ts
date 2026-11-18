@@ -121,6 +121,75 @@ export const RequirementInput = Type.Object(
   { additionalProperties: false },
 );
 export type RequirementInput = Static<typeof RequirementInput>;
+export const importColumns = {
+  title: '需求标题',
+  description: '需求说明',
+  acceptance: '验收标准',
+  lead: '开发负责人',
+  managers: '需求经理',
+  developers: '开发人员',
+  testers: '测试人员',
+  tasks: '初始子任务',
+} as const;
+export const importLimits = {
+  rows: 50,
+  taskCount: 200,
+  roleCount: 500,
+  bytes: 2 * 1024 * 1024,
+} as const;
+const ImportRow = Type.Object(
+  {
+    row: Type.Integer({ minimum: 2, maximum: 1048576 }),
+    title: Type.String(),
+    description: Type.String(),
+    acceptance: Type.String(),
+    lead: Type.String(),
+    managers: Type.String(),
+    developers: Type.String(),
+    testers: Type.String(),
+    tasks: Type.String(),
+  },
+  { additionalProperties: false },
+);
+export const RequirementImportPreviewInput = Type.Object(
+  { rows: Type.Array(ImportRow, { minItems: 1, maxItems: importLimits.rows }) },
+  { additionalProperties: false },
+);
+export const RequirementImportInput = Type.Object(
+  {
+    commandId: Type.String({ format: 'uuid' }),
+    rows: RequirementImportPreviewInput.properties.rows,
+  },
+  { additionalProperties: false },
+);
+export type RequirementImportRow = Static<typeof ImportRow>;
+export type RequirementImportInput = Static<typeof RequirementImportInput>;
+export type RequirementImportField = keyof typeof importColumns;
+export interface RequirementImportFeedback {
+  row: number;
+  issues: { field: RequirementImportField; message: string }[];
+}
+export type RequirementImportReceipt = { commandId: string } & (
+  | {
+      status: 'created';
+      rows: {
+        row: number;
+        id: string;
+        workspaceState: RequirementWorkspace['state'];
+      }[];
+    }
+  | { status: 'rejected'; rows: RequirementImportFeedback[] }
+);
+export const splitImportAccounts = (value: string) =>
+  value
+    .split(/[;；\r\n]+/u)
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean);
+export const splitImportTasks = (value: string) =>
+  value
+    .split(/\r?\n|\r/u)
+    .map((title) => title.trim())
+    .filter(Boolean);
 export const RequirementDetailsInput = Type.Object(
   {
     commandId: Type.String({ format: 'uuid' }),

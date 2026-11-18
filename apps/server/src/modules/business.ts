@@ -15,9 +15,18 @@ import type {
   RequirementDetailsReceipt,
   RequirementPersonnelInput,
   RequirementPersonnelReceipt,
+  RequirementImportInput,
+  RequirementImportReceipt,
+  RequirementImportRow,
 } from '@rdws/contracts';
 import { capabilityKey, taskAssignmentMaterial } from '@rdws/contracts';
 import type { PublishedBaseline } from '../../../syncer/src/mirror.ts';
+import {
+  importTargetLogins,
+  normalizeImportRows,
+  validateImportRows,
+  type NormalizedImportRows,
+} from './requirement-import.ts';
 type Database = ReturnType<typeof connectDatabase>['db'];
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 export type Actor = { userId: string; authSessionId: string };
@@ -25,6 +34,13 @@ export type RequirementAuthority = 'reader' | 'editor' | 'project-admin';
 type PersonnelResult = Omit<RequirementPersonnelReceipt, 'revocation'> & {
   removedUserIds: string[];
 };
+type StoredImport =
+  | Extract<RequirementImportReceipt, { status: 'rejected' }>
+  | {
+      commandId: string;
+      status: 'created';
+      rows: { row: number; id: string }[];
+    };
 const participantKey = ({ userId, role }: { userId: string; role: string }) =>
   `${userId}:${role}`;
 export function normalizePersonnel(input: RequirementPersonnelInput) {
@@ -271,8 +287,7 @@ export function createBusiness(db: Database) {
       );
     return result;
   }
-  async function event(
-    tx: Transaction,
+  function eventRecord(
     requirementId: string,
     who: Actor,
     commandId: string,
@@ -282,7 +297,7 @@ export function createBusiness(db: Database) {
     after: unknown,
     taskId?: string,
   ) {
-    await tx.insert(schema.requirementEvent).values({
+    return {
       id: randomUUID(),
       requirementId,
       taskId,
@@ -293,7 +308,13 @@ export function createBusiness(db: Database) {
       kind,
       before,
       after,
-    });
+    };
+  }
+  async function event(
+    tx: Transaction,
+    ...args: Parameters<typeof eventRecord>
+  ) {
+    await tx.insert(schema.requirementEvent).values(eventRecord(...args));
   }
   function validAssignee(
     id: string,
@@ -406,6 +427,139 @@ export function createBusiness(db: Database) {
     });
   }
 
+  function creationParticipants(
+    input: RequirementInput,
+    roles: { userId: string; role: string }[],
+    who: Actor,
+  ) {
+    const own = roles
+      .filter((role) => role.userId === who.userId)
+      .map((role) => role.role);
+    const participants: { userId: string; role: string }[] = [];
+    const add = (userId: string, role: string) => {
+      if (
+        !participants.some(
+          (person) => person.userId === userId && person.role === role,
+        )
+      )
+        participants.push({ userId, role });
+    };
+    for (const person of input.participants ?? [])
+      for (const role of person.roles) {
+        if (
+          !roles.some(
+            (member) => member.userId === person.userId && member.role === role,
+          )
+        )
+          businessError(400, '参与角色必须属于当前项目成员');
+        add(person.userId, role);
+      }
+    for (const id of input.participantIds ?? []) {
+      const current = roles.filter((role) => role.userId === id);
+      if (current.length !== 1) businessError(400, '请明确选择成员的参与角色');
+      add(id, current[0]!.role);
+    }
+    if (
+      !roles.some(
+        (role) => role.userId === input.leadId && role.role === 'developer',
+      )
+    )
+      businessError(400, '开发负责人必须是项目开发成员');
+    add(input.leadId, 'developer');
+    add(
+      who.userId,
+      own.includes('requirement_manager')
+        ? 'requirement_manager'
+        : 'project_admin',
+    );
+    return participants;
+  }
+  async function persistRequirements(
+    tx: Transaction,
+    who: Actor,
+    projectId: string,
+    inputs: RequirementInput[],
+    roles: { userId: string; role: string }[],
+    baselines: PublishedBaseline[],
+  ) {
+    const batch = inputs.map((input) => ({
+      id: randomUUID(),
+      input,
+      participants: creationParticipants(input, roles, who),
+    }));
+    const tasks = batch.flatMap(({ id, input, participants }) =>
+      (input.tasks ?? []).map((task) => {
+        const assigneeId = task.assigneeId ?? input.leadId;
+        validAssignee(assigneeId, participants, roles);
+        return {
+          id: randomUUID(),
+          requirementId: id,
+          title: task.title.trim(),
+          description: task.description ?? '',
+          acceptance: task.acceptance ?? '',
+          assigneeId,
+          createdBy: who.userId,
+        };
+      }),
+    );
+    await tx.insert(schema.requirement).values(
+      batch.map(({ id, input }) => ({
+        id,
+        projectId,
+        title: input.title.trim(),
+        description: input.description,
+        acceptance: input.acceptance,
+        leadId: input.leadId,
+        createdBy: who.userId,
+      })),
+    );
+    if (baselines.length)
+      await tx.insert(schema.requirementWorktreePlan).values(
+        batch.map(({ id }) => ({
+          requirementId: id,
+          repositories: baselines.map((entry) => ({
+            ...entry,
+            branch: 'rdws/' + id + '/' + entry.repositoryId,
+            worktreePath: 'worktrees/' + entry.repositoryId,
+            gitStorePath: '.gitstore/' + entry.repositoryId + '.git',
+          })),
+        })),
+      );
+    await tx
+      .insert(schema.requirementParticipant)
+      .values(
+        batch.flatMap(({ id, participants }) =>
+          participants.map((person) => ({ ...person, requirementId: id })),
+        ),
+      );
+    const events = batch.map(({ id, input, participants }) =>
+      eventRecord(id, who, input.commandId, 1, 'requirement.created', null, {
+        stage: 'assignment',
+        participants,
+      }),
+    );
+    if (tasks.length) {
+      const commandIds = new Map<string, string>(
+        batch.map(({ id, input }) => [id, input.commandId]),
+      );
+      for (const task of await tx.insert(schema.task).values(tasks).returning())
+        events.push(
+          eventRecord(
+            task.requirementId,
+            who,
+            commandIds.get(task.requirementId)!,
+            1,
+            'task.created',
+            null,
+            task,
+            task.id,
+          ),
+        );
+    }
+    await tx.insert(schema.requirementEvent).values(events);
+    return batch.map(({ id }) => id);
+  }
+
   async function create(
     who: Actor,
     projectId: string,
@@ -448,90 +602,254 @@ export function createBusiness(db: Database) {
       if ('result' in receipt)
         return { ...createdRequirement(receipt.result), first: false };
       if (!admission.validTargets) businessError(400, '分派成员不存在或已停用');
-      const { roles } = admission;
-      const own = roles
-        .filter((r) => r.userId === who.userId)
-        .map((r) => r.role);
-      if (
-        !own.some((r) => r === 'project_admin' || r === 'requirement_manager')
-      )
-        businessError(403, '无权创建需求');
-      const participants: { userId: string; role: string }[] = [];
-      const add = (userId: string, role: string) => {
-        if (!participants.some((p) => p.userId === userId && p.role === role))
-          participants.push({ userId, role });
-      };
-      for (const p of input.participants ?? [])
-        for (const role of p.roles) {
-          if (!roles.some((r) => r.userId === p.userId && r.role === role))
-            businessError(400, '参与角色必须属于当前项目成员');
-          add(p.userId, role);
-        }
-      for (const id of input.participantIds ?? []) {
-        const current = roles.filter((r) => r.userId === id);
-        if (current.length !== 1)
-          businessError(400, '请明确选择成员的参与角色');
-        add(id, current[0]!.role);
-      }
-      if (
-        !roles.some((r) => r.userId === input.leadId && r.role === 'developer')
-      )
-        businessError(400, '开发负责人必须是项目开发成员');
-      add(input.leadId, 'developer');
-      add(
-        who.userId,
-        own.includes('requirement_manager')
-          ? 'requirement_manager'
-          : 'project_admin',
-      );
-      const id = randomUUID();
-      await tx.insert(schema.requirement).values({
-        id,
-        projectId,
-        title: input.title.trim(),
-        description: input.description,
-        acceptance: input.acceptance,
-        leadId: input.leadId,
-        createdBy: who.userId,
-      });
-      if (baselines.length)
-        await tx.insert(schema.requirementWorktreePlan).values({
-          requirementId: id,
-          repositories: baselines.map((entry) => ({
-            ...entry,
-            branch: 'rdws/' + id + '/' + entry.repositoryId,
-            worktreePath: 'worktrees/' + entry.repositoryId,
-            gitStorePath: '.gitstore/' + entry.repositoryId + '.git',
-          })),
-        });
-      await tx
-        .insert(schema.requirementParticipant)
-        .values(participants.map((p) => ({ ...p, requirementId: id })));
-      await event(
+      const [id] = await persistRequirements(
         tx,
-        id,
         who,
-        input.commandId,
-        1,
-        'requirement.created',
-        null,
-        { stage: 'assignment', participants },
+        projectId,
+        [input],
+        admission.roles,
+        baselines,
       );
-      for (const task of input.tasks ?? [])
-        await insertTask(
-          tx,
-          id,
-          task,
-          input.leadId,
-          who,
-          input.commandId,
-          1,
-          participants,
-          roles,
-        );
+      if (!id) throw new Error('Missing created requirement');
       await finish(tx, receipt.value, { id });
       current();
       return { id, first: true };
+    });
+  }
+  async function importAuthority(
+    tx: Transaction,
+    who: Actor,
+    projectId: string,
+  ) {
+    const authority = await identity(tx, who, projectId);
+    if (!mayCreate(authority.roles, who))
+      businessError(403, '无权批量导入当前项目的需求');
+    return authority;
+  }
+  async function authorizeImport(
+    who: Actor,
+    projectId: string,
+    ids: string[] = [],
+  ) {
+    return db.transaction(
+      async (tx) => {
+        const { roles, session } = await importAuthority(tx, who, projectId);
+        if (ids.length) {
+          const scoped = await tx
+            .select({ id: schema.requirement.id })
+            .from(schema.requirement)
+            .where(
+              and(
+                eq(schema.requirement.projectId, projectId),
+                inArray(schema.requirement.id, ids),
+              ),
+            );
+          if (scoped.length !== ids.length)
+            businessError(403, '无法读取该批次的当前需求');
+          if (!roles.some((role) => role.role === 'project_admin')) {
+            const own = roles.map((role) => role.role);
+            const participants = await tx
+              .selectDistinct({
+                id: schema.requirementParticipant.requirementId,
+              })
+              .from(schema.requirementParticipant)
+              .where(
+                and(
+                  inArray(schema.requirementParticipant.requirementId, ids),
+                  eq(schema.requirementParticipant.userId, who.userId),
+                  inArray(schema.requirementParticipant.role, own),
+                ),
+              );
+            if (participants.length !== ids.length)
+              businessError(403, '无法读取该批次的当前需求');
+          }
+        }
+        if (session.expiresAt <= new Date())
+          businessError(401, '登录已失效，请重新登录');
+      },
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
+  }
+  async function importTargets(
+    tx: Transaction,
+    projectId: string,
+    rows: NormalizedImportRows,
+  ) {
+    const names = importTargetLogins(rows);
+    if (!names.length) return [];
+    const accounts = await tx
+      .selectDistinct({ id: schema.user.id })
+      .from(schema.user)
+      .innerJoin(
+        schema.projectMember,
+        eq(schema.projectMember.userId, schema.user.id),
+      )
+      .where(
+        and(
+          eq(schema.projectMember.projectId, projectId),
+          inArray(schema.user.username, names),
+        ),
+      );
+    return accounts.map(({ id }) => id);
+  }
+  async function previewImport(
+    who: Actor,
+    projectId: string,
+    input: RequirementImportRow[],
+  ) {
+    const normalized = normalizeImportRows(input);
+    return db.transaction(
+      async (tx) => {
+        await importAuthority(tx, who, projectId);
+        const targets = await importTargets(tx, projectId, normalized);
+        const { users, roles, session } = await identity(
+          tx,
+          who,
+          projectId,
+          targets,
+          false,
+          true,
+        );
+        const { feedback } = validateImportRows(normalized, users, roles, '');
+        if (session.expiresAt <= new Date())
+          businessError(401, '登录已失效，请重新登录');
+        return { rows: feedback };
+      },
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
+  }
+  async function importReceipt(
+    tx: Transaction,
+    who: Actor,
+    projectId: string,
+    commandId: string,
+    digest: string,
+  ): Promise<StoredImport | 'conflict' | undefined> {
+    const table = schema.commandReceipt;
+    const [row] = await tx
+      .select({ digest: table.digest, result: table.result })
+      .from(table)
+      .where(
+        and(
+          eq(table.actorId, who.userId),
+          eq(table.scope, 'project:' + projectId),
+          eq(table.operation, 'requirement.import'),
+          eq(table.commandId, commandId),
+        ),
+      );
+    if (!row) return undefined;
+    return row.digest === digest ? (row.result as StoredImport) : 'conflict';
+  }
+  async function findImportReceipt(
+    who: Actor,
+    projectId: string,
+    input: RequirementImportInput,
+  ) {
+    const digest = digestOf(normalizeImportRows(input.rows));
+    return db.transaction(
+      async (tx) => {
+        const { session } = await importAuthority(tx, who, projectId);
+        const result = await importReceipt(
+          tx,
+          who,
+          projectId,
+          input.commandId,
+          digest,
+        );
+        if (session.expiresAt <= new Date())
+          businessError(401, '登录已失效，请重新登录');
+        return result;
+      },
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
+  }
+  async function commitImport(
+    who: Actor,
+    projectId: string,
+    input: RequirementImportInput,
+    baselines: PublishedBaseline[],
+    confirm: () => void,
+  ): Promise<StoredImport | 'conflict'> {
+    const normalized = normalizeImportRows(input.rows);
+    const digest = digestOf(normalized),
+      deadline = performance.now() + 7500;
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`set local transaction_timeout='8s'`);
+      await tx.execute(sql`set local lock_timeout='3s'`);
+      const before = await importAuthority(tx, who, projectId);
+      const old = await importReceipt(
+        tx,
+        who,
+        projectId,
+        input.commandId,
+        digest,
+      );
+      const checked = (expires: Date) => {
+        if (expires <= new Date()) businessError(401, '登录已失效，请重新登录');
+        if (performance.now() >= deadline)
+          businessError(503, '本批次入库等待超时，请核对原批次');
+        confirm();
+      };
+      checked(before.session.expiresAt);
+      if (old) return old;
+      const targets = await importTargets(tx, projectId, normalized);
+      const { users, roles, session } = await identity(
+        tx,
+        who,
+        projectId,
+        targets,
+        true,
+        true,
+      );
+      if (!mayCreate(roles, who))
+        businessError(403, '无权批量导入当前项目的需求');
+      const reservation = await reserve(
+        tx,
+        who,
+        'project:' + projectId,
+        'requirement.import',
+        input.commandId,
+        normalized,
+      ).catch((error: unknown) => {
+        if ((error as { statusCode?: number }).statusCode === 409)
+          return 'conflict' as const;
+        throw error;
+      });
+      checked(session.expiresAt);
+      if (reservation === 'conflict') return reservation;
+      if ('result' in reservation) return reservation.result as StoredImport;
+      const { feedback, inputs } = validateImportRows(
+        normalized,
+        users,
+        roles,
+        input.commandId,
+      );
+      let receipt: StoredImport = {
+        commandId: input.commandId,
+        status: 'rejected',
+        rows: feedback,
+      };
+      if (
+        feedback.every((row) => !row.issues.length) &&
+        inputs.length === normalized.length
+      ) {
+        const ids = await persistRequirements(
+          tx,
+          who,
+          projectId,
+          inputs,
+          roles,
+          baselines,
+        );
+        receipt = {
+          commandId: input.commandId,
+          status: 'created',
+          rows: normalized.map(({ row }, index) => ({ row, id: ids[index]! })),
+        };
+      }
+      await finish(tx, reservation.value, receipt);
+      checked(session.expiresAt);
+      return receipt;
     });
   }
   async function execute(who: Actor, id: string, input: BusinessCommand) {
@@ -1920,6 +2238,10 @@ export function createBusiness(db: Database) {
   }
   return {
     create,
+    authorizeImport,
+    previewImport,
+    findImportReceipt,
+    commitImport,
     findCreatedRequirement,
     execute,
     read,

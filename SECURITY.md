@@ -46,6 +46,10 @@ BFF 从已鉴权需求的 PostgreSQL 归属选取 Native 实例。项目具有�
 
 人员维护由当前项目管理员或兼具该需求参与关系的需求经理发起，按本次登录鉴权。事务校验有效角色和任务接手资格，人员、任务、历史与回执同事务写入。移除参与角色时，仅阻断所涉账号在当前需求的发出中 HTTP、转发、双向连接及新上下文。原提交未知时，服务器取回原需求行锁后核对原命令，不向触发核对的其他账号返回回执。提交确认后撤回该需求内所有相关登录，Native 通知失败时使用短 Peer 租约结束旧授权。同项目其他需求继续按其当前权限运行。 [人员维护验收](docs/02-directory-and-engineering-design.html#t11-personnel-delivery-20261119)
 
+## 需求批量导入
+
+CSV 和 XLSX 原文件在浏览器内解析。XLSX 解压受单项及总量限制，拒绝公式单元格、外部包关系与自定义 XML 实体。BFF 接收文本行，读取请求体前核对来源、Cookie、页面观察登录和项目创建权。预览事务只读。提交在事务内复查当前项目角色，需求、人员、初始任务、历史、冻结计划及成功回执一起入库。查询原回执须通过当前创建权限及对应需求读权限，响应禁止缓存。 [批量导入验收](docs/02-directory-and-engineering-design.html#t11-import-delivery-20261119)
+
 ## 当前依赖审计（2026-11-18，未修复）
 
 本轮 `pnpm audit --prod --audit-level high` 返回 1：1 项 high、3 项 moderate。新增识别的高危为 `picomatch@4.0.7` 的重复 extglob ReDoS，[官方公告 GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf) 当前列出受影响版本 ≤4.0.7、无修复版本。没有隐藏通告、修改上游源码或以未经验证的版本覆盖依赖。

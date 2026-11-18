@@ -1,9 +1,16 @@
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
-import type { PoolClient } from 'pg';
-import { connectDatabase } from '@rdws/db';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { Client, type PoolClient } from 'pg';
 import { loadEnvironment } from './env.mjs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
+import {
+  anchorTargets,
+  clearPgDefaults,
+  databaseIdentity,
+  explicitDatabaseConnection,
+  grantAnchorWriter,
+} from './trace-anchor-db.mjs';
 export async function grantApplication(
   client: Pick<PoolClient, 'query'>,
   application: 'rdws_app' | 'rdws_test_app',
@@ -49,22 +56,41 @@ export async function grantApplication(
 }
 async function main() {
   loadEnvironment(process.env.RDWS_MODE || 'development');
-  const { pool, db } = connectDatabase(process.env.DATABASE_MIGRATION_URL!);
+  const test = process.env.RDWS_MODE === 'test';
+  const database = test ? 'rdws_test' : 'rdws_dev';
+  const owner = anchorTargets[database].owner;
+  const config = explicitDatabaseConnection(
+    process.env.DATABASE_MIGRATION_URL,
+    'owner',
+  );
+  if (config?.database !== database)
+    throw new Error('Explicit migration connection is required');
+  clearPgDefaults();
+  const client = new Client({
+    ...config,
+    options: '-c search_path=public,pg_temp',
+    connectionTimeoutMillis: 5000,
+  });
+  client.on('error', () => {});
   try {
-    await migrate(db, { migrationsFolder: 'packages/db/migrations' });
-    const application =
-      process.env.RDWS_MODE === 'test' ? 'rdws_test_app' : 'rdws_app';
-    const client = await pool.connect();
-    try {
-      await grantApplication(client, application);
-    } finally {
-      client.release();
-    }
+    await client.connect();
+    const identity = await databaseIdentity(client);
+    if (
+      identity.database !== database ||
+      identity.login !== owner ||
+      identity.role !== owner
+    )
+      throw new Error('Unexpected migration identity');
+    await migrate(drizzle(client), {
+      migrationsFolder: 'packages/db/migrations',
+    });
+    await grantApplication(client, test ? 'rdws_test_app' : 'rdws_app');
+    await grantAnchorWriter(client, database);
     console.log(
       'Migrations applied; application role has data access without schema ownership.',
     );
   } finally {
-    await pool.end();
+    await client.end();
   }
 }
 if (

@@ -71,6 +71,13 @@
       "when": 1795018160208,
       "tag": "0009_requirement_capability_binding",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795032730292,
+      "tag": "0010_green_korg",
+      "breakpoints": true
     }
   ]
 }

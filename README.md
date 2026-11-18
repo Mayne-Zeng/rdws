@@ -149,7 +149,22 @@ pnpm --silent trace:prefix hash "$journal" "$through_byte"
 pnpm --silent trace:prefix verify "$journal" "$through_byte" "$sha256"
 ```
 
-命令按原编码读取 `[0, through_byte)` 并输出一条 JSON。退出码 0 表示成功计算或匹配，1 表示与既有摘要不符或文件已稳定截短，2 表示输入或读取证据不可用。读取期间观察到的文件变化返回 `source-changed`。截止位置之后已有的追加不影响核对。独立持久锚点和只读校验账号的接线见[研发清单 T16](docs/05-development-backlog.md#主计划任务)。
+命令按原编码读取 `[0, through_byte)` 并输出一条 JSON。退出码 0 表示成功计算或匹配，1 表示与既有摘要不符或文件已稳定截短，2 表示输入或读取证据不可用。读取期间观察到的文件变化返回 `source-changed`。截止位置之后已有的追加不影响核对。
+
+### 独立哈希锚点（T16）
+
+迁移 0010 增加独立的 `audit.session_log_anchor`。部署方在目标库配置专用直接登录，开发库使用 `rdws_anchor_writer`，测试库使用 `rdws_test_anchor_writer`。给该账号单独授予目标库 CONNECT，并通过私有渠道发放密码。按对应环境运行 `pnpm db:migrate` 后，专用账号可读取锚点并追加限定列。账号不存在时，迁移仍可安装锚点表，待账号就绪后重跑授权。
+
+以独立 OS 身份只读挂载受信原件或快照，在私有运行环境设置 `RDWS_ANCHOR_SOURCE_DIR` 为该实例的规范 `project-<id>/sessions` 路径。用 `RDWS_ANCHOR_DATABASE_URL` 指定专用登录的用户名、密码、主机与数据库，端口缺省为 5432。连接可使用 `sslmode=verify-full` 或本地隔离验证所用的 `sslmode=disable`。从停稳并确认刷盘的原件或对应快照取得 `journal` 和 `through_byte` 后，执行同一物理坐标的记录与校验。
+
+```sh
+pnpm --silent trace:anchor record "$journal" "$through_byte"
+pnpm --silent trace:anchor verify "$journal" "$through_byte"
+```
+
+重复记录同一前缀返回原时间。退出码 1 表示同键异文、摘要不符或稳定截短，退出码 2 表示输入、权限、来源、锚点或结果暂不可用。`unconfirmed` 后按原坐标核对，`missing-anchor` 只表示本次读取暂不可见。需要停止追加时，部署方可撤销专用账号在锚点表上的列级 INSERT 并保留 SELECT。重跑迁移保留此只读授权。归档保留锚点引用的项目和会话身份行。
+
+普通集成验证使用本机已有的项目固定 PostgreSQL 镜像。用本机已有的 `node:24.20.0-bookworm-slim` 镜像执行 `RDWS_TEST_ANCHOR_READONLY=1 pnpm test tests/integration/trace-anchor.test.ts`，可复验独立 Linux 非 root 进程的只读挂载。自动提供可信截止和正式环境只读部署仍按研发清单验收。[T16 工程方案](docs/02-directory-and-engineering-design.html#t16-anchor-plan-20261119)
 
 ## 这个仓库现在有什么
 

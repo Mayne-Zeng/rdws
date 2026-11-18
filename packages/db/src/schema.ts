@@ -1,7 +1,9 @@
 import { sql } from 'drizzle-orm';
 import {
   pgTable,
+  pgSchema,
   check,
+  bigint,
   text,
   timestamp,
   boolean,
@@ -176,6 +178,58 @@ export const nativeSession = pgTable('native_session', {
   sourceThroughSeq: integer('source_through_seq'),
   ...timestamps,
 });
+export const audit = pgSchema('audit');
+export const sessionLogAnchor = audit.table(
+  'session_log_anchor',
+  {
+    projectId: text('project_id')
+      .notNull()
+      .references(() => project.id),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => nativeSession.id),
+    bucketSha256: text('bucket_sha256').notNull(),
+    journalName: text('journal_name').notNull(),
+    throughByte: bigint('through_byte', { mode: 'number' }).notNull(),
+    sha256: text('sha256').notNull(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    primaryKey({
+      name: 'session_log_anchor_key',
+      columns: [
+        t.projectId,
+        t.sessionId,
+        t.bucketSha256,
+        t.journalName,
+        t.throughByte,
+      ],
+    }),
+    check(
+      'session_log_anchor_project',
+      sql`${t.projectId} collate "C" ~ '^[a-z0-9][a-z0-9_-]{0,63}$'`,
+    ),
+    check(
+      'session_log_anchor_session',
+      sql`${t.sessionId} collate "C" ~ '^session-[a-zA-Z0-9-]{1,120}$'`,
+    ),
+    check(
+      'session_log_anchor_digest',
+      sql`${t.sha256} collate "C" ~ '^[a-f0-9]{64}$' and ${t.bucketSha256} collate "C" ~ '^[a-f0-9]{64}$'`,
+    ),
+    check(
+      'session_log_anchor_cutoff',
+      sql`${t.throughByte} between 1 and 9007199254740991`,
+    ),
+    check(
+      'session_log_anchor_generation',
+      sql`${t.journalName} collate "C" ~ '^session([.]v[1-9][0-9]{0,15})?[.]jsonl([.]zstd)?$'
+        and coalesce(substring(${t.journalName} from '^session[.]v([1-9][0-9]{0,15})[.]jsonl')::numeric, 0) <= 9007199254740991`,
+    ),
+  ],
+);
 export const sessionOperation = pgTable(
   'session_operation',
   {

@@ -24,6 +24,7 @@ function sameVersion(expected, observed) {
     observed?.isFile() &&
     expected.dev === observed.dev &&
     expected.ino === observed.ino &&
+    expected.nlink === observed.nlink &&
     expected.size === observed.size &&
     expected.mtimeNs === observed.mtimeNs &&
     expected.ctimeNs === observed.ctimeNs
@@ -49,7 +50,12 @@ async function hashBytes(file, throughByte) {
 }
 
 /** @param {string} path @param {number} throughByte @param {string} [expected] */
-export async function inspectJournalPrefix(path, throughByte, expected) {
+export async function inspectJournalPrefix(
+  path,
+  throughByte,
+  expected,
+  { singleLink = false } = {},
+) {
   if (
     !isAbsolute(path) ||
     resolve(path) !== path ||
@@ -67,6 +73,8 @@ export async function inspectJournalPrefix(path, throughByte, expected) {
         status: initial === null ? 'invalid-source' : 'source-unavailable',
         throughByte,
       };
+    if (singleLink && initial.nlink !== 1n)
+      return { status: 'invalid-source', throughByte };
     const file = await open(
       path,
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,

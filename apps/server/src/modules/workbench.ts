@@ -65,6 +65,10 @@ import { currentAccount, type createAuth } from './auth.ts';
 import { runtimeHome } from '../../../../scripts/env.mjs';
 type Database = ReturnType<typeof connectDatabase>['db'];
 type Auth = ReturnType<typeof createAuth>;
+const templateBindingPath = '/api/requirements/:id/capability-template';
+const isTemplateBindingRequest = (request: FastifyRequest) =>
+  request.routeOptions.url === templateBindingPath &&
+  (request.method === 'GET' || request.method === 'POST');
 function fail(statusCode: number, message: string): never {
   throw Object.assign(new Error(message), { statusCode });
 }
@@ -584,8 +588,9 @@ export async function registerWorkbench(
           key !== 'x-rdws-client-generation' &&
           !(
             key === 'x-rdws-edit-session' &&
-            ((request.method === 'GET' &&
-              request.routeOptions.url === '/api/requirements/:id') ||
+            (isTemplateBindingRequest(request) ||
+              (request.method === 'GET' &&
+                request.routeOptions.url === '/api/requirements/:id') ||
               (request.method === 'POST' &&
                 request.routeOptions.url === '/api/requirements/:id/details'))
           ),
@@ -627,13 +632,17 @@ export async function registerWorkbench(
     )
       businessError(401, '当前权限正在变更，请刷新后重试');
   }
-  app.addHook('preHandler', async (request) => {
+  app.addHook('preHandler', async (request, reply) => {
+    if (request.routeOptions.url === templateBindingPath)
+      reply.header('cache-control', 'no-store');
     const path = new URL(request.url, expectedOrigin).pathname;
     const project = /^\/api\/projects\/([^/]+)/.exec(path);
     const demand = /^\/api\/(?:requirements|dsh)\/([^/]+)/.exec(path);
     if (path !== '/api/projects' && !project && !demand) return;
+    const templateBinding = isTemplateBindingRequest(request);
     const epoch = authorizationEpoch;
     const who = await actor(request.headers);
+    if (templateBinding) verifyEditLogin(request, who.authSessionId);
     const projectId = project
       ? decodeURIComponent(project[1]!)
       : demand
@@ -1390,7 +1399,7 @@ export async function registerWorkbench(
     if (!original?.projectId) businessError(404, '需求不存在');
     return { ...original, projectId: original.projectId };
   }
-  function verifyDetailsLogin(request: FastifyRequest, authSessionId: string) {
+  function verifyEditLogin(request: FastifyRequest, authSessionId: string) {
     const observed = request.headers['x-rdws-edit-session'];
     if (
       (request.method === 'POST' || observed !== undefined) &&
@@ -1407,7 +1416,7 @@ export async function registerWorkbench(
     },
     async (request) => {
       const scope = requestDemandScope(request);
-      verifyDetailsLogin(request, scope.authSessionId);
+      verifyEditLogin(request, scope.authSessionId);
       const { id } = request.params;
       const detail = await business.read(scope, id);
       if (detail.requirement.projectId !== scope.projectId)
@@ -1458,7 +1467,7 @@ export async function registerWorkbench(
           .code(400)
           .send({ code: 'invalid-details', error: '需求资料参数不正确' });
       const scope = requestDemandScope(request);
-      verifyDetailsLogin(request, scope.authSessionId);
+      verifyEditLogin(request, scope.authSessionId);
       const { id } = request.params;
       const result = await business.editDetails(
         scope,
@@ -1489,28 +1498,24 @@ export async function registerWorkbench(
       businessError(503, '请先升级需求模板绑定数据库结构');
     throw error;
   }
-  app.get<{ Params: { id: string } }>(
-    '/api/requirements/:id/capability-template',
-    async (request, reply) => {
-      reply.header('cache-control', 'no-store');
-      const scope = requestDemandScope(request);
-      const { id } = request.params;
-      const result = await business
-        .readTemplateBinding(scope, id, scope.projectId)
-        .catch(templateBindingFailure);
-      responseScopes.set(request, {
-        ...scope,
-        demandAccess: {
-          requirementId: id,
-          projectId: scope.projectId,
-          authority: result.options !== undefined ? 'project-admin' : 'reader',
-        },
-      });
-      return result;
-    },
-  );
+  app.get<{ Params: { id: string } }>(templateBindingPath, async (request) => {
+    const scope = requestDemandScope(request);
+    const { id } = request.params;
+    const result = await business
+      .readTemplateBinding(scope, id, scope.projectId)
+      .catch(templateBindingFailure);
+    responseScopes.set(request, {
+      ...scope,
+      demandAccess: {
+        requirementId: id,
+        projectId: scope.projectId,
+        authority: result.options !== undefined ? 'project-admin' : 'reader',
+      },
+    });
+    return result;
+  });
   app.post<{ Params: { id: string }; Body: TemplateBindingInput }>(
-    '/api/requirements/:id/capability-template',
+    templateBindingPath,
     {
       schema: { body: TemplateBindingInput },
       async preValidation(request, reply) {

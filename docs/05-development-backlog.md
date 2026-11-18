@@ -47,7 +47,7 @@
 | 唯一协调者   | `codex-t00-2c7273ae`（既有主会话，并行包只向此协调登记）                                                                                                                                         |
 | 协调检出     | 本仓库 Git 主工作树 `main`，T06 实现起点 `a2dda16`                                                                                                                                               |
 | 已有占用     | T02 保留用户侧验收；T03 已提交；本地 5173／3001 与 poc Native 保留                                                                                                                               |
-| 新工作包占用 | T06 macOS 验收完成。T07 仍待 T02 验收，T14 绑定与 T16 锚点保留方案审阅检查点                                                                                                                     |
+| 新工作包占用 | T07 仍待 T02 验收，T11 已交付资料编辑，T14 待 Native 生效，T16 保留锚点方案检查点                                                                                                                |
 | 运行资源     | 运行根为用户主目录 .rdws（仓库外绝对路径，指纹见 T00 私有证据）；rdws_dev/rdws_app 与 rdws_test/rdws_test_app；PG 55432、Compose rdws-local；测试 5317／3303 未监听但仍须排队；实例锁详 T00 证据 |
 
 当前 Playwright 配置固定使用 5317／3303，真实套件继承该配置；数据库脚本固定 Compose project 为 rdws-local。独立工作树或单改 RDWS_HOME 不足以证明这些资源已隔离。仅在配置和命令已验证支持独立资源、且无现有占用时并行运行对应检查；其余测试或服务启动由协调者排队串行执行。未经协调，不初始化、迁移、重建或抢占共享数据库、容器、端口或原生实例。
@@ -186,6 +186,7 @@
   - 已交付子项：[平台白名单登记](02-directory-and-engineering-design.html#t14-allowlist-delivery-20261118)。平台管理员可登记和停用精确审核版本，并核对原命令和当前清单。新增迁移已在隔离测试库验证。
   - 已交付子项：[项目能力模板版本](02-directory-and-engineering-design.html#t14-template-delivery-20261118)。平台管理员发布只引用已审核精确版本的项目模板，项目成员读取本项目版本和停用状态。正式页面待用户侧视觉验收。
   - 已交付子项：[需求模板绑定配置](02-directory-and-engineering-design.html#t14-demand-binding-delivery-20261119)。项目管理员可绑定确切版本、重放原命令并读取当前配置。隔离测试库迁移 0009、独立复审、整仓 137 项、浏览器 29 项和基线校验通过。待生成并持久化不可变 preset、关联会话创建及验证旧会话在线和冷恢复。
+  - 已交付修复：[模板绑定登录隔离](02-directory-and-engineering-design.html#t14-binding-login-20261119)。旧页面跟随原登录，换账号后写入拒绝并保留原命令，原账号重新登录可同键核对。独立复审、整仓 142 项、浏览器 30 项和基线校验通过，无新增迁移。
   - 新验收证据：[原生 preset 冷恢复验证](02-directory-and-engineering-design.html#t14-native-preset-evidence-20261118)。固定版本真实进程验证新旧 ID 隔离、同 ID 被覆盖后旧会话装配变化以及定义缺失时拒绝恢复。运行时生成及会话应用仍待接线。
   - 新验收证据：[原生 preset 在线装载验证](02-directory-and-engineering-design.html#t14-native-preset-live-20261118)。宿主可在同一运行进程追加新版本，旧会话继续使用原组合，加载失败拒绝新建。正式接线仍需持久保存不可变定义并校验真实制品。
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Loading } from 'tdesign-react';
 import type {
@@ -89,6 +89,7 @@ export function RequirementTemplate({
 }) {
   const client = useQueryClient();
   const url = `/api/requirements/${encodeURIComponent(id)}/capability-template`;
+  const observedLogin = { 'x-rdws-edit-session': sessionId };
   const key = [
     'requirement-template',
     sessionId,
@@ -99,7 +100,8 @@ export function RequirementTemplate({
   const storageKey = `rdws:requirement-template:${JSON.stringify([userId, id])}`;
   const query = useQuery({
     queryKey: key,
-    queryFn: ({ signal }) => api<RequirementTemplateBinding>(url, { signal }),
+    queryFn: ({ signal }) =>
+      api<RequirementTemplateBinding>(url, { signal, headers: observedLogin }),
     refetchOnMount: 'always',
     refetchInterval: 2000,
   });
@@ -112,7 +114,7 @@ export function RequirementTemplate({
   const running = useRef(false);
   const live = useRef(false);
   const generation = useRef(0);
-  useEffect(() => {
+  useLayoutEffect(() => {
     live.current = true;
     return () => {
       live.current = false;
@@ -123,7 +125,7 @@ export function RequirementTemplate({
   const current =
     query.isFetchedAfterMount && !query.isError ? query.data : undefined;
   const admin = current?.options !== undefined && !checkingAuthority;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (admin) return;
     generation.current++;
     setNotice(undefined);
@@ -139,8 +141,9 @@ export function RequirementTemplate({
       client.getQueryState(key)?.status === 'success' &&
       client.getQueryData<RequirementTemplateBinding>(key)?.options !==
         undefined;
+    const saved = JSON.stringify(input);
     try {
-      sessionStorage.setItem(storageKey, JSON.stringify(input));
+      sessionStorage.setItem(storageKey, saved);
     } catch {
       setError('无法保留待核对操作，请检查浏览器存储后重试。');
       return;
@@ -153,15 +156,15 @@ export function RequirementTemplate({
     try {
       const receipt = await api<unknown>(url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(input),
+        headers: { 'content-type': 'application/json', ...observedLogin },
+        body: saved,
       });
       if (!authorized()) return;
       if (!isTerminalReceipt(receipt, input)) {
         setError('响应与原操作不匹配，请核对原操作。');
         return;
       }
-      if (readPending(storageKey)?.commandId === input.commandId)
+      if (sessionStorage.getItem(storageKey) === saved)
         sessionStorage.removeItem(storageKey);
       setPending(readPending(storageKey));
       setSelection('');

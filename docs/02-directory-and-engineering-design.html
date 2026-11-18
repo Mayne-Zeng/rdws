@@ -756,6 +756,12 @@
   <p><code>caffeinate -i pnpm test:e2e tests/e2e/requirement-template.spec.ts</code> 通过（1 项）。浏览器覆盖已提交 403、未送达后版本停用、同账号重登、残缺 2xx、切换需求后旧结果迟到、读取失败恢复，以及保留参与角色的真实降权。390px 明暗均无横向溢出。T14 剩余工作是不可变制品与 preset 的绑定、会话创建定序及真实在线和冷恢复验收。</p>
   <p><code>caffeinate -i pnpm check</code> 返回 0（22 文件、137 项，类型、lint、格式与构建通过）。<code>caffeinate -i pnpm test:e2e</code> 返回 0（29 项，51.2 秒）。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 个追溯点、16 视图）。</p>
 
+  <h4 id="t14-binding-login-20261119">11.17.9 模板绑定的登录隔离</h4>
+  <p>Change / R3，基线 <code>3c2115e</code>。修复前，模板面板按账号和需求保留待核对命令，浏览器请求缺少与面板登录的绑定。浏览器回归在修复前因缺少匹配的会话头失败，夹具在写请求送达前中止。</p>
+  <p>复用 T11 的 <code>x-rdws-edit-session</code> 观察会话比对。能力模板绑定路由在 Cookie 认证后、查询需求项目与事务前完成比对，401 响应带 <code>Cache-Control: no-store</code>。GET 省略请求头仍兼容，POST 要求当前会话。允许列表限于原资料路由和新增的具体模板路由。保留同项目管理员、出站授权和按账号核对原命令的规则。前后端成对更新与回退，刷新页面取得同版本客户端，待核对记录与数据库回执继续留存。</p>
+  <p>方案正确性和安全复审、独立交付复审均为 APPROVE。<code>caffeinate -i pnpm test tests/integration/requirement-template.test.ts tests/integration/requirement-details.test.ts</code> 通过（2 文件、11 项）。核对缺头、错配、无认证及兼容读取与 HEAD 缓存行为，已保存的原回执在错配后仍只归原账号，拒绝后零新增回执。<code>caffeinate -i pnpm test:e2e tests/e2e/requirement-template.spec.ts</code> 通过（1 项）。浏览器换到另一位有权限的账号后，旧页面的保存返回 401，绑定保持原版本。原账号使用新登录恢复同一请求内容，迟到响应没有覆盖当前面板。Native 生效仍在 T14 后续。</p>
+  <p><code>caffeinate -i pnpm check</code> 返回 0（23 文件、142 项，类型、lint、格式和构建通过）。<code>caffeinate -i pnpm test:e2e</code> 返回 0（30 项，54.0 秒）。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 个追溯点、16 视图）。</p>
+
   <h3 id="t16-trace-plan-20261118">11.18 T16 会话轨迹页</h3>
   <p>Change / R2。依据 D7、I2-AUTH、设计基线 Q1／Q2、T16 的轨迹读取、详情和摘要验收，以及已验证的 T02 被动历史分页，交付一条“需求内选会话 → 读取固定逻辑历史 → 展开详情 → 下载已读摘要”的路径。复用 <a href="#session-lifecycle-live-20261118">T02 的真实恢复与被动读取证据</a>，T02 用户侧视觉验收保留。影响面为已有前端导航和历史读取适配，撤销本次功能提交即可恢复原入口。原始持久前缀与独立哈希锚点另按 T16 实现。</p>
   <ol>

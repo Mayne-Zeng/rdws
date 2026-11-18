@@ -49,7 +49,11 @@ const post = async (
   app.inject({
     method: 'POST',
     url: `/api/requirements/${id}/capability-template`,
-    headers: { origin: requestOrigin, cookie: people.get(username)!.cookie },
+    headers: {
+      origin: requestOrigin,
+      cookie: people.get(username)!.cookie,
+      'x-rdws-edit-session': people.get(username)!.sessionId,
+    },
     payload,
   });
 const get = (username: string, id = demand) =>
@@ -268,6 +272,76 @@ afterAll(async () => {
   await application.end();
 });
 
+test('binding checks the observed login before selecting a demand or writing a receipt', async () => {
+  const { cookie, sessionId } = people.get('pm')!;
+  const differentLogin = people.get('tester')!.sessionId;
+  const url = `/api/requirements/${demand}/capability-template`;
+  const input = choice();
+  for (const headers of [
+    { cookie, origin },
+    { cookie, origin, 'x-rdws-edit-session': differentLogin },
+    { origin, 'x-rdws-edit-session': sessionId },
+    { cookie, origin, 'x-rdws-edit-session': `${sessionId}, ${sessionId}` },
+  ]) {
+    const denied = await app.inject({
+      method: 'POST',
+      url,
+      headers,
+      payload: input,
+    });
+    expect(denied.statusCode).toBe(401);
+    expect(denied.headers['cache-control']).toBe('no-store');
+    expect(denied.json()).not.toHaveProperty('commandId');
+  }
+  for (const id of [demand, randomUUID()]) {
+    const denied = await app.inject({
+      method: 'GET',
+      url: `/api/requirements/${id}/capability-template`,
+      headers: { cookie, 'x-rdws-edit-session': differentLogin },
+    });
+    expect(denied.statusCode).toBe(401);
+    expect(denied.headers['cache-control']).toBe('no-store');
+    expect(denied.json()).not.toHaveProperty('options');
+  }
+  expect(
+    (
+      await app.inject({
+        method: 'GET',
+        url: `/api/projects/${project}/requirements`,
+        headers: { cookie, 'x-rdws-edit-session': sessionId },
+      })
+    ).statusCode,
+  ).toBe(403);
+  const current = await app.inject({
+    method: 'GET',
+    url,
+    headers: { cookie, 'x-rdws-edit-session': sessionId },
+  });
+  expect(current.statusCode).toBe(200);
+  expect(current.json()).toEqual((await get('pm')).json());
+  expect(current.json().binding).toBeNull();
+  const head = await app.inject({ method: 'HEAD', url, headers: { cookie } });
+  expect(head.statusCode).toBe(200);
+  expect(head.headers['cache-control']).toBe('no-store');
+  expect(head.body).toBe('');
+  expect(
+    (
+      await app.inject({
+        method: 'HEAD',
+        url,
+        headers: { cookie, 'x-rdws-edit-session': sessionId },
+      })
+    ).statusCode,
+  ).toBe(403);
+  expect(
+    (
+      await pool.query('select 1 from command_receipt where command_id=$1', [
+        input.commandId,
+      ])
+    ).rowCount,
+  ).toBe(0);
+});
+
 test('only project admins bind exact published versions and other participants see a minimal state', async () => {
   expect((await get('pm')).json()).toEqual({
     binding: null,
@@ -300,6 +374,27 @@ test('only project admins bind exact published versions and other participants s
     before: null,
     after: { templateId, revision: 1 },
   });
+  const staleReceipt = await app.inject({
+    method: 'POST',
+    url: `/api/requirements/${demand}/capability-template`,
+    headers: {
+      origin,
+      cookie: people.get('tester')!.cookie,
+      'x-rdws-edit-session': people.get('pm')!.sessionId,
+    },
+    payload: first,
+  });
+  expect(staleReceipt.statusCode).toBe(401);
+  expect(staleReceipt.headers['cache-control']).toBe('no-store');
+  expect(staleReceipt.json()).not.toHaveProperty('commandId');
+  expect(
+    (
+      await pool.query(
+        'select actor_id from command_receipt where command_id=$1',
+        [first.commandId],
+      )
+    ).rows,
+  ).toEqual([{ actor_id: people.get('pm')!.id }]);
   const current = await get('lead');
   expect(current.headers['cache-control']).toBe('no-store');
   expect(current.json()).toEqual({

@@ -32,6 +32,8 @@ test('requirement template recovery stays with the same command and the current 
       accounts.find((row) => row.username === username)!,
     );
   const received: TemplateBindingInput[] = [];
+  let firstSession = '';
+  let firstRequestMatches = false;
   let outcome:
     | 'rejected-after-commit'
     | 'not-sent'
@@ -39,6 +41,8 @@ test('requirement template recovery stays with the same command and the current 
     | 'partial-receipt'
     | undefined;
   let readDenied = false;
+  let pausedReads: Promise<void> | undefined;
+  let resumeReads: () => void = () => {};
   let isolated = false;
   let release!: () => void, notifyArrival!: () => void;
   const held = new Promise<void>((resolve) => {
@@ -100,8 +104,13 @@ test('requirement template recovery stays with the same command and the current 
         ],
       );
     }
+    await page.route(`**/api/requirements/${id}`, async (route) => {
+      await pausedReads;
+      return route.continue();
+    });
     await page.route('**' + path, async (route) => {
       if (route.request().method() === 'GET') {
+        await pausedReads;
         if (readDenied)
           return route.fulfill({
             status: 403,
@@ -111,6 +120,11 @@ test('requirement template recovery stays with the same command and the current 
       }
       const operation = route.request().postDataJSON() as TemplateBindingInput;
       received.push(operation);
+      if (received.length === 1) {
+        firstRequestMatches =
+          route.request().headers()['x-rdws-edit-session'] === firstSession;
+        if (!firstRequestMatches) return route.abort('failed');
+      }
       const mode = outcome;
       outcome = undefined;
       if (mode === 'not-sent') return route.abort('failed');
@@ -134,6 +148,9 @@ test('requirement template recovery stays with the same command and the current 
       return route.continue();
     });
     await login('pm');
+    firstSession = (
+      await (await page.request.get('/api/auth/get-session')).json()
+    ).session.id as string;
     await page.setViewportSize({ width: 390, height: 844 });
     await page.emulateMedia({ colorScheme: 'light' });
     await page.goto(url);
@@ -145,6 +162,7 @@ test('requirement template recovery stays with the same command and the current 
     await picker.selectOption(`${templateId}:1`);
     outcome = 'rejected-after-commit';
     await submit.click();
+    await expect.poll(() => firstRequestMatches).toBe(true);
     await expect(reconcile).toBeEnabled();
     await expect(panel.getByText(template, { exact: true })).toBeVisible();
     await expect(
@@ -162,13 +180,57 @@ test('requirement template recovery stays with the same command and the current 
     await submit.click();
     await expect(reconcile).toBeEnabled();
     await expect.poll(() => received.length).toBe(3);
+    const unsubmitted = received[2]!;
     expect(
       (
         await db.query('select 1 from command_receipt where command_id=$1', [
-          received[2]!.commandId,
+          unsubmitted.commandId,
         ])
       ).rowCount,
     ).toBe(0);
+    await expect(
+      panel.getByText('连接中断，操作结果尚未确认', { exact: false }),
+    ).toBeVisible();
+    await db.query("insert into project_member values($1,$2,'project_admin')", [
+      project,
+      lead.id,
+    ]);
+    pausedReads = new Promise<void>((resolve) => {
+      resumeReads = resolve;
+    });
+    await login('lead');
+    const staleResponse = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === path &&
+        response.request().method() === 'POST',
+    );
+    await reconcile.click();
+    const rejected = await staleResponse;
+    expect(rejected.status()).toBe(401);
+    expect(rejected.headers()['cache-control']).toBe('no-store');
+    expect(received.at(-1)).toEqual(unsubmitted);
+    expect(
+      (
+        await db.query('select 1 from command_receipt where command_id=$1', [
+          unsubmitted.commandId,
+        ])
+      ).rowCount,
+    ).toBe(0);
+    expect(
+      (
+        await db.query(
+          'select revision from requirement_capability_binding where requirement_id=$1',
+          [id],
+        )
+      ).rows,
+    ).toEqual([{ revision: 1 }]);
+    await db.query(
+      "delete from project_member where project_id=$1 and user_id=$2 and role='project_admin'",
+      [project, lead.id],
+    );
+    await login('pm');
+    resumeReads();
+    pausedReads = undefined;
     await db.query(
       "update capability_approval set approved=false where reference=$1 and revision='2'",
       [reference],
@@ -178,7 +240,7 @@ test('requirement template recovery stays with the same command and the current 
     await expect(
       panel.getByText('所选版本已不可用，当前绑定未变更。'),
     ).toBeVisible();
-    expect(received[3]).toEqual(received[2]);
+    expect(received.at(-1)).toEqual(unsubmitted);
     await expect(picker.locator(`option[value="${templateId}:2"]`)).toHaveCount(
       0,
     );
@@ -197,6 +259,7 @@ test('requirement template recovery stays with the same command and the current 
     outcome = 'hold-completion';
     await submit.click();
     await arrived;
+    const lateCommand = received.at(-1)!;
     await page.getByRole('button', { name: otherTitle, exact: true }).click();
     await page.getByRole('tab', { name: '上下文' }).click();
     await expect(panel.getByText('尚未绑定能力模板。')).toBeVisible();
@@ -219,7 +282,7 @@ test('requirement template recovery stays with the same command and the current 
     await panel.getByRole('button', { name: '重试读取绑定' }).click();
     await reconcile.click();
     await expect(panel.getByText('当前已绑定该版本。')).toBeVisible();
-    expect(received[5]).toEqual(received[4]);
+    expect(received.at(-1)).toEqual(lateCommand);
 
     await picker.selectOption(`${templateId}:1`);
     outcome = 'partial-receipt';
@@ -227,9 +290,10 @@ test('requirement template recovery stays with the same command and the current 
     await expect(
       panel.getByText('响应与原操作不匹配，请核对原操作。'),
     ).toBeVisible();
+    const incomplete = received.at(-1)!;
     await reconcile.click();
     await expect(panel.getByText('当前已绑定该版本。')).toBeVisible();
-    expect(received[7]).toEqual(received[6]);
+    expect(received.at(-1)).toEqual(incomplete);
 
     await db.query(
       "delete from project_member where project_id=$1 and user_id=$2 and role='project_admin'",
@@ -257,6 +321,7 @@ test('requirement template recovery stays with the same command and the current 
     });
     expect(errors).toEqual([]);
   } finally {
+    resumeReads();
     release();
     if (isolated) {
       await db.query(

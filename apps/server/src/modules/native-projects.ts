@@ -45,6 +45,7 @@ export function createProjectRuntimes(
         (id, userId, requirementId) =>
           closingLogin(id, userId, project, requirementId),
       ),
+      inFlightPrompts: new Set<string>(),
       acceptedPrompts: new Map<string, number>(),
       abandonedRuns: new Set<string>(),
     };
@@ -110,6 +111,7 @@ export interface ProjectRuntime {
   native: NativeWebHost;
   sessions: ReturnType<typeof createSessionOperations>;
   runs: ContextRuns;
+  inFlightPrompts: Set<string>;
   acceptedPrompts: Map<string, number>;
   abandonedRuns: Set<string>;
 }

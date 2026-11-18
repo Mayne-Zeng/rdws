@@ -2353,7 +2353,8 @@ export async function registerWorkbench(
     handler: async (request, reply) => {
       const { id, '*': tail } = request.params as { id: string; '*': string };
       const scope = await ready(request.headers, id);
-      const { native, runs, acceptedPrompts, abandonedRuns } = scope.runtime;
+      const { native, runs, inFlightPrompts, acceptedPrompts, abandonedRuns } =
+        scope.runtime;
       const path =
         '/' +
         tail +
@@ -2411,7 +2412,11 @@ export async function registerWorkbench(
           const claims = native.claims(String(token));
           if (!claims || typeof args.requestId !== 'string')
             fail(403, '会话请求身份无效');
-          promptKey = args.sessionId + ':' + args.requestId;
+          const key = JSON.stringify([args.sessionId, args.requestId]);
+          if (inFlightPrompts.has(key))
+            businessError(409, '原消息正在提交，请稍后核对');
+          inFlightPrompts.add(key);
+          promptKey = key;
           for (const [key, time] of acceptedPrompts)
             if (time < Date.now()) acceptedPrompts.delete(key);
           if (!acceptedPrompts.has(promptKey)) {
@@ -2521,8 +2526,12 @@ export async function registerWorkbench(
         if (transfer.revoked || stale(scope)) fail(401, '授权已变化');
         return reply.send(data);
       } finally {
-        if (pendingRun) await retireRun(scope.runtime, pendingRun.runId);
-        transfers.delete(transfer);
+        try {
+          if (pendingRun) await retireRun(scope.runtime, pendingRun.runId);
+        } finally {
+          if (promptKey) inFlightPrompts.delete(promptKey);
+          transfers.delete(transfer);
+        }
       }
     },
   });

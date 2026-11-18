@@ -691,6 +691,20 @@
   </ul>
   <p>2026-11-19 用户确认上述反复切换和选项失效处理。实现与验证仍在 T13，原生派生沿已批准的 T02 边界，本次没有新增派生决定。</p>
 
+  <p>本人会话选模与逐次推理授权的候选方案均未通过独立复审。模型发送须闭合异步调用准备／退避重试和后台标题授权、旧登录标签页、允许模型在线移出、持久入箱后的冷恢复、实际请求与选模修订的关联及回退保护。本轮先修复已复现的同键并发清理，用户已批准的选模语义继续以 §11.16.7 为准。</p>
+
+  <h4 id="t13-prompt-overlap-plan-20261119">11.16.8 同键提示词的单一提交归属</h4>
+  <p>Change / R2，非批量，基线 <code>2b97f12</code>。复现并修复同项目、同会话、同原生 requestId 的重叠 HTTP 提交可共享运行并由第二请求错误回收首请求的缺陷。授权、Peer、现有 Native 防重及串行提交的结果语义沿用 T02。无新模型接口、Native 修改、数据库迁移、外部动作。与实际推理最终授权的阻塞方案独立。</p>
+  <ol>
+    <li>在 BFF 已完成会话与请求形状校验后，以当前 Host 代次内的会话和 requestId 认领。认领在首次运行异步清理、绑定和转发之前，覆盖已知接受缓存的重叠路径。仅认领者进入已有生命周期。重叠原键返回 HTTP 409，不创建、替换或释放运行；其他请求 ID 与会话继续经原入口。先复现两个已授权请求使用原 Peer 和键时失败者回收原运行，再实施。</li>
+    <li>认领覆盖既有的运行清理并在 finally 释放，挂起重叠请求不占认领。结束后主动使用同一原生 requestId 继续依照原 Native 防重，本轮不改变网络结果未知和冷重启的既有核对边界。复现与验证走实际测试 PostgreSQL 和可控 Native 载体。至少验证同键重叠、异文重叠、独立请求的有界准入、已知接受去重及拒绝后可重新进入。聚焦、整仓、浏览器和基线。回退撤销本提交即可，既有记录无需迁移。</li>
+  </ol>
+  <h4 id="t13-prompt-overlap-evidence-20261119">11.16.9 同键提示词竞争修复证据</h4>
+  <p>改前在可控 Native 载体挂起首个提示词转发，同一登录与 Peer 发送相同 requestId，第二请求调用了首个运行的 run.cancel。<code>pnpm test tests/integration/run-admission.test.ts -t 'overlapping sends'</code> 两条回归均在该断言失败。根因是 <code>ContextRuns.admit</code> 向并发处理器返回同一运行，退出清理未区分提交者。</p>
+  <p>修复在 BFF 项目运行内对 <code>[sessionId, requestId]</code> 同步认领，同键竞争返回 409，不接触该运行。认领保持到首请求清理结束。已知成功后的串行同键继续走原生防重。隔离测试用受控载体暂停首次转发及失败清理，分别核查重复请求与异文被拦、原运行保持、异键及异会话继续、释放后原键可继续。<code>caffeinate -i pnpm test tests/integration/run-admission.test.ts tests/integration/session-lifecycle.test.ts tests/integration/revocation-races.test.ts tests/integration/context-sync.test.ts</code> 返回 0（4 文件、36 项）。</p>
+  <p>独立方案及交付复审均 APPROVE。按交付审阅补充已知接受缓存命中期间的竞争断言，检查第二请求仍为 409 且没有重复登记运行。工作台沿用原有发送失败和输入保留路径。正式会话选模和逐次推理授权仍按前述独立评审结论维护。</p>
+  <p><code>caffeinate -i pnpm check</code> 返回 0（28 文件、180 项，类型、lint、格式及构建通过），构建仍有主包体积提示。<code>caffeinate -i pnpm test:e2e</code> 返回 0（32 项，约 1 分钟），<code>pnpm validate:baseline</code> 返回 0（29 任务、62 个追溯点、16 视图）。本地修订以 <code>fix: isolate overlapping session prompt submissions</code> 为准。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

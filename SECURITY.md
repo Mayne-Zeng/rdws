@@ -8,7 +8,7 @@
 
 ### R-A · 无 Docker 档的隔离强度（C1 不追认）
 
-无 Docker 档下，AI 子进程与 `sources/` 位于同一主机。目标设计结合 OS 用户 / 目录权限、DSH 沙箱与路径守卫；当前 PoC 不开放 Agent 文件或 Shell 工具，尚未验收代码执行与 `sources/` 隔离。Docker PostgreSQL 不隔离 DSH。上游 `SAFETY.zh.md` 明确「沙箱、审批与权限控制不保证隔离」「不得作为不可信工作负载唯一的安全控制」。
+无 Docker 档下，AI 子进程与 `sources/` 位于同一主机。PoC 的 Agent 会话保持零执行工具。T06 提供独立的 macOS Seatbelt 验证入口，工作树外拒写，受管运行根和账户主目录读取受限，其余宿主路径沿用操作系统既有读权限。Git 管理数据由只读查询按需读取。网络、派生进程和链接创建受限。Docker PostgreSQL 不隔离 DSH。上游 `SAFETY.zh.md` 明确「沙箱、审批与权限控制不保证隔离」「不得作为不可信工作负载唯一的安全控制」。 [T06 隔离范围](docs/02-directory-and-engineering-design.html#t06-execution-plan-20261118)
 
 用户未追认「生产 / 不可信负载必须启用 Docker 强隔离档、PoC 验收含该档」这一修订。因此：**本地基础档仅作为开发与功能验证档，不作为生产或不可信工作负载的安全边界**；面向真实项目组或生产数据时的隔离强度由部署方自行评估并承担风险，PoC 不覆盖生产档验收。
 
@@ -30,7 +30,7 @@ BFF 从已鉴权需求的 PostgreSQL 归属选取 Native 实例。项目具有�
 
 ## 需求工作树准备
 
-平台编排层从有同源成功回执的本地镜像读取冻结 SHA。Git 使用固定参数、私有 GitStore 与独立对象。目录领取、准备与就绪检查受平台路径和持久锁约束。计划需求通过就绪检查后才进入 Native。实际代码写权限、进程与路径隔离由 T06 和 T07 验收。 [T05 工程设计](docs/02-directory-and-engineering-design.html#t05-worktree-plan-20261118)
+平台编排层从有同源成功回执的本地镜像读取冻结 SHA。Git 使用固定参数、私有 GitStore 与独立对象。目录领取、准备与就绪检查受平台路径和持久锁约束。计划需求通过就绪检查后才进入 Native。T06 的隔离适配沿用该就绪检查。产品代码写权限与写者交接由 T07 验收。 [T05 工程设计](docs/02-directory-and-engineering-design.html#t05-worktree-plan-20261118)
 
 ## 当前依赖审计（2026-11-18，未修复）
 

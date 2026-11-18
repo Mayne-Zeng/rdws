@@ -28,6 +28,7 @@ import type { RepositoryMirrors } from '../../syncer/src/mirror.ts';
 export type DemandRepositories =
   (typeof schema.requirementWorktreePlan.$inferSelect)['repositories'];
 type Paths = {
+  runtimeRoot: string;
   demand: string;
   control: string;
   lock: string;
@@ -135,6 +136,7 @@ export class DemandWorktrees {
     );
     const demand = join(parent, id);
     return {
+      runtimeRoot: root,
       demand,
       control: join(demand, '.rdws-worktree'),
       lock: join(parent, '.' + id + '.worktree-lock'),
@@ -261,6 +263,7 @@ export class DemandWorktrees {
           throw new Error('Private Git branch or base commit is unavailable');
       }),
     );
+    return repositories;
   }
 
   async ready(projectId: string, id: string, plan: DemandRepositories) {
@@ -270,6 +273,25 @@ export class DemandWorktrees {
     } catch {
       return false;
     }
+  }
+
+  async executionScope(
+    projectId: string,
+    id: string,
+    plan: DemandRepositories,
+    repositoryId: string,
+  ) {
+    const index = plan.findIndex((item) => item.repositoryId === repositoryId);
+    if (index < 0) throw new Error('Repository is outside the frozen plan');
+    const paths = await this.paths(projectId, id, plan);
+    const repository = (await this.verify(paths, plan))[index]!;
+    return {
+      runtimeRoot: paths.runtimeRoot,
+      control: paths.control,
+      tree: repository.tree,
+      store: repository.store,
+      admin: repository.admin,
+    };
   }
 
   prepare(projectId: string, id: string, plan: DemandRepositories) {
@@ -288,7 +310,10 @@ export class DemandWorktrees {
       throw new Error('Worktree preparation stopped');
     const paths = await this.paths(projectId, id, plan, true);
     const ready = join(paths.control, 'ready');
-    if (await exists(ready)) return this.verify(paths, plan);
+    if (await exists(ready)) {
+      await this.verify(paths, plan);
+      return;
+    }
     await mkdir(paths.lock, { mode: 0o700 });
     const groupLog = join(paths.lock, 'git.pids');
     let stage: string | undefined;
@@ -300,7 +325,10 @@ export class DemandWorktrees {
         JSON.stringify({ pid: process.pid, requirementId: id }),
       );
       await writeFile(groupLog, '', { flag: 'wx', mode: 0o600 });
-      if (await exists(ready)) return this.verify(paths, plan);
+      if (await exists(ready)) {
+        await this.verify(paths, plan);
+        return;
+      }
       if (!(await exists(paths.demand))) {
         await mkdir(paths.demand, { mode: 0o700 });
         await mkdir(paths.control, { mode: 0o700 });

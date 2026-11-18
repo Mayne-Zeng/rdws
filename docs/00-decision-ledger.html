@@ -87,7 +87,7 @@
 
 
   <h2 id="implementation-20261117"><span class="num">8</span>当前有效实施基线 · 2026-11-17</h2>
-  <div class="verdict"><div class="vtitle">用户已确认范围、目录并授权分阶段搭建</div><p>本节记录本轮逐项确认的目标契约，优先于下文 v3 历史条款。未被替代的项目级实例、GitLab 事实源、上游锁版、供应链与 R-A / R-B 残余风险继续有效。工程与运行空间详见 <a href="02-directory-and-engineering-design.html#implementation-20261117">工程设计当前实施基线</a>。</p></div>
+  <div class="verdict"><div class="vtitle">用户已确认范围、目录并授权分阶段搭建</div><p>本节记录逐项确认的目标契约，优先于下文 v3 历史条款。项目级实例、GitLab 交付路径的事实源、上游锁版、供应链与 R-A / R-B 残余风险继续有效。T04 的 Gitee 只读验收见 <a href="#acceptance-decisions-20261118">§8.13</a>。工程与运行空间详见 <a href="02-directory-and-engineering-design.html#implementation-20261117">工程设计当前实施基线</a>。</p></div>
   <h3>8.1 范围与替代关系</h3>
   <table><tr><th>编号</th><th>当前有效决定</th><th>替代 / 边界</th></tr>
   <tr><td>I2</td><td>最小真实 Web 工作台；验收一项目、一需求、一仓库、一个非生产目标环境，至少五个会话，包含人工 MR 合入后的真实结果回写。项目、账号、角色、运行配置预置；需求在 Web 创建。</td><td>实际部署、部署批准、归档清理、HA、多机、Tauri、多环境编排、完整测试 / Bug 链路延后。</td></tr>
@@ -179,6 +179,13 @@
   <p>已完成 §8.11 的实现与内部验证：创建 / 本人派生防重、未派发拒绝终态、未知结果不重复派发、已知子 ID 补映射，目录直接被动回放及固定逻辑边界分页。开发 / 测试库均执行增量迁移 0004，当前 13 表，旧会话数据保留。交付复审第二轮 A / B 均 APPROVE，六项首轮发现全部关闭。</p>
   <p>最终 <code>pnpm check</code> 通过（11 文件 / 74 测试、类型、lint、格式及构建），<code>pnpm test:e2e</code> 8 项、<code>pnpm test:web-live</code> 12 项通过。真实五会话恢复、本人派生、最新上下文、拒绝越权与原始额外参数、源日志不改写均通过；本次中断日志 P=23、冷读逻辑 C=25、派生 B=25，原始前缀和恢复补齐分别核对。长响应 125354ms / 7 次连接 generation / 9207 实时帧，刷新与原生日志一致，工具声明 / 调用均为 0。详情与证据位置见 <a href="02-directory-and-engineering-design.html#session-lifecycle-live-20261118">工程执行终态</a>。</p>
   <p>日常 5173 实例已用合成需求验证新建 → 真实回复 → 本人派生 → 回放，明暗桌面 / 窄屏无溢出、页面错误 0；保留需求与轨迹供用户验收。<a href="05-development-backlog.md">任务清单 T02</a> 标记待用户侧验收，不提前勾选完成。单写与执行隔离、sources、GitLab、Linux、完整浏览器产品及既有依赖风险仍由后续任务处理；上述内部验收时点未提交、推送或执行生产操作。后续本地交付按仓库交付规则执行，修订关联 T02 任务记录。</p>
+
+  <h3 id="acceptance-decisions-20261118">8.13 选模、模板与仓库验收决定 · 2026-11-18</h3>
+  <ul>
+    <li><strong>T13／D19：</strong>本人会话换模型先保存选择。下次本人有权发送时，服务端按当时的授权和允许集合再次校验，通过后再应用到该次发送。保存状态与 Native 实际生效状态分别呈现。<a href="02-directory-and-engineering-design.html#t13-send-time-acceptance-20261118">设计与验收</a>。</li>
+    <li><strong>T14／D21：</strong>只有当前项目的项目管理员可为需求绑定或更换平台已发布的模板。绑定引用精确发布版本。变更只影响之后新建的会话，已建会话继续使用各自原版本。<a href="02-directory-and-engineering-design.html#t14-binding-acceptance-20261118">设计与验收</a>。</li>
+    <li><strong>T04／D23：</strong>使用用户将提供的具名授权 Gitee 仓库实测 HTTPS 只读镜像和 SSH 提交验签，两项通过才解锁 T05。T09 继续以授权 GitLab 仓库验收推送、MR、人工合入和回写。<a href="02-directory-and-engineering-design.html#t04-gitee-acceptance-20261118">验收条件和材料</a>。</li>
+  </ul>
 
   <div class="warn">以下 §0–§7 保留 v3 设计历史与证据。与上方当前实施基线冲突时，以上方决定及替代关系为准；历史“已评审”不代表本轮实现已验证。</div>
   <h2 id="s0"><span class="num">0</span>这份文件的用途</h2>

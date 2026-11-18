@@ -384,7 +384,7 @@
     <tr data-source="D22" data-owner="T05" data-point="git.frozen-base"><td>D22 / 冻结需求基线</td><td><a href="05-development-backlog.md#主计划任务">T05</a></td><td>T04</td><td>需求私有 bare／worktree 保存 baseCommit；当前尚未建立。</td></tr>
     <tr data-source="D22" data-owner="T10" data-point="git.explicit-sync"><td>D22 / 显式同步与增量</td><td><a href="05-development-backlog.md#主计划任务">T10</a></td><td>T09</td><td>fetch＋merge、冲突显式处理、不 rebase／强推；未合入更新与已合入后增量分开。</td></tr>
     <tr data-source="D22 I3-DELIVERY" data-owner="T09" data-point="delivery.integration-sha"><td>D22 I3-DELIVERY / 集成提交与回写</td><td><a href="05-development-backlog.md#主计划任务">T09</a></td><td>T08</td><td>需求提交经集成 cherry-pick，分别记录 merge／squash，不伪造已合入事实。</td></tr>
-    <tr data-source="D23" data-owner="T04" data-point="git.source-mirror"><td>D23 / GitLab 事实源与镜像</td><td><a href="05-development-backlog.md#主计划任务">T04</a></td><td>T05 T09</td><td>sources 是只读 bare mirror，仅 syncer 更新；不拿当前 GitHub 开发仓库代替产品目标 GitLab。</td></tr>
+    <tr data-source="D23" data-owner="T04" data-point="git.source-mirror"><td>D23 / 仓库事实源与镜像</td><td><a href="05-development-backlog.md#主计划任务">T04</a></td><td>T05 T09</td><td>sources 是只读 bare mirror，仅 syncer 更新。T04 使用具名授权 Gitee 仓库验收只读路径，T09 单独使用 GitLab 验收交付闭环。</td></tr>
     <tr data-source="D24" data-owner="T10" data-point="delivery.environment-revert"><td>D24 / 环境映射与回退</td><td><a href="05-development-backlog.md#主计划任务">T10</a></td><td>T09</td><td>按需求／版本／仓库／环境／合入 SHA 映射；revert MR 人工合入，拒绝时保持环境现状。</td></tr>
     <tr data-source="D26" data-owner="F06" data-point="runtime.pg-upper-bound"><td>D26 / 平台库与扩展上界</td><td><a href="05-development-backlog.md#单独保留的后续任务">F06</a></td><td>T19</td><td>平台用 PG；DSH 内部 SQLite 不扩为平台业务库，HA 独立设计。</td></tr>
     <tr data-source="R-A C1" data-owner="T19" data-point="risk.local-isolation"><td>R-A C1 / 残余隔离风险</td><td><a href="05-development-backlog.md#主计划任务">T19</a></td><td>T06 F03</td><td>C1 不追认继续有效；本地档仅开发／功能验证，部署方承担生产隔离取舍，不在 T00 代为接受。</td></tr>
@@ -419,7 +419,7 @@
     <tr data-interface="business-commands"><td>需求／任务／业务命令</td><td><a href="05-development-backlog.md#主计划任务">T11</a></td><td>business.ts、workbench.ts、contracts/db；复用当前身份和定序锁。</td><td>PG 为权威；事件／回执与业务同事务，不另造角色或 commandId 规则。</td></tr>
     <tr data-interface="native-session-flow"><td>会话生命周期／流</td><td><a href="05-development-backlog.md#主计划任务">T02</a></td><td>session-operations.ts、dsh/bridge/client/plugins；后续 T03/T06/T13 扩展先协调。</td><td>已有 NativeSession/session_operation、20 秒传输能力与 P/C/B；不复制第二份消息日志。</td></tr>
     <tr data-interface="requirement-context"><td>需求上下文接口</td><td><a href="05-development-backlog.md#主计划任务">T12</a></td><td>runtime-context.ts、business.read、原生 pre-step；当前实现来源 T02，业务事实由 T11 提供。</td><td>编辑背景与 PG 业务快照分开；当前登录／请求／Agent 绑定继续执行，不沿用历史 principal。</td></tr>
-    <tr data-interface="source-mirror"><td>仓库来源／只读镜像</td><td><a href="05-development-backlog.md#主计划任务">T04</a></td><td>仓库配置与 syncer 的唯一 sources 更新接口；业务 API 归 server。</td><td>目标 GitLab、基线签名与仓库引用待登记，不把开发 origin 当业务仓库。</td></tr>
+    <tr data-interface="source-mirror"><td>仓库来源／只读镜像</td><td><a href="05-development-backlog.md#主计划任务">T04</a></td><td>仓库配置与 syncer 的唯一 sources 更新接口；业务 API 归 server。</td><td>具名授权 Gitee HTTPS 地址、基线／目标分支与签名公钥待提供。按 <a href="#t04-gitee-acceptance-20261118">T04 真实验收</a> 登记。</td></tr>
     <tr data-interface="demand-workspace"><td>需求工作树／workspace</td><td><a href="05-development-backlog.md#主计划任务">T05</a></td><td>需求私有 bare、baseCommit、工作树与 workspace 路径；编排归 orchestrator。</td><td>不在 sources 登记需求 worktree；header cwd 保持需求根，不建子任务并行树。</td></tr>
     <tr data-interface="sandbox-execution"><td>实际工具／沙箱执行</td><td><a href="05-development-backlog.md#主计划任务">T06</a></td><td>dsh 原生工具、文件、Shell、sandbox 与进程句柄适配；上层编排通过公开层访问。</td><td>所需工具先在隔离环境取证；产品入口零工具维持到 T07 联合门槛。</td></tr>
     <tr data-interface="write-handoff"><td>写资格／停止交接</td><td><a href="05-development-backlog.md#主计划任务">T07</a></td><td>当前开发分派＋本人会话＋独占写资格，orchestrator 协调 PG 与实际进程。</td><td>WriteLease 尚未实现，lease 及 runtime 锁均不单独证明停止或授写。</td></tr>
@@ -446,7 +446,7 @@
   <p>只读核查命令来自现有配置或本机已安装工具：pnpm db:status、Node 标准库版本／health／锁拥有者检查、应用角色 SELECT、已安装包 exports／公开源码。开发 rdws_dev／rdws_app 与测试 rdws_test／rdws_test_app 均可读 13 表，非 superuser、无 schema CREATE；开发应用角色对 requirement_event 无 UPDATE/DELETE。PG18.7 固定镜像容器 healthy，loopback 55432；Node v24.20.0、pnpm 11.28.5。</p>
   <p>日常 5173／3001 health 200，现有 Native 锁记录的双 PID 均探测存活（仅进程元数据，未重发 Native RPC）；lsof 复查固定测试 5317／3303 未发现监听，testing-web 遗留锁的双 PID 均已停止。本轮保留既有服务和锁文件，不用“端口空闲”推断测试数据库或其他实例可随意并行。运行根在用户主目录 .rdws、为仓库外绝对路径；值不复制入仓，指纹与本机元数据见 mode 600 的 <code>state/exports/t00-baseline-2c7273ae-3628-46c4-8cf1-401723c4eaf1.json</code>。</p>
   <table id="t00-gaps"><tr><th>缺口编号／主题</th><th>主责</th><th>已核事实与未验证边界</th><th>闭环条件</th><th>阻塞范围</th></tr>
-    <tr data-gap="T00-G1" data-owner="T04"><td>T00-G1 / GitLab 目标与候选凭据</td><td><a href="05-development-backlog.md#主计划任务">T04</a></td><td>环境存在凭据候选；仓库／私有开发配置未登记目标实例和测试 project，未把凭据发往猜测主机。glab 未安装。</td><td>登记授权 host/project/基线/服务主体及凭据引用，先做目标实例只读身份、版本、项目和读取权限核查。HTTP 路线无需 glab。</td><td>T04 真实镜像及 T09 真实 MR；本地接口／fixture 与 T03 不因此停工。</td></tr>
+    <tr data-gap="T00-G1" data-owner="T04"><td>T00-G1 / Gitee 只读验收目标</td><td><a href="05-development-backlog.md#主计划任务">T04</a></td><td>已确认使用具名授权 Gitee 仓库，地址、两条分支及 SSH 签名公钥尚未提供。</td><td>材料到齐后按 <a href="#t04-gitee-acceptance-20261118">T04 验收</a> 核对仓库和只读身份，执行 HTTPS 镜像与 SSH 提交验签。</td><td>T04 与 T05 的前置门槛。T09 的 GitLab 条件继续由 T09／T00-G2 记录。</td></tr>
     <tr data-gap="T00-G2" data-owner="T09"><td>T00-G2 / GitLab 分支策略与人工合入</td><td><a href="05-development-backlog.md#主计划任务">T09</a></td><td>尚未核验通配保护、普通开发无 push、rdws/* 服务账号范围、禁 force-push 和人工合入人。</td><td>对所有匹配规则、角色与部署策略取证，再在另获写入授权的测试仓库实证；不能只靠客户端不传 --force。</td><td>T09/T10 实际交付；不得偷偷把“非保护 rdws/*”改为另一策略或代用户接受扩大权限。</td></tr>
     <tr data-gap="T00-G3" data-owner="T21"><td>T00-G3 / 目标 Linux 与沙箱</td><td><a href="05-development-backlog.md#主计划任务">T21</a></td><td>宿主 darwin/arm64；Docker engine linux/aarch64，只验证 PG 基础。未登记目标 Linux 主机／访问配置；ssh 可用不代表已连接目标。</td><td>明确目标主机／版本／架构，验证 Node/pnpm、user namespace、bwrap/Landlock 的实际 enforcement、UID/路径和进程停止，再执行完整闭环。</td><td>T21/T22 的 Linux 证据；不阻塞 macOS 的 T06/T07/T08/T09。F03 不替代目标 Linux 验收。</td></tr>
     <tr data-gap="T00-G4" data-owner="T06"><td>T00-G4 / 真实执行与工具结果</td><td><a href="05-development-backlog.md#主计划任务">T06</a></td><td>工具仍为零；宿主有 sandbox-exec、无 bwrap，原生支持 Seatbelt/bwrap/Landlock 不证明实际限制有效。</td><td>在隔离验证环境做文件／Shell／Git、越界／符号链接／Git 管理区反例和工具结果流；产品入口继续关闭。</td><td>T06 完成及 T07 联合启用；测试或阶段推进不自动获得写资格。</td></tr>
@@ -509,7 +509,7 @@
   <p>验证日志位于 .impeccable/review/t01-final（check.log、e2e.log、web-live.log），可复现命令来自 package.json；故障套件中预期的断连重试、启动健康轮询的短暂拒连、FORCE_COLOR／NO_COLOR 提示不作为未处理页面错误。最终测试 5317／3303 已退出，日常 5173／3001 与 poc Native 保留。工具／契约／schema／迁移／DSH 权限和生产依赖无变化；未初始化、迁移或重建数据库，未执行 GitLab／Linux 验收。按授权完成本轮 feat: align T01 core pages with Demo 本地提交，实际提交 ID 由 Git 与交付回复给出，不推送。清单保留 T01 待首次用户视觉验收，T02 和 T00-G9 的用户侧门槛不代签。</p>
 
   <h4 id="t01-rollout-20261118">11.12.5 已确认桌面样板的正式应用</h4>
-  <p>用户确认了本地真实需求上的桌面样板，授权按此对齐 T01 其他核心页面并本地提交。Change / R2，涉及共享外壳、主题及五个核心入口。以 eb5a64a 与批准样板为起点，保留已有未提交样板作为来源，撤销本轮前端及测试即可恢复。T02 用户侧验收和 T04 GitLab 验收沿各自清单。沿用 I4-UI 与 §11.12 的业务边界。</p>
+  <p>用户确认了本地真实需求上的桌面样板，授权按此对齐 T01 其他核心页面并本地提交。Change / R2，涉及共享外壳、主题及五个核心入口。以 eb5a64a 与批准样板为起点，保留已有未提交样板作为来源，撤销本轮前端及测试即可恢复。T02 用户侧验收和 T04 真实仓库验收沿各自清单。沿用 I4-UI 与 §11.12 的业务边界。</p>
   <ol>
     <li>把样板的项目卡、导航和需求树、需求区状态条／页签及档案标题／卡片／阶段位置用于正式页面，移除 visual=demo 实现分叉。成员与仓库页共用外壳，页面内容不改。保留完整导航焦点语义及权限。状态条和窄屏页签分别表达会话视图／需求级，只读限定为 Native 会话与上下文快照。桌面需求树新建入口和 820／390px 的侧栏入口均继承忙碌与未知态保护，禁用时不可聚焦，无创建权限则均不呈现。换项目和重试均走原逻辑。</li>
     <li>需求列表使用实际编号、标题／说明和阶段，采用紧凑表头与可聚焦的需求标题，保留原筛选、加载、空态、失败恢复及单一清晰创建入口。新建需求以同一线框卡片组织现有信息、成员和子任务，保留原字段、提交、校验、禁用与未知结果保护。</li>
@@ -533,7 +533,7 @@
   <p>依据 I2、I2-AUTH、I3-CONTEXT、D23、D8 与基线签名条款，交付一条“登记 → 查看 → 同步 → 核对”的纵向路径。Change / R3：引入授权远端与敏感凭据边界，使用双面独立方案审阅与交付核实。批量对象包含配置、同步进程、API、浏览器与验收。T03 未领取，本轮兼容预置项目 ID／数据库成员角色，不变更项目身份或 schema。唯一执行者在 main 串行工作，起点 907dffa。用户授权本地提交。</p>
   <h4>11.13.1 配置与授权边界</h4>
   <ul>
-    <li>沿 I2 由运行环境维护者预置 <code>$RDWS_HOME/config/projects/&lt;id&gt;/repositories.json</code>，每仓登记内部 ID、显示名称、授权 GitLab HTTPS 地址、完整 baseline ref、非生产目标名称／ref、SSH 可信签名人文件引用、可选专用 CA 文件引用与只读凭据引用。配置与证据分开，凭据只读 <code>secrets/</code> 私有文件。PoC 先接入 Git SSH commit 签名（allowed_signers、完全信任），其他格式在真实目标需要时明确后实现；任何未支持签名均验证失败。</li>
+    <li>沿 I2 由运行环境维护者预置 <code>$RDWS_HOME/config/projects/&lt;id&gt;/repositories.json</code>，每仓登记内部 ID、显示名称、授权仓库的规范 HTTPS 地址、完整 baseline ref、非生产目标名称／ref、SSH 可信签名人文件引用、可选专用 CA 文件引用与只读凭据引用。配置与证据分开，凭据只读 <code>secrets/</code> 私有文件。PoC 先接入 Git SSH commit 签名（allowed_signers、完全信任），其他格式在真实目标需要时明确后实现；任何未支持签名均验证失败。</li>
     <li>项目成员可读本项目仓库摘要，当前项目管理员可触发该仓同步。BFF 复用数据库登录状态、活动账号、当前项目角色和 POST Origin 门；平台角色不代替项目角色。发布门复用业务身份查询，按登录会话 → 活动账号 → 项目角色的 FOR SHARE 顺序加锁，门内只读取有大小上限的本地登记及信任文件，最后复核 session 当前到期时间和 BFF 注销 closing 标识，再做有界本地 rename／update-ref，禁止事务自动重试，远端读取、验签、对象导入均在门外。撤权先获锁或本进程 closing 先就位时拒发；发布先获锁且最终复核通过时允许原子操作结束，随后撤权生效。跨项目、无角色、注销及伪造浏览器入参不能选择远端、签名材料、ref 或 Git 参数。GET 完成读取后复核成员身份再返回。</li>
     <li>服务启动时不需要配置仓库。新“仓库与环境”视图按现有组件和断点展示未配置、读取错误、同步中、成功／失败、重试、目标分支与已发布 SHA。DTO 只投影必要配置和受控状态码，不输出 URL、凭据、路径或 Git 原始输出。GET 仅观察，POST 一仓一操作并接受随机 commandId。每仓互斥内先在私有磁盘登记 actor／项目／仓／命令、配置指纹；同一键始终查回执，响应丢失后同浏览器页重用原键，结果未决仍返回既有证据。不同操作才重新观察远端，历史回执不覆盖最新状态。</li>
   </ul>
@@ -544,8 +544,8 @@
     <li>发布前失败保留旧 ref。收据先持久记起止、请求人、操作、原值、候选／目标 SHA 与阶段，再进入发布。ref 与收据不构成同一原子事务；提交点之后若收据未完成，保留待核对状态并分别报告候选与实际 ref，不猜成功或失败。超时停止 Git 进程族，关闭前等待执行结束，无法确认停止时保留锁。锁登记进程和操作，每个子进程组先写入组 ID 再启动 Git，进程中断不自动接管；维护者确认任务与进程族停止、核对 ref 和收据后才人工解锁，新命令可重新核验，既有 commandId 不再次派发。超时、连接失败、未签／不信、拒权、非快进和并发冲突均以可核对状态呈现。回退部署版本可保留配置与已验证镜像，不回滚已发布 ref。</li>
   </ul>
   <h4>11.13.3 检查点与环境</h4>
-  <p>先增隔离集成用例，生成仅本次使用的本地签名和 bare 远端，验证真实 Git 同步、验签、引用并发、目标不存在、绑定变更和发布前失败保留原基线；覆盖发布后的收据故障、重放时远端推进及进程族停止。通过独立 HTTPS Git 夹具复核认证、跨目标零凭据、错误 TLS、外部环境不继承和 stdout/stderr 脱敏。以当前项目预置角色的真实数据库会话测试 API 权限、停用／注销／角色撤销及撤权先行和发布先行两序；浏览器 E2E 拦截受控 API 状态，不把夹具安装到现行 Playwright 共用的日常 RDWS_HOME；真实 Git／API 用显式注入的隔离临时仓库运行根。前后枚举 refs、FETCH_HEAD 和 worktree 登记。最终执行 pnpm check、pnpm test:e2e、pnpm validate:baseline；真实 GitLab 只在具名授权目标、基线／目标、签名材料和只读凭据明确后只读核对具名服务主体、GitLab 版本、项目身份及读取权限，再做镜像验收；隔离 HTTPS 夹具不替代。日常 5173／3001 与 Native 保留，浏览器 5317／3303 串行；新测试运行数据仅临时根，开发业务库不迁移。</p>
-  <p>路径登记：apps/syncer、apps/server 的工作台接线、packages/contracts 仓库 DTO、apps/console 的仓库入口、聚焦集成／E2E、配置示例和 README／SECURITY／AGENTS／docs/02／05。沿用 T00-G1：当前无授权 GitLab 目标登记；可独立实现与验证，真实签名和仓库验收未获得前维持待验收，不解锁 T05。T09 的出站写入和环境分支保护验证独立。</p>
+  <p>先增隔离集成用例，生成仅本次使用的本地签名和 bare 远端，验证真实 Git 同步、验签、引用并发、目标不存在、绑定变更和发布前失败保留原基线；覆盖发布后的收据故障、重放时远端推进及进程族停止。通过独立 HTTPS Git 夹具复核认证、跨目标零凭据、错误 TLS、外部环境不继承和 stdout/stderr 脱敏。以当前项目预置角色的真实数据库会话测试 API 权限、停用／注销／角色撤销及撤权先行和发布先行两序；浏览器 E2E 拦截受控 API 状态，不把夹具安装到现行 Playwright 共用的日常 RDWS_HOME；真实 Git／API 用显式注入的隔离临时仓库运行根。前后枚举 refs、FETCH_HEAD 和 worktree 登记。最终执行 pnpm check、pnpm test:e2e、pnpm validate:baseline；具名授权远端的验收依据 <a href="#t04-gitee-acceptance-20261118">§11.13.5</a>，隔离 HTTPS 夹具仅作为本地证据。日常 5173／3001 与 Native 保留，浏览器 5317／3303 串行；新测试运行数据仅临时根，开发业务库不迁移。</p>
+  <p>路径登记：apps/syncer、apps/server 的工作台接线、packages/contracts 仓库 DTO、apps/console 的仓库入口、聚焦集成／E2E、配置示例和 README／SECURITY／AGENTS／docs/02／05。沿用 T00-G1 的具名授权登记。T04 当前等候 Gitee 仓库材料和两项真实结果，T05 保留前置门槛。T09 的出站写入和环境分支保护验证独立。</p>
   <p id="t04-plan-review-20261118">首轮 A/B 均 BLOCK。已补锁定序、持久命令、发布意图、源绑定、TLS / 文件 / 进程边界及真实目标预检，第二轮 A/B 均 APPROVE，首轮发现均关闭。</p>
 
   <h4 id="t04-delivery-20261118">11.13.4 本地交付与验收证据</h4>
@@ -558,10 +558,18 @@
     <tr><td>pnpm test:e2e</td><td>exit 0，17 项通过（28.0s）。新增两项分别以真实未配置项目查看空态，及拦截受控 API 验证 390px 暗色、断线 → 临时 409 → 待核对 → 同命令成功、新命令失败、同步结果读回与无横溢出。</td></tr>
     <tr><td>pnpm validate:baseline；日常走查</td><td>追溯检查 exit 0，29 任务／62 原子点／16 视图。新增可达 repos，当前覆盖配置摘要与基线同步。实际 5173 查看未登记态，1440／1024／820／390px × 明暗共 8 次，页面错误与溢出均为 0。</td></tr>
   </table>
-  <p>T04 的本地配置、同步和工作台功能随 <code>feat: add repository baseline synchronization</code> 本地提交，修订以 Git 为准。T00-G1 仍待授权 GitLab 项目及服务主体、基线／目标分支、只读凭据和可信签名材料，隔离 HTTPS Git 证据不代替真实实例。实际签名格式尚待目标确认，当前支持 SSH commit 签名。T04 待真实验收，T05 保留前置门槛。未执行 GitLab 外部请求、推送或真实模型套件。日常 Web/API 保留，测试服务退出。日志和截图在忽略目录 .impeccable/review/t04，新测试本身不依赖这些产物。</p>
+  <p>T04 的本地配置、同步和工作台功能随 <code>feat: add repository baseline synchronization</code> 本地提交，修订以 Git 为准。该轮仅完成本地镜像和 SSH commit 签名验证。当前真实验收按 <a href="#t04-gitee-acceptance-20261118">§11.13.5</a> 推进。日常 Web/API 保留，测试服务退出。日志和截图在忽略目录 .impeccable/review/t04，新测试本身不依赖这些产物。</p>
+
+  <h4 id="t04-gitee-acceptance-20261118">11.13.5 已确认的 Gitee 只读验收</h4>
+  <p>用户已确认用其指定的授权 Gitee 仓库为 T04 实测。待提供 Gitee HTTPS 仓库地址、基线分支、非生产目标分支和 SSH 签名公钥。材料到齐后核对仓库、分支及实际授权的读取方式。现有 syncer 配置要求精确绑定该 HTTPS URL 的私有只读凭据文件，若目标只有授权的匿名读取方式，匿名路径须先接入和验证。</p>
+  <ol>
+    <li>HTTPS 只读镜像同步。由现有 syncer 读取目标分支 SHA 并抓取基线，使用指定仓库、分支及只读授权。核对本地 bare mirror、基线 SHA、目标观察值和同步回执，只有 syncer 发布指定 baseline ref，远端配置和 refs 不发生写入。</li>
+    <li>SSH 提交验签。以提供的公钥建立 <code>allowed_signers</code>，对实际获取的基线 tip 通过 Git SSH commit 验签，记录签名核验与基线 SHA。缺签、签名不可信或公钥不匹配时保持原发布基线。</li>
+  </ol>
+  <p>T04 两项真实结果都通过并留痕后解锁 T05。隔离 HTTPS Git 夹具仍是本地实现证据，具名仓库验收当前未执行。T09 继续单独在具名授权 GitLab 仓库验证受控推送、MR、人工合入及精确回写。</p>
 
   <h3 id="t03-plan-20261118">11.14 T03 项目与成员管理</h3>
-  <p>依据 I2-AUTH、I3-CONTEXT、I6-COMMAND 与 D4，按“项目登记与选择 → 需求归属 → 独立原生实例 → 成员维护与撤权”交付。Change / R3，改变运行时与授权边界，双面独立方案审阅及交付核实。T00 已完成，T04 保留待 GitLab 验收。既有协调者在 main 以 06b1ec4 串行领取。本轮优先评审两种成员授权方案都需要的实例切片 11.14.1，成员管理矩阵另行闭环。</p>
+  <p>依据 I2-AUTH、I3-CONTEXT、I6-COMMAND 与 D4，按“项目登记与选择 → 需求归属 → 独立原生实例 → 成员维护与撤权”交付。Change / R3，改变运行时与授权边界，双面独立方案审阅及交付核实。T00 已完成，T04 当时保留待 GitLab 验收，现行要求见 <a href="#t04-gitee-acceptance-20261118">§11.13.5</a>。既有协调者在 main 以 06b1ec4 串行领取。本轮优先评审两种成员授权方案都需要的实例切片 11.14.1，成员管理矩阵另行闭环。</p>
   <h4>11.14.1 项目原生实例切片</h4>
   <ol>
     <li>PostgreSQL 继续保存项目、项目成员、需求与会话映射。服务以已经鉴权的需求记录 projectId 作为实例键，浏览器只提供需求 ID。每个已登记项目按需创建一份 host、项目私有运行根、工作区前缀、锁、overlay、签名密钥和受众；兼容 poc 的 DSH_HOME、需求 cwd、原 lock／overlay／密钥／上下文证据位置、旧回执 state/exports、签名受众和注入式 Host 测试入口。保存的会话／工作区兼容，短期票不跨进程代次。poc overlay 的端口固定为 0，实际端口／代次由本机私有就绪记录给诊断与测试。非 poc 启用资格来自本机运行管理员配置的标准项目 Native Profile，按固定目录读取，校验无大小写别名的项目 ID，先核对受管目录、工作区 canonical 路径及文件类型／所有权／权限，拒绝符号链接及路径别名，再启动；密钥和凭据私有，不经浏览器。无浏览器路径输入、无从其他真实项目自动借用模型或凭据。仅测试可显式使用隔离运行根与合成的第二项目配置；实际部署仍逐项目管理各自 Profile。</li>
@@ -586,7 +594,7 @@
   <p>交付双面独立审阅最终 APPROVE。已修正无权项目深链接降级、项目默认模型、旧认证回退说明、未接线认证端点、提交不确定与无变化回执、临时栅栏误撤销、项目清单发送关口、Native 启动文件校验及浏览器原命令恢复。未能保存原命令时浏览器不发送；恢复只提交原 ID、原内容并重验当前授权。</p>
   <p>聚焦测试已证明真实 PostgreSQL INSERT 与停用／恢复的竞争，用户名与邮箱的旧发行均被拒，新代次可登录。EPIPE 后回执未定时清单被栅栏保护；其他管理员达到同一状态后，原命令核对可用无变化回执解除该栅栏。已连接 WS 在临时栅栏期间暂停下行，事务确认回滚后保持原连接，无 Native 撤销。Native 临时配置夹具拒绝私有文件链接并真实启动登记模型的默认缺省路径。</p>
   <p>双项目真实浏览器聚焦用例已通过。同一登录完成甲→乙→甲的发送、回复与回放，两个实例不同 PID、端口、代次及目录；原生实际 workspace／cwd 与数据库一致。项目旧代次票和跨实例票被拒。同一账号两次登录在乙的旧 Native 权限均被拒，甲保持可用；乙实例退出后甲仍可读取。</p>
-  <p id="t03-final-verification">全量 pnpm check 通过，16 文件／104 测试；最后的仓库同步按钮防重界面修订后重验类型、lint、全仓格式、构建。pnpm test:e2e 18 项（30.2s），pnpm test:web-live 13 项（3.6min），两个项目新增真实用例、单项目各原生故障验证及最终 2.1min 长响应重连均通过。pnpm validate:baseline 29 任务／62 原子点／16 视图通过。构建仍有既有主包体积提示。日志位于未跟踪的 .impeccable/review/t03，源码验收独立于日志。T04 继续等待 GitLab 真实验收，未访问该目标。</p>
+  <p id="t03-final-verification">全量 pnpm check 通过，16 文件／104 测试；最后的仓库同步按钮防重界面修订后重验类型、lint、全仓格式、构建。pnpm test:e2e 18 项（30.2s），pnpm test:web-live 13 项（3.6min），两个项目新增真实用例、单项目各原生故障验证及最终 2.1min 长响应重连均通过。pnpm validate:baseline 29 任务／62 原子点／16 视图通过。构建仍有既有主包体积提示。日志位于未跟踪的 .impeccable/review/t03，源码验收独立于日志。该轮未访问真实仓库。T04 的现行要求见 <a href="#t04-gitee-acceptance-20261118">§11.13.5</a>。</p>
 
   <div class="warn">以下 §0–§10 为历史设计与实测记录；涉及阶段审批、rebase、完整插件 / 部署骨架等旧方案不作为本轮实施要求，当前决定以台账 v4 §8 和本页 §11 为准。</div>
   <h3 id="t20-plan-20261118">11.15 T20 设计系统页</h3>
@@ -635,7 +643,7 @@
   </ol>
   <p>方案首轮独立 A/B 面均 BLOCK，写入准入停止在方案阶段。发现集中在五个方面。须闭合撤权、单次派发及 Native 截止的同步提交点，明确文本提示词实际受理与选择的互斥，区分投影可见和原生刷盘确认，核对 Q7 新建继承与派生历史中模型选择的行为，以及检验选模后推理失败的诊断投影。已选择模型移出允许范围的用户工作流仍待确认。回退要考虑旧 Native 仍能解释已写入的模型选择事件。</p>
   <p>后续独立技术裁决定位到两个约束。§11.8 和 §11.10.2 禁止持有 PG 锁等待 Native；数据库连接强断会释放角色锁，已发出的 Native 请求仍可能在截止前追加事件。原候选的事务等待与短截止无法证明写入和撤权的顺序，继续保留 BLOCK。另建持久栅栏并要求撤权等待 Native 终态会影响 T03 已批准的故障行为。</p>
-  <p>建议方向待产品确认。短事务保存本人会话的 Provider／Model 引用与操作回执，前端立即显示「已保存，待生效」。下一次有权发送时，Native 在实际接收提示词前按当前允许集合核对并应用该引用；应用后的原生事件和实际推理继续由 DSH 管理。D19 允许 RDWS 管理模型引用。此推荐改变确认与生效的时点，且引入会话引用持久化，确认后才进入正式方案复审。快捷新建按 Q7 继承已确认且仍获准的选择；派生以原生固定前缀为依据。失效模型后的重新选择／默认替换仍单独待确认。</p>
+  <p>后续候选采用短事务保存本人会话的 Provider／Model 引用与操作回执，在下次有权发送时核对并应用。产品已确认采用该时点，见 <a href="#t13-send-time-acceptance-20261118">§11.16.7</a>。原持锁等待 Native 的写入方案保持 BLOCK。已生效模型移出允许集合后的后续选择策略仍单独待确认。</p>
 
   <h4 id="t13-model-status-20261118">11.16.4 会话底部模型状态</h4>
   <p>按 Q6 交付只读模型状态。当前会话使用既有授权的 <code>modelSelection</code> 投影。确认已有记录时显示供应商及模型标识。投影明确为空时读取当前连接代次的脱敏目录默认值，标示实例默认。等待投影、目录读取失败或返回缺失模型时显示待确认。切换会话和连接代次不会让旧目录响应覆盖当前状态。操作区只显示一次模型状态，回放沿现有的固定前缀读取展示事件。</p>
@@ -653,6 +661,14 @@
   <p>隔离集成用例以公开 <code>runMaintenance</code> 和 <code>sessions.flush</code> 完成选择，确认原生耐久监听器参与后记录夹具检查点。核对当前临时 Host 的 PID 与代次后强制终止该子进程，移除选模夹具并重启。目标的模型选择在冷读中存在，另一会话与项目默认值保持原值。该证据限显式刷盘后的进程终止与恢复。</p>
   <p>通过已存在的 <code>ContextRuns</code> 校验、Native non-owner 发送、原生适配器和本机合成供应商走完两个推理回合。供应商实际收到目标的个人模型与另一会话的实例默认模型各一次，双方均写入助手回复和完成事件，实例默认值保持原值。测试 Profile 关闭了额外标题模型调用，用例只使用合成供应商、临时目录和测试身份。结果支持原生会话级应用及读回，不证明 R3 写入授权与消息竞争已完成。</p>
   <p>验证自检覆盖测试 Profile、临时子进程、冷读、上下文签名和实际请求。<code>pnpm test tests/integration/project-native-paths.test.ts</code> 通过（2 项，4.51s），<code>pnpm check</code> 通过（16 文件／107 项测试、类型、lint、格式和构建），<code>pnpm validate:baseline</code> 通过。本次交付是 T13 的复现用例和规格决策证据。</p>
+
+  <h4 id="t13-send-time-acceptance-20261118">11.16.7 已确认的会话选模时点</h4>
+  <p>按 <a href="00-decision-ledger.html#acceptance-decisions-20261118">台账 §8.13</a>。保存的是当前本人会话的 Provider／Model 选择及可核对结果，显示「已保存，待生效」。保存期间不调模型、不发送提示词、不切换已在执行的 Native 推理。下一次本人发起发送时，按当时的登录、所有权、需求权限及可用模型集合重验，通过后才将保存引用用于该次推理。以实际 Native 请求或状态证明生效。新写入方案须按 §11.16.3 既有问题完成 R3 独立复审。</p>
+  <ul>
+    <li>保存响应丢失、刷新和重启后可核对同一待生效选择。无权保存他人会话，跨需求或项目也不能保存。</li>
+    <li>撤权、登录失效、选项已退出允许范围或原生应用失败时，本次新选择不得生效。失败状态保留可核对结果和待发送文本，任何已开始推理继续沿用原模型。</li>
+    <li>隔离 Native 与供应商夹具证明保存时调用数为零，下一次有权发送实际命中选择的模型，其他会话及实例默认不受影响。用原生恢复及并发用例证明刷盘、重试和开始推理的边界。</li>
+  </ul>
 
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
@@ -686,13 +702,21 @@
   <h4 id="t14-native-preset-evidence-20261118">11.17.4 原生 preset 冷恢复验证</h4>
   <p>D4／D21 要求同项目实例按需求选择 preset，模板调整只影响后建会话。固定版本 DSH <code>0.2.2-rc.3</code> 在创建时记录 <code>agentPreset</code>，恢复时按该 ID 重新装配当前定义。原生服务可按 ID 创建，现有 RDWS 浏览器和专用创建票据仍限制调用方填写 preset。</p>
   <p>在临时运行根启动真实 Native 进程。先以旧 ID 创建并刷盘，随后保留旧定义并加入新 ID，冷恢复旧会话并为同一 workspace 创建新会话。两者的原生会话记录与实际挂载模块分别匹配旧版、新版。第三次启动用新版定义覆盖旧 ID 并移除新版 ID，旧会话按旧 ID 加载到新版模块，新会话因其定义缺失而拒绝恢复。未知 preset 无法创建。对已注册的新 ID，浏览器得到原生拒绝，创建票据得到 HTTP 403，二者均未新增会话。</p>
-  <p>正式接线需为每一生效版本保留不可变标识及其精确内容，保护历史恢复。需求绑定的写权限需确认，样稿把需求列表的应用入口交给导入权限，把上下文页入口交给普通会话权限。新版本如何装载到运行中的实例和如何验证真实制品仍待实现。本轮仅使用无操作模块及临时 Native 数据，未调用供应商、装载生产插件或调整产品权限。</p>
+  <p>正式接线需为每一生效版本保留不可变标识及其精确内容，保护历史恢复。需求绑定写权限以 <a href="#t14-binding-acceptance-20261118">§11.17.6 的用户决定</a>为准。该冷恢复验证使用无操作模块及临时 Native 数据。</p>
   <p>验证用例位于 <code>tests/integration/native-preset-composition.test.ts</code>。按原生服务、装配证据、拒绝路径与清理范围完成有证据自检。<code>pnpm check</code> 通过（18 文件、113 项测试，类型、lint、格式和构建通过），<code>pnpm validate:baseline</code> 通过（29 任务、62 个追溯点、16 个视图）。</p>
   <h4 id="t14-native-preset-live-20261118">11.17.5 原生 preset 在线装载验证</h4>
   <p>固定版本 <code>0.2.2-rc.3</code> 的宿主服务 <code>agentPresets.register</code> 可在项目实例运行时新增定义。用隔离运行根启动实例，创建并刷盘旧会话。在实例就绪后调用宿主服务注册新 ID。实测 Native 进程 ID、项目默认 preset 与 Profile 文件内容相同，旧会话仍挂载旧模块，新建会话挂载新模块。</p>
   <p>重复注册旧 ID 被拒绝，读取旧定义仍为原模块。缺失模块的注册返回加载诊断，尝试用该定义创建时返回 <code>agent-preset/invalid</code>，workspace 中仍只有两个成功创建的会话。现有浏览器和专用创建票据拒绝调用方指定已装载的新 ID。重启后通过配置重新装配两版，原生记录及模块均与在线时一致。用例也保留同 ID 替换与丢失定义的冷恢复反例。</p>
-  <p>正式接线需要持久保存每个不可变定义，并在实例重启时重建注册表。需求绑定权限、真实制品的精确身份校验及生成流程仍待完成。</p>
+  <p>正式接线需要持久保存每个不可变定义，并在实例重启时重建注册表。需求绑定、真实制品的精确身份校验及生成流程仍待实现。</p>
   <p>已审阅原生注册、进程身份、重复与装载失败断言以及临时数据清理。定点 Native 与权限验证通过（3 文件、14 项），<code>pnpm check</code> 通过（18 文件、113 项测试，类型、lint、格式和构建通过），<code>pnpm validate:baseline</code> 通过（29 任务、62 个追溯点、16 个视图）。</p>
+
+  <h4 id="t14-binding-acceptance-20261118">11.17.6 已确认的需求模板绑定</h4>
+  <p>按 <a href="00-decision-ledger.html#acceptance-decisions-20261118">台账 §8.13</a>。只有当前项目的项目管理员可以绑定或更换平台已发布的、适用于本项目的确切模板版本。平台角色没有该项目的管理员身份时无绑定权，需求经理、需求负责人及普通参与者单凭自身角色也无绑定权。绑定变更只影响之后新建的会话。已建会话保留原生原定义和历史，模板再次发布不自动替换既有绑定。</p>
+  <ul>
+    <li>通过界面和直接请求证明当前项目管理员可操作。平台管理、需求管理、其他参与身份、跨项目以及已撤权的管理员均不得单凭原身份提交。只接受本项目确切的已发布版本及当前通过白名单校验的引用。</li>
+    <li>真实隔离 Native 验证同需求变更前后各建会话，新会话使用对应新版本，既有会话在线及冷恢复继续使用原组合。发布模板新版本后，按原绑定再次新建仍使用原版。</li>
+    <li>在交付方案中明确绑定提交与会话创建的定序，验证过期、失败和重放。方案须明确派生怎样衔接 T02 已批准的原生固定前缀与权限边界。出现无效引用或配置装载失败时不得悄悄扩大到其他组合。</li>
+  </ul>
 
   <h3 id="t16-trace-plan-20261118">11.18 T16 会话轨迹页</h3>
   <p>Change / R2。依据 D7、I2-AUTH、设计基线 Q1／Q2、T16 的轨迹读取、详情和摘要验收，以及已验证的 T02 被动历史分页，交付一条“需求内选会话 → 读取固定逻辑历史 → 展开详情 → 下载已读摘要”的路径。复用 <a href="#session-lifecycle-live-20261118">T02 的真实恢复与被动读取证据</a>，T02 用户侧视觉验收保留。影响面为已有前端导航和历史读取适配，撤销本次功能提交即可恢复原入口。原始持久前缀与独立哈希锚点另按 T16 实现。</p>

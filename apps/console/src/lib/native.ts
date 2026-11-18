@@ -1,1 +1,5 @@
-export { connectNative, type NativeRuntime } from '@rdws/dsh-client';
+export {
+  connectNative,
+  readSessionHistory,
+  type NativeRuntime,
+} from '@rdws/dsh-client';

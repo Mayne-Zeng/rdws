@@ -11,10 +11,8 @@ import { connectNative, type NativeRuntime } from '../lib/native.ts';
 import { authClient } from '../lib/auth.ts';
 import { Icon } from '../lib/ui.tsx';
 import { SessionModelStatus } from './session-model.tsx';
-import type {
-  SessionHistoryPage,
-  SessionOperationResult,
-} from '@rdws/contracts';
+import type { SessionOperationResult } from '@rdws/contracts';
+import { SessionHistory } from './session-history.tsx';
 function text(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -260,97 +258,6 @@ function SessionPanel({
     </div>
   );
 }
-function History({ runtime, id }: { runtime: NativeRuntime; id: string }) {
-  const [history, setHistory] = useState<SessionHistoryPage>();
-  const [busy, setBusy] = useState(false),
-    [error, setError] = useState('');
-  const controller = useRef(new AbortController()),
-    pending = useRef(false);
-  async function load(current?: SessionHistoryPage) {
-    if (pending.current) return;
-    pending.current = true;
-    const requestController = controller.current;
-    setBusy(true);
-    setError('');
-    try {
-      const page = await runtime.history(
-        id,
-        current
-          ? { throughSeq: current.cursor, beforeSeq: current.beforeSeq }
-          : {},
-        requestController.signal,
-      );
-      if (requestController.signal.aborted) return;
-      setHistory(
-        current
-          ? { ...page, events: [...page.events, ...current.events] }
-          : page,
-      );
-    } catch (e) {
-      if (!requestController.signal.aborted) setError((e as Error).message);
-    } finally {
-      if (controller.current === requestController) pending.current = false;
-      if (!requestController.signal.aborted) setBusy(false);
-    }
-  }
-  useEffect(() => {
-    const current = new AbortController();
-    controller.current = current;
-    pending.current = false;
-    void load();
-    return () => current.abort();
-  }, [runtime, id]);
-  return (
-    <section className="history-panel" aria-label="会话历史回放">
-      <div className="conversation-title">
-        <strong>历史回放</strong>
-        <span className="muted">
-          {history
-            ? history.cursor < 0
-              ? '空历史'
-              : `固定至事件 ${history.cursor}`
-            : '正在确定回放位置'}
-        </span>
-      </div>
-      <p className="muted">
-        原生会话历史可能包含中断后的恢复补齐。回放不会重新执行模型或工具。
-      </p>
-      {error && <Alert theme="error" message={error} />}
-      <div className="session-actions">
-        {(history?.hasMore || error) && (
-          <Button
-            tag="button"
-            onClick={() => void load(history)}
-            loading={busy}
-          >
-            {error ? '重试读取历史' : '加载更早事件'}
-          </Button>
-        )}
-        {busy && <span role="status">正在读取历史…</span>}
-        {history && !history.hasMore && (
-          <span className="muted">
-            已加载至历史起点 · {history.events.length} 条可展示事件
-          </span>
-        )}
-      </div>
-      <ol className="history-events" aria-label="历史事件序列">
-        {history?.events.map((event) => (
-          <li key={event.seq} className="history-event">
-            <div>
-              <span className="muted">#{event.seq}</span>
-              <strong>{event.label}</strong>
-              {event.outcome && <span>{event.outcome}</span>}
-            </div>
-            {event.text !== undefined && <p>{event.text}</p>}
-          </li>
-        ))}
-      </ol>
-      {history && !history.events.length && (
-        <p className="muted">当前范围暂无可展示事件。</p>
-      )}
-    </section>
-  );
-}
 type PendingSession = { commandId: string; sourceSessionId?: string };
 export function Conversation({ requirementId }: { requirementId: string }) {
   const { data: identity } = authClient.useSession();
@@ -570,9 +477,9 @@ export function Conversation({ requirementId }: { requirementId: string }) {
               </Button>
             </div>
             {replay ? (
-              <History
+              <SessionHistory
                 key={'history-' + selected}
-                runtime={runtime}
+                requirementId={requirementId}
                 id={selected}
               />
             ) : (

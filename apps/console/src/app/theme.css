@@ -1252,6 +1252,18 @@ input[type='checkbox'] {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.session-trace select {
+  min-height: var(--control-h);
+  max-width: 100%;
+}
+.session-trace .history-event summary {
+  min-height: var(--control-h);
+  align-content: center;
+  cursor: pointer;
+}
+.trace-event-detail {
+  margin: 8px 0 0 16px;
+}
 .conversation-title {
   display: flex;
   justify-content: space-between;
@@ -1948,8 +1960,8 @@ input[type='checkbox'] {
     width: 100%;
   }
 
-  .workspace-tabs [role='tab']:first-child {
-    margin-right: auto;
+  .workspace-tabs .tab-divider {
+    margin-left: auto;
   }
 
   .workspace-tabs .scope-label {

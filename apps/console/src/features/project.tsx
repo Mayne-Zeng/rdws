@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Loading } from 'tdesign-react';
@@ -13,10 +13,12 @@ import { RequirementPage } from './requirement.tsx';
 import { MembersPage } from './administration.tsx';
 import { RepositoriesPage } from './repositories.tsx';
 import { CapabilityTemplates } from './capability-templates.tsx';
+import { SessionTrace } from './session-trace.tsx';
 export type View =
   | 'requirements'
   | 'overview'
   | 'chat'
+  | 'trace'
   | 'context'
   | 'create'
   | 'repos'
@@ -53,6 +55,7 @@ export function ProjectWorkspace({
   const view: View = [
     'overview',
     'chat',
+    'trace',
     'context',
     'create',
     'repos',
@@ -150,11 +153,15 @@ export function ProjectWorkspace({
     view !== 'repos' &&
     view !== 'members' &&
     view !== 'capabilities';
-  const showTabs = demandView && projectMatches && !!summary;
-  const scopeLabel = view === 'chat' ? '会话视图' : '需求级';
+  const traceAccessFailed = view === 'trace' && requirements.isError;
+  const showTabs =
+    demandView && projectMatches && !!summary && !traceAccessFailed;
+  const sessionView = view === 'chat' || view === 'trace';
+  const scopeLabel = sessionView ? '会话视图' : '需求级';
   const activeView = view === 'requirements' ? 'overview' : view;
   const tabs = [
     { view: 'chat', label: '对话', icon: 'chat' },
+    { view: 'trace', label: '轨迹', icon: 'clock' },
     { view: 'overview', label: '需求档案', icon: 'grid' },
     { view: 'context', label: '上下文', icon: 'layers' },
   ] as const;
@@ -369,9 +376,7 @@ export function ProjectWorkspace({
                 'demand-item' +
                 (r.id === selected && view !== 'create' ? ' active' : '')
               }
-              onClick={() =>
-                navigate(view === 'chat' ? 'chat' : 'overview', r.id)
-              }
+              onClick={() => navigate(sessionView ? view : 'overview', r.id)}
             >
               <span className="demand-icon">
                 <Icon name="file" />
@@ -474,7 +479,7 @@ export function ProjectWorkspace({
             <Icon name="eye" />
             <strong>{scopeLabel}</strong>
             <span>当前需求下的会话为只读分析</span>
-            {view === 'chat' ? (
+            {sessionView ? (
               <button onClick={() => navigate('overview')}>
                 查看档案与阶段操作
               </button>
@@ -515,18 +520,22 @@ export function ProjectWorkspace({
               }}
             >
               {tabs.map((tab) => (
-                <button
-                  key={tab.view}
-                  id={'view-' + tab.view}
-                  role="tab"
-                  aria-selected={activeView === tab.view}
-                  aria-controls="workspace-panel"
-                  tabIndex={activeView === tab.view ? 0 : -1}
-                  onClick={() => navigate(tab.view)}
-                >
-                  <Icon name={tab.icon} />
-                  {tab.label}
-                </button>
+                <Fragment key={tab.view}>
+                  {tab.view === 'overview' && (
+                    <span className="tab-divider" aria-hidden="true" />
+                  )}
+                  <button
+                    id={'view-' + tab.view}
+                    role="tab"
+                    aria-selected={activeView === tab.view}
+                    aria-controls="workspace-panel"
+                    tabIndex={activeView === tab.view ? 0 : -1}
+                    onClick={() => navigate(tab.view)}
+                  >
+                    <Icon name={tab.icon} />
+                    {tab.label}
+                  </button>
+                </Fragment>
               ))}
             </div>
             <span className="scope-label">{scopeLabel}</span>
@@ -590,22 +599,33 @@ export function ProjectWorkspace({
               />
             ) : demandView ? (
               showTabs ? (
-                <RequirementPage key={selected} id={selected} view={view} />
+                view === 'trace' ? (
+                  <SessionTrace
+                    key={`${userId}:${project.id}:${selected}`}
+                    userId={userId}
+                    projectId={project.id}
+                    requirementId={selected}
+                  />
+                ) : (
+                  <RequirementPage key={selected} id={selected} view={view} />
+                )
               ) : requirements.isPending ? (
                 <Loading text="正在核对需求归属" />
               ) : (
-                <div className="inline-feedback">
-                  <Alert
-                    theme="warning"
-                    message="无法在当前项目打开此需求，请核对项目与需求权限。"
-                  />
-                  <Button
-                    tag="button"
-                    onClick={() => navigate('requirements', '')}
-                  >
-                    返回需求列表
-                  </Button>
-                </div>
+                !traceAccessFailed && (
+                  <div className="inline-feedback">
+                    <Alert
+                      theme="warning"
+                      message="无法在当前项目打开此需求，请核对项目与需求权限。"
+                    />
+                    <Button
+                      tag="button"
+                      onClick={() => navigate('requirements', '')}
+                    >
+                      返回需求列表
+                    </Button>
+                  </div>
+                )
               )
             ) : (
               <>

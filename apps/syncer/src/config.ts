@@ -89,7 +89,7 @@ export interface RegisteredRepository {
   targetName: string;
   targetRef: string;
   signersFile: string;
-  credentialFile: string;
+  credentialFile: string | null;
   caFile?: string;
 }
 
@@ -123,9 +123,7 @@ export function parseRepositoryUrl(value: string) {
     url.search ||
     url.hash
   )
-    throw new MirrorConfigError(
-      'A canonical GitLab HTTPS repository URL is required',
-    );
+    throw new MirrorConfigError('A canonical HTTPS repository URL is required');
   return url.href;
 }
 
@@ -154,12 +152,13 @@ export async function repositories(root: string, project: string) {
         'targetName',
         'targetRef',
         'signersFile',
-        'credentialFile',
       ] as const;
       if (
         !record(item) ||
-        !exactFields(item, [...required, 'caFile']) ||
+        !exactFields(item, [...required, 'credentialFile', 'caFile']) ||
         required.some((key) => typeof item[key] !== 'string') ||
+        (item.credentialFile !== null &&
+          typeof item.credentialFile !== 'string') ||
         (item.caFile !== undefined && typeof item.caFile !== 'string')
       )
         throw new Error();
@@ -172,7 +171,7 @@ export async function repositories(root: string, project: string) {
         !refName(row.baselineRef) ||
         !refName(row.targetRef) ||
         !fileName(row.signersFile) ||
-        !fileName(row.credentialFile) ||
+        (row.credentialFile !== null && !fileName(row.credentialFile)) ||
         (row.caFile !== undefined && !fileName(row.caFile))
       )
         throw new Error();
@@ -194,6 +193,7 @@ export async function readTrust(dir: string, row: RegisteredRepository) {
 }
 
 export async function credential(root: string, row: RegisteredRepository) {
+  if (row.credentialFile === null) return undefined;
   const dir = await safeDirectory(root, ['secrets']);
   try {
     const value: unknown = JSON.parse(

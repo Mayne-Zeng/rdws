@@ -419,7 +419,7 @@
     <tr data-interface="business-commands"><td>需求／任务／业务命令</td><td><a href="05-development-backlog.md#主计划任务">T11</a></td><td>business.ts、workbench.ts、contracts/db；复用当前身份和定序锁。</td><td>PG 为权威；事件／回执与业务同事务，不另造角色或 commandId 规则。</td></tr>
     <tr data-interface="native-session-flow"><td>会话生命周期／流</td><td><a href="05-development-backlog.md#主计划任务">T02</a></td><td>session-operations.ts、dsh/bridge/client/plugins；后续 T03/T06/T13 扩展先协调。</td><td>已有 NativeSession/session_operation、20 秒传输能力与 P/C/B；不复制第二份消息日志。</td></tr>
     <tr data-interface="requirement-context"><td>需求上下文接口</td><td><a href="05-development-backlog.md#主计划任务">T12</a></td><td>runtime-context.ts、business.read、原生 pre-step；当前实现来源 T02，业务事实由 T11 提供。</td><td>编辑背景与 PG 业务快照分开；当前登录／请求／Agent 绑定继续执行，不沿用历史 principal。</td></tr>
-    <tr data-interface="source-mirror"><td>仓库来源／只读镜像</td><td><a href="05-development-backlog.md#主计划任务">T04</a></td><td>仓库配置与 syncer 的唯一 sources 更新接口；业务 API 归 server。</td><td>具名授权 Gitee HTTPS 地址、基线／目标分支与签名公钥待提供。按 <a href="#t04-gitee-acceptance-20261118">T04 真实验收</a> 登记。</td></tr>
+    <tr data-interface="source-mirror"><td>仓库来源／只读镜像</td><td><a href="05-development-backlog.md#主计划任务">T04</a></td><td>仓库配置与 syncer 的唯一 sources 更新接口；业务 API 归 server。</td><td>具名授权 Gitee 已验证 HTTPS 只读镜像、非生产目标读回和 SSH 提交验签。见 <a href="#t04-gitee-live-20261118">T04 真实验收</a>。</td></tr>
     <tr data-interface="demand-workspace"><td>需求工作树／workspace</td><td><a href="05-development-backlog.md#主计划任务">T05</a></td><td>需求私有 bare、baseCommit、工作树与 workspace 路径；编排归 orchestrator。</td><td>不在 sources 登记需求 worktree；header cwd 保持需求根，不建子任务并行树。</td></tr>
     <tr data-interface="sandbox-execution"><td>实际工具／沙箱执行</td><td><a href="05-development-backlog.md#主计划任务">T06</a></td><td>dsh 原生工具、文件、Shell、sandbox 与进程句柄适配；上层编排通过公开层访问。</td><td>所需工具先在隔离环境取证；产品入口零工具维持到 T07 联合门槛。</td></tr>
     <tr data-interface="write-handoff"><td>写资格／停止交接</td><td><a href="05-development-backlog.md#主计划任务">T07</a></td><td>当前开发分派＋本人会话＋独占写资格，orchestrator 协调 PG 与实际进程。</td><td>WriteLease 尚未实现，lease 及 runtime 锁均不单独证明停止或授写。</td></tr>
@@ -446,7 +446,7 @@
   <p>只读核查命令来自现有配置或本机已安装工具：pnpm db:status、Node 标准库版本／health／锁拥有者检查、应用角色 SELECT、已安装包 exports／公开源码。开发 rdws_dev／rdws_app 与测试 rdws_test／rdws_test_app 均可读 13 表，非 superuser、无 schema CREATE；开发应用角色对 requirement_event 无 UPDATE/DELETE。PG18.7 固定镜像容器 healthy，loopback 55432；Node v24.20.0、pnpm 11.28.5。</p>
   <p>日常 5173／3001 health 200，现有 Native 锁记录的双 PID 均探测存活（仅进程元数据，未重发 Native RPC）；lsof 复查固定测试 5317／3303 未发现监听，testing-web 遗留锁的双 PID 均已停止。本轮保留既有服务和锁文件，不用“端口空闲”推断测试数据库或其他实例可随意并行。运行根在用户主目录 .rdws、为仓库外绝对路径；值不复制入仓，指纹与本机元数据见 mode 600 的 <code>state/exports/t00-baseline-2c7273ae-3628-46c4-8cf1-401723c4eaf1.json</code>。</p>
   <table id="t00-gaps"><tr><th>缺口编号／主题</th><th>主责</th><th>已核事实与未验证边界</th><th>闭环条件</th><th>阻塞范围</th></tr>
-    <tr data-gap="T00-G1" data-owner="T04"><td>T00-G1 / Gitee 只读验收目标</td><td><a href="05-development-backlog.md#主计划任务">T04</a></td><td>已确认使用具名授权 Gitee 仓库，地址、两条分支及 SSH 签名公钥尚未提供。</td><td>材料到齐后按 <a href="#t04-gitee-acceptance-20261118">T04 验收</a> 核对仓库和只读身份，执行 HTTPS 镜像与 SSH 提交验签。</td><td>T04 与 T05 的前置门槛。T09 的 GitLab 条件继续由 T09／T00-G2 记录。</td></tr>
+    <tr data-gap="T00-G1" data-owner="T04"><td>T00-G1 / Gitee 只读验收目标</td><td><a href="05-development-backlog.md#主计划任务">T04</a></td><td>具名仓库、<code>main</code>、<code>test</code> 和 SSH 签名公钥均已登记并核对。</td><td>已关闭。<a href="#t04-gitee-live-20261118">HTTPS 镜像与 SSH 提交验签</a>正式通过。</td><td>T05 前置已满足。T09 的 GitLab 条件由 T09／T00-G2 记录。</td></tr>
     <tr data-gap="T00-G2" data-owner="T09"><td>T00-G2 / GitLab 分支策略与人工合入</td><td><a href="05-development-backlog.md#主计划任务">T09</a></td><td>尚未核验通配保护、普通开发无 push、rdws/* 服务账号范围、禁 force-push 和人工合入人。</td><td>对所有匹配规则、角色与部署策略取证，再在另获写入授权的测试仓库实证；不能只靠客户端不传 --force。</td><td>T09/T10 实际交付；不得偷偷把“非保护 rdws/*”改为另一策略或代用户接受扩大权限。</td></tr>
     <tr data-gap="T00-G3" data-owner="T21"><td>T00-G3 / 目标 Linux 与沙箱</td><td><a href="05-development-backlog.md#主计划任务">T21</a></td><td>宿主 darwin/arm64；Docker engine linux/aarch64，只验证 PG 基础。未登记目标 Linux 主机／访问配置；ssh 可用不代表已连接目标。</td><td>明确目标主机／版本／架构，验证 Node/pnpm、user namespace、bwrap/Landlock 的实际 enforcement、UID/路径和进程停止，再执行完整闭环。</td><td>T21/T22 的 Linux 证据；不阻塞 macOS 的 T06/T07/T08/T09。F03 不替代目标 Linux 验收。</td></tr>
     <tr data-gap="T00-G4" data-owner="T06"><td>T00-G4 / 真实执行与工具结果</td><td><a href="05-development-backlog.md#主计划任务">T06</a></td><td>工具仍为零；宿主有 sandbox-exec、无 bwrap，原生支持 Seatbelt/bwrap/Landlock 不证明实际限制有效。</td><td>在隔离验证环境做文件／Shell／Git、越界／符号链接／Git 管理区反例和工具结果流；产品入口继续关闭。</td><td>T06 完成及 T07 联合启用；测试或阶段推进不自动获得写资格。</td></tr>
@@ -545,7 +545,7 @@
   </ul>
   <h4>11.13.3 检查点与环境</h4>
   <p>先增隔离集成用例，生成仅本次使用的本地签名和 bare 远端，验证真实 Git 同步、验签、引用并发、目标不存在、绑定变更和发布前失败保留原基线；覆盖发布后的收据故障、重放时远端推进及进程族停止。通过独立 HTTPS Git 夹具复核认证、跨目标零凭据、错误 TLS、外部环境不继承和 stdout/stderr 脱敏。以当前项目预置角色的真实数据库会话测试 API 权限、停用／注销／角色撤销及撤权先行和发布先行两序；浏览器 E2E 拦截受控 API 状态，不把夹具安装到现行 Playwright 共用的日常 RDWS_HOME；真实 Git／API 用显式注入的隔离临时仓库运行根。前后枚举 refs、FETCH_HEAD 和 worktree 登记。最终执行 pnpm check、pnpm test:e2e、pnpm validate:baseline；具名授权远端的验收依据 <a href="#t04-gitee-acceptance-20261118">§11.13.5</a>，隔离 HTTPS 夹具仅作为本地证据。日常 5173／3001 与 Native 保留，浏览器 5317／3303 串行；新测试运行数据仅临时根，开发业务库不迁移。</p>
-  <p>路径登记：apps/syncer、apps/server 的工作台接线、packages/contracts 仓库 DTO、apps/console 的仓库入口、聚焦集成／E2E、配置示例和 README／SECURITY／AGENTS／docs/02／05。沿用 T00-G1 的具名授权登记。T04 当前等候 Gitee 仓库材料和两项真实结果，T05 保留前置门槛。T09 的出站写入和环境分支保护验证独立。</p>
+  <p>路径登记：apps/syncer、apps/server 的工作台接线、packages/contracts 仓库 DTO、apps/console 的仓库入口、聚焦集成／E2E、配置示例和 README／SECURITY／AGENTS／docs/02／05。具名授权登记和 T05 前置证据见 <a href="#t04-gitee-live-20261118">§11.13.8</a>。T09 的出站写入和环境分支保护验证独立。</p>
   <p id="t04-plan-review-20261118">首轮 A/B 均 BLOCK。已补锁定序、持久命令、发布意图、源绑定、TLS / 文件 / 进程边界及真实目标预检，第二轮 A/B 均 APPROVE，首轮发现均关闭。</p>
 
   <h4 id="t04-delivery-20261118">11.13.4 本地交付与验收证据</h4>
@@ -561,12 +561,31 @@
   <p>T04 的本地配置、同步和工作台功能随 <code>feat: add repository baseline synchronization</code> 本地提交，修订以 Git 为准。该轮仅完成本地镜像和 SSH commit 签名验证。当前真实验收按 <a href="#t04-gitee-acceptance-20261118">§11.13.5</a> 推进。日常 Web/API 保留，测试服务退出。日志和截图在忽略目录 .impeccable/review/t04，新测试本身不依赖这些产物。</p>
 
   <h4 id="t04-gitee-acceptance-20261118">11.13.5 已确认的 Gitee 只读验收</h4>
-  <p>用户已确认用其指定的授权 Gitee 仓库为 T04 实测。待提供 Gitee HTTPS 仓库地址、基线分支、非生产目标分支和 SSH 签名公钥。材料到齐后核对仓库、分支及实际授权的读取方式。现有 syncer 配置要求精确绑定该 HTTPS URL 的私有只读凭据文件，若目标只有授权的匿名读取方式，匿名路径须先接入和验证。</p>
+  <p>用户已确认使用授权 Gitee 仓库 <code>https://gitee.com/zengym/maestro.git</code> 实测，基线 <code>main</code>，非生产目标 <code>test</code>。用其提供的 SSH 签名公钥验签，HTTPS 读取采用已验证的显式匿名配置。现行结果见 <a href="#t04-gitee-live-20261118">§11.13.8</a>。</p>
   <ol>
     <li>HTTPS 只读镜像同步。由现有 syncer 读取目标分支 SHA 并抓取基线，使用指定仓库、分支及只读授权。核对本地 bare mirror、基线 SHA、目标观察值和同步回执，只有 syncer 发布指定 baseline ref，远端配置和 refs 不发生写入。</li>
     <li>SSH 提交验签。以提供的公钥建立 <code>allowed_signers</code>，对实际获取的基线 tip 通过 Git SSH commit 验签，记录签名核验与基线 SHA。缺签、签名不可信或公钥不匹配时保持原发布基线。</li>
   </ol>
-  <p>T04 两项真实结果都通过并留痕后解锁 T05。隔离 HTTPS Git 夹具仍是本地实现证据，具名仓库验收当前未执行。T09 继续单独在具名授权 GitLab 仓库验证受控推送、MR、人工合入及精确回写。</p>
+  <p>T04 两项真实结果都通过并留痕后解锁 T05。隔离 HTTPS Git 夹具属于本地实现证据。T09 单独在具名授权 GitLab 仓库验证受控推送、MR、人工合入及精确回写。</p>
+
+  <h4 id="t04-gitee-probe-20261118">11.13.6 Gitee 基线预检</h4>
+  <p>用用户指定的 <code>https://gitee.com/zengym/maestro.git</code> 做匿名 HTTPS 预检。在临时 bare 仓读取并抓取 <code>main</code>，<code>ls-remote</code> 和 <code>fetch</code> 均退出 0，顶端为 <code>749bea6b5c4c3f75f0ce726a919475dc865d628f</code>。对象原件无签名字段，SSH 验签无法通过。查询未返回目标 <code>test</code> ref。本轮未读取令牌值、创建远端分支或发布项目镜像。</p>
+  <p>预检后用户指定继续使用 <code>main</code> 作验收基线，非生产目标为 <code>test</code>，授权追加一条签名空提交，必要时补建 <code>test</code>。准备和真实验收结果见 <a href="#t04-gitee-live-20261118">§11.13.8</a>。</p>
+
+  <h4 id="t04-anonymous-plan-20261118">11.13.7 显式匿名只读配置</h4>
+  <p>Change / R2，非批量。已授权 Gitee 仓库已证明可匿名读取，接入一条无令牌的正式镜像路径。仅运行维护者的仓库登记可选访问模式。保持批准的 HTTPS 主机绑定、TLS、精确 refs、SSH 验签、用户角色及发布门。回退到旧代码前，仅移除匿名条目或恢复既有有效文件引用，以保留其他仓库配置、镜像和回执。</p>
+  <ol>
+    <li><code>apps/syncer/src/config.ts</code> 继续要求 <code>credentialFile</code> 字段。字符串是既有精确绑定的私有凭据，<code>null</code> 是显式匿名；缺失、空字符串和其他类型仍拒绝。匿名不读取 secrets，也不设置 Authorization。文件错误及 HTTP 鉴权失败不回退，浏览器 DTO 不新增配置字段。</li>
+    <li>两种访问方式共用已审阅的 Git 配置与发布门。模式由现有登记／信任摘要纳入最终登记重读。该次重读观察到模式变化时拒绝候选，原基线保留，其后变化由下次同步处理。仅更新 HTTPS 验证文案为平台无关的规范仓库地址。</li>
+    <li>隔离 HTTPS Git 夹具记录请求头是否存在的布尔值。验证无 secrets 目录且注入合成 <code>GIT_CONFIG_*</code> 和 <code>RDWS_GIT_AUTH</code> 环境变量时，<code>ls-remote</code> 与 fetch 均无 Authorization，并成功发布已签名基线。强制认证端拒绝匿名，文件模式失败保持失败，缺字段无远端请求。最终重读前变更模式时核对原基线保留。运行聚焦集成、<code>pnpm check</code>、<code>pnpm validate:baseline</code>，同步 README、安全说明及清单。具名 Gitee 以实际读取、分支及签名状态作为验收证据。</li>
+  </ol>
+
+  <h4 id="t04-gitee-live-20261118">11.13.8 Gitee 真实验收</h4>
+  <p>在临时 Git 仓库内用对应私钥签名等树提交，指定 SSH 公钥验签通过。经用户授权，向 Gitee <code>main</code> 快进追加该提交，预检缺失的 <code>test</code> 在确认仍不存在后创建。两条远端 ref 均重新经匿名 HTTPS 核对为 <code>ca2b445ebf2f9d1ad598ee69f9b59f178c1b524f</code>。新基线与原 <code>main</code> 的文件树相同，签名提交从远端重新抓取后验签通过。SSH 准备通道使用临时主机信任文件，指纹对照 <a href="https://help.gitee.com/account/gitees-ssh-key-fingerprints">Gitee 官方指纹</a>。</p>
+  <p>正式同步通过隔离测试库的项目管理员 BFF 接口执行，登记 <code>credentialFile: null</code>。HTTPS 读取和验签均通过，HTTP 200 返回 <code>succeeded</code>，候选、目标观察值与已发布基线均为上述 SHA。签名指纹与用户公钥一致，独立 <code>git verify-commit</code> 退出 0。本地 bare 镜像只发布 <code>refs/heads/main</code>。成员可读回但 POST 返回 403，同一命令可核对原结果。只读同步结束后从 Gitee 读回的两条 ref 仍一致。</p>
+  <p>已保留验收证据和本地镜像于运行根内 <code>state/exports/t04-gitee-20261118-vKBiVG</code>，临时测试项目已清理。验收过程使用匿名 HTTPS，令牌未读取。T04 已满足 T05 前置，T09 继续按独立 GitLab 交付验收。</p>
+  <p>显式匿名方案与交付均经独立复审 APPROVE。新增聚焦用例改前失败于旧配置校验，改后验证实际 HTTPS 认证头缺失、污染环境隔离、认证失败未降级、缺字段及文件错误时无远端操作、发布门变化后原基线保留。首次聚焦同邻域 12 项及类型检查通过。</p>
+  <p><code>caffeinate -i pnpm check</code> 通过（19 文件、123 项测试，类型、lint、格式和构建通过），<code>pnpm validate:baseline</code> 通过（29 任务、62 个追溯点、16 个视图）。整仓回归后，再次匿名读取 Gitee <code>main</code> 和 <code>test</code>，均为上述签名提交。</p>
 
   <h3 id="t03-plan-20261118">11.14 T03 项目与成员管理</h3>
   <p>依据 I2-AUTH、I3-CONTEXT、I6-COMMAND 与 D4，按“项目登记与选择 → 需求归属 → 独立原生实例 → 成员维护与撤权”交付。Change / R3，改变运行时与授权边界，双面独立方案审阅及交付核实。T00 已完成，T04 当时保留待 GitLab 验收，现行要求见 <a href="#t04-gitee-acceptance-20261118">§11.13.5</a>。既有协调者在 main 以 06b1ec4 串行领取。本轮优先评审两种成员授权方案都需要的实例切片 11.14.1，成员管理矩阵另行闭环。</p>

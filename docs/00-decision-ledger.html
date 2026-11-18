@@ -184,7 +184,7 @@
   <ul>
     <li><strong>T13／D19：</strong>本人会话换模型先保存选择。下次本人有权发送时，服务端按当时的授权和允许集合再次校验，通过后再应用到该次发送。保存状态与 Native 实际生效状态分别呈现。<a href="02-directory-and-engineering-design.html#t13-send-time-acceptance-20261118">设计与验收</a>。</li>
     <li><strong>T14／D21：</strong>只有当前项目的项目管理员可为需求绑定或更换平台已发布的模板。绑定引用精确发布版本。变更只影响之后新建的会话，已建会话继续使用各自原版本。<a href="02-directory-and-engineering-design.html#t14-binding-acceptance-20261118">设计与验收</a>。</li>
-    <li><strong>T04／D23：</strong>使用用户将提供的具名授权 Gitee 仓库实测 HTTPS 只读镜像和 SSH 提交验签，两项通过才解锁 T05。T09 继续以授权 GitLab 仓库验收推送、MR、人工合入和回写。<a href="02-directory-and-engineering-design.html#t04-gitee-acceptance-20261118">验收条件和材料</a>。</li>
+    <li><strong>T04／D23：</strong>用用户指定的授权 Gitee 仓库实测 <code>main</code> 的 HTTPS 只读镜像和 SSH 提交验签，以 <code>test</code> 为非生产目标。两项正式验证已通过，T05 解锁。T09 继续以授权 GitLab 仓库验收推送、MR、人工合入和回写。<a href="02-directory-and-engineering-design.html#t04-gitee-live-20261118">真实验收证据</a>。</li>
   </ul>
 
   <div class="warn">以下 §0–§7 保留 v3 设计历史与证据。与上方当前实施基线冲突时，以上方决定及替代关系为准；历史“已评审”不代表本轮实现已验证。</div>

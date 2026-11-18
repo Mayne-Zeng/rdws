@@ -85,8 +85,16 @@ export async function httpsGitFixture(project = 'poc') {
   await fixtureGit(['-C', work, 'tag', 'excluded']);
   await fixtureGit(['clone', '--quiet', '--bare', '--template=', work, remote]);
 
-  const requests: { authenticated: boolean; route: string }[] = [];
-  const controls: { before?: () => Promise<void>; redirect?: string } = {};
+  const requests: {
+    authenticated: boolean;
+    hasAuthorization: boolean;
+    route: string;
+  }[] = [];
+  const controls: {
+    before?: () => Promise<void>;
+    redirect?: string;
+    anonymous?: boolean;
+  } = {};
   let closing = false;
   const tasks = new Set<Promise<void>>();
   const server = createServer(
@@ -97,8 +105,13 @@ export async function httpsGitFixture(project = 'poc') {
         const authenticated =
           req.headers.authorization ===
           'Basic ' + Buffer.from('reader:' + token).toString('base64');
-        requests.push({ authenticated, route: target.pathname });
-        if (!authenticated) {
+        const hasAuthorization = req.headers.authorization !== undefined;
+        requests.push({
+          authenticated,
+          hasAuthorization,
+          route: target.pathname,
+        });
+        if (!authenticated && (!controls.anonymous || hasAuthorization)) {
           res.writeHead(401).end();
           return;
         }
@@ -122,7 +135,7 @@ export async function httpsGitFixture(project = 'poc') {
             CONTENT_LENGTH: req.headers['content-length'],
             HTTP_GIT_PROTOCOL: req.headers['git-protocol'] as
               string | undefined,
-            REMOTE_USER: 'fixture-reader',
+            REMOTE_USER: authenticated ? 'fixture-reader' : undefined,
           },
           stdio: ['pipe', 'pipe', 'ignore'],
         });

@@ -110,6 +110,83 @@ test('HTTPS reads only the registered source and publishes a signed baseline, wi
   }
 });
 
+test('explicit anonymous HTTPS sends no credentials and still verifies the baseline', async () => {
+  const f = await httpsGitFixture();
+  const mirrors = new RepositoryMirrors(f.root);
+  const gate = (publish: () => Promise<void>) => publish();
+  const run = () => mirrors.sync('poc', 'app', 'admin', randomUUID(), gate);
+  const configure = (credentialFile: string | null) =>
+    writeFile(f.registration, JSON.stringify([{ ...f.entry, credentialFile }]));
+  try {
+    await rename(join(f.root, 'secrets'), join(f.root, 'unused-secrets'));
+    vi.stubEnv('GIT_CONFIG_COUNT', '1');
+    vi.stubEnv('GIT_CONFIG_KEY_0', 'http.extraHeader');
+    vi.stubEnv('GIT_CONFIG_VALUE_0', 'Authorization: Trace fixture');
+    vi.stubEnv('RDWS_GIT_AUTH', 'Authorization: Another fixture');
+    await configure(null);
+    f.controls.anonymous = true;
+    expect(await run()).toMatchObject({
+      status: 'succeeded',
+      candidateCommit: f.first,
+      targetCommit: f.first,
+      signerFingerprint: expect.stringMatching(/^SHA256:/),
+    });
+    expect(
+      f.requests.some((request) => request.route.endsWith('/info/refs')),
+    ).toBe(true);
+    expect(
+      f.requests.some((request) => request.route.endsWith('/git-upload-pack')),
+    ).toBe(true);
+    expect(f.requests.every((request) => !request.hasAuthorization)).toBe(true);
+
+    const beforeDenial = f.requests.length;
+    f.controls.anonymous = false;
+    expect(await run()).toMatchObject({
+      status: 'failed',
+      issue: 'connection',
+    });
+    expect(f.requests.length).toBeGreaterThan(beforeDenial);
+    expect(f.requests.every((request) => !request.hasAuthorization)).toBe(true);
+    const before = f.requests.length;
+    await configure(f.entry.credentialFile);
+    expect(await run()).toMatchObject({
+      status: 'failed',
+      issue: 'credentials',
+    });
+    expect(f.requests).toHaveLength(before);
+    const incomplete: Partial<typeof f.entry> = { ...f.entry };
+    delete incomplete.credentialFile;
+    await writeFile(f.registration, JSON.stringify([incomplete]));
+    await expect(run()).rejects.toThrow('Repository configuration is invalid');
+    expect(f.requests).toHaveLength(before);
+
+    f.controls.anonymous = true;
+    await configure(null);
+    const next = await f.commit();
+    await f.update();
+    const changed = await mirrors.sync(
+      'poc',
+      'app',
+      'admin',
+      randomUUID(),
+      async (publish) => {
+        await configure(f.entry.credentialFile);
+        await publish();
+      },
+    );
+    expect(changed).toMatchObject({
+      status: 'failed',
+      issue: 'configuration_changed',
+      candidateCommit: next,
+    });
+    expect((await mirrors.list('poc'))[0]!.publishedCommit).toBe(f.first);
+  } finally {
+    vi.unstubAllEnvs();
+    await mirrors.close();
+    await f.close();
+  }
+});
+
 test('trust and source changes fail closed before publication', async () => {
   const f = await httpsGitFixture();
   const mirrors = new RepositoryMirrors(f.root);

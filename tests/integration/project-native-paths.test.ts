@@ -53,7 +53,7 @@ test('native registration accepts a project profile and refuses linked runtime b
   }
 });
 
-test('a flushed native session model choice survives abrupt exit and routes only its own inference', async () => {
+test('a flushed native model choice survives restart and pi-ai checks each physical dispatch', async () => {
   const root = await mkdtemp(
     join(await realpath(tmpdir()), 'rdws-project-model-'),
   );
@@ -62,7 +62,25 @@ test('a flushed native session model choice survives abrupt exit and routes only
   const patchPath = join(profile, 'cordis.patch.yml');
   const checkpoint = join(root, 'selection-checkpoint.json');
   const requirementId = randomUUID();
-  const modelsUsed: string[] = [];
+  const providerHits: { id: string | undefined; model: string }[] = [];
+  const settled = new Set<string>();
+  const dispatches: {
+    id: string;
+    sessionId: string;
+    provider: string;
+    model: string;
+    purpose: string | null;
+    allowed: boolean;
+  }[] = [];
+  let retrySession = '';
+  let deniedTitleSession = '';
+  let retryPending = false;
+  let retryStillAuthorized = true;
+  let releaseRetry!: () => void;
+  const retryDecision = new Promise<void>(
+    (resolve) => (releaseRetry = resolve),
+  );
+  let rateLimitNextMain = false;
   let runs: ContextRuns;
   const fixture = createServer(async (request, response) => {
     try {
@@ -76,6 +94,30 @@ test('a flushed native session model choice survives abrupt exit and routes only
         response.end(JSON.stringify(result));
         return;
       }
+      if (request.url === '/dispatch') {
+        const title = input.purpose === 'session-title';
+        const retry =
+          input.sessionId === retrySession &&
+          !title &&
+          dispatches.some(
+            (call) => call.sessionId === retrySession && !call.purpose,
+          );
+        if (retry) {
+          retryPending = true;
+          await retryDecision;
+        }
+        const allowed = title
+          ? ![retrySession, deniedTitleSession].includes(input.sessionId)
+          : !retry || retryStillAuthorized;
+        dispatches.push({ ...input, allowed });
+        response.writeHead(allowed ? 204 : 403).end();
+        return;
+      }
+      if (request.url === '/dispatch-settled') {
+        settled.add(input.id);
+        response.writeHead(204).end();
+        return;
+      }
       if (
         request.url !== '/v1/chat/completions' ||
         typeof input.model !== 'string'
@@ -83,7 +125,18 @@ test('a flushed native session model choice survives abrupt exit and routes only
         response.writeHead(404).end();
         return;
       }
-      modelsUsed.push(input.model);
+      providerHits.push({
+        id: request.headers['x-rdws-fixture-dispatch'] as string | undefined,
+        model: input.model,
+      });
+      if (rateLimitNextMain && input.model === 'project-fixture-model') {
+        rateLimitNextMain = false;
+        response.writeHead(429, { 'content-type': 'application/json' });
+        response.end(
+          JSON.stringify({ error: { message: 'Synthetic rate limit' } }),
+        );
+        return;
+      }
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       const completion = {
         id: 'fixture-completion',
@@ -370,7 +423,7 @@ test('a flushed native session model choice survives abrupt exit and routes only
       );
       expect(result).toMatchObject({ ok: true, value: { accepted: true } });
     }
-    async function hasReply(sessionId: string) {
+    async function sessionRecords(sessionId: string) {
       const events = await callNative(
         'session/events',
         { request: { address: { kind: 'session', sessionId } } },
@@ -378,15 +431,22 @@ test('a flushed native session model choice survives abrupt exit and routes only
         sessionId,
       );
       expect(events.ok).toBe(true);
-      const records = events.value.records as {
+      return events.value.records as {
         event: {
           type: string;
+          seq: number;
           data: {
             message?: { content?: { text?: string }[] };
             reason?: { kind?: string };
+            source?: { kind: string };
+            messageSeqs?: number[];
+            retryId?: string;
           };
         };
       }[];
+    }
+    async function hasReply(sessionId: string) {
+      const records = await sessionRecords(sessionId);
       return (
         records.some(
           ({ event }) =>
@@ -412,9 +472,192 @@ test('a flushed native session model choice survives abrupt exit and routes only
     await expect
       .poll(() => readSelection(otherSessionId, 'lastUsed'))
       .toEqual(defaultModel);
-    expect(modelsUsed).toEqual([selectedModel.model, defaultModel.model]);
+    expect(providerHits.map(({ model }) => model)).toEqual([
+      selectedModel.model,
+      defaultModel.model,
+    ]);
     expect(await readDefault(sessionId)).toEqual(defaultModel);
+
+    await host.close();
+    const titleModel = 'fixture-title-model';
+    const boundedProvider = {
+      ...providerPatch.config.providers['rdws-glm'],
+      models: [
+        ...providerPatch.config.providers['rdws-glm'].models,
+        { id: titleModel },
+      ],
+      retryPolicy: {
+        mode: 'normal',
+        maxRetries: 1,
+        backoff: { initialDelayMs: 35, maxDelayMs: 35, jitterRatio: 0 },
+      },
+    };
+    await writeFile(
+      patchPath,
+      JSON.stringify([
+        {
+          id: providerPatch.id,
+          config: { providers: { 'rdws-glm': boundedProvider } },
+        },
+        { id: 'session-title-llm', disabled: true },
+        {
+          insert: [
+            {
+              id: 'test-native-title-provider',
+              name: '@deepseek-ai/dsh-session-title-first-prompt-llm',
+              config: {
+                provider: 'rdws-glm',
+                model: titleModel,
+                targetWords: 5,
+                targetCjkCharacters: 10,
+                maxInputBytes: 4096,
+                maxOutputTokens: 64,
+                timeoutMs: 2000,
+              },
+            },
+            {
+              id: 'test-native-dispatch-observer',
+              name: fileURLToPath(
+                new URL(
+                  '../fixtures/native-dispatch-observer.mjs',
+                  import.meta.url,
+                ),
+              ),
+              config: { origin: base },
+            },
+          ],
+        },
+      ]),
+    );
+    host = newHost();
+    await host.start();
+    const initialCalls = providerHits.length;
+    retrySession = await createSession();
+    rateLimitNextMain = true;
+    await send(retrySession);
+    await expect.poll(() => retryPending).toBe(true);
+    expect(providerHits.slice(initialCalls)).toMatchObject([
+      { model: defaultModel.model },
+    ]);
+    const retryRecords = await sessionRecords(retrySession);
+    const retryData = retryRecords.find(
+      ({ event }) => event.type === 'llm/retry',
+    )?.event.data;
+    expect(retryData).toMatchObject({
+      retryId: expect.any(String),
+      retry: 1,
+      failure: { code: 'RATE_LIMIT' },
+    });
+    expect(retryRecords).toContainEqual(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          type: 'llm/retry-started',
+          data: expect.objectContaining({
+            retryId: retryData?.retryId,
+            retry: 1,
+          }),
+        }),
+      }),
+    );
+    retryStillAuthorized = false;
+    releaseRetry();
+    await expect
+      .poll(async () =>
+        (await sessionRecords(retrySession)).some(
+          ({ event }) => event.type === 'turn/end',
+        ),
+      )
+      .toBe(true);
+    const attempts = dispatches.filter(
+      (call) => call.sessionId === retrySession && !call.purpose,
+    );
+    expect(
+      attempts.map(({ provider, model, allowed }) => ({
+        provider,
+        model,
+        allowed,
+      })),
+    ).toEqual([
+      { ...defaultModel, allowed: true },
+      { ...defaultModel, allowed: false },
+    ]);
+    expect(new Set(attempts.map((call) => call.id)).size).toBe(2);
+    expect(providerHits.slice(initialCalls)).toHaveLength(1);
+
+    deniedTitleSession = await createSession();
+    await send(deniedTitleSession);
+    await expect.poll(() => hasReply(deniedTitleSession)).toBe(true);
+    await expect
+      .poll(() =>
+        dispatches.find(
+          (call) =>
+            call.sessionId === deniedTitleSession &&
+            call.purpose === 'session-title',
+        ),
+      )
+      .toMatchObject({
+        provider: defaultModel.provider,
+        model: titleModel,
+        allowed: false,
+      });
+
+    const allowedTitleSession = await createSession();
+    await send(allowedTitleSession);
+    await expect.poll(() => hasReply(allowedTitleSession)).toBe(true);
+    await expect
+      .poll(() =>
+        dispatches.find(
+          (call) =>
+            call.sessionId === allowedTitleSession &&
+            call.purpose === 'session-title',
+        ),
+      )
+      .toMatchObject({
+        provider: defaultModel.provider,
+        model: titleModel,
+        allowed: true,
+      });
+    for (const id of [deniedTitleSession, allowedTitleSession]) {
+      const records = await sessionRecords(id);
+      const user = records.find(
+        ({ event }) =>
+          event.type === 'user/message' && event.data.source?.kind === 'user',
+      );
+      expect(user?.event.seq).toEqual(expect.any(Number));
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          event: expect.objectContaining({
+            type: 'session/title-llm-request',
+            data: expect.objectContaining({
+              messageSeqs: [user?.event.seq],
+              route: { provider: defaultModel.provider, model: titleModel },
+            }),
+          }),
+        }),
+      );
+    }
+    const providerTitle = async (id: string) =>
+      (await sessionRecords(id)).some(
+        ({ event }) =>
+          event.type === 'session/title' &&
+          event.data.source?.kind === 'provider',
+      );
+    await expect.poll(() => providerTitle(allowedTitleSession)).toBe(true);
+    await expect
+      .poll(() => dispatches.every((call) => settled.has(call.id)))
+      .toBe(true);
+    expect(await providerTitle(deniedTitleSession)).toBe(false);
+    const approved = dispatches
+      .filter((call) => call.allowed)
+      .map(({ id, model }) => ({ id, model }));
+    const received = providerHits.slice(initialCalls);
+    expect(approved).toHaveLength(4);
+    expect(received).toHaveLength(approved.length);
+    expect(received).toEqual(expect.arrayContaining(approved));
+    for (const { id } of dispatches.filter((call) => !call.allowed))
+      expect(received.some((hit) => hit.id === id)).toBe(false);
   } finally {
+    releaseRetry();
     await Promise.all([
       host.close(),
       new Promise<void>((resolve) => fixture.close(() => resolve())),

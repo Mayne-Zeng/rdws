@@ -723,6 +723,17 @@
   <p><code>caffeinate -i pnpm check</code> 返回 0（28 文件、183 项，类型、lint、格式和构建通过），构建仍提示主包体积。隔离 Native 与浏览器验收覆盖本机工作区与 BFF 载体，实际模型选择和逐次推理授权按 §11.16.7 继续验证。</p>
   <p><code>caffeinate -i pnpm test:e2e</code> 返回 0（34 项），补充最后的会话读回断言后聚焦复跑通过。<code>caffeinate -i pnpm test:web-live tests/web-live/fault.spec.ts</code> 返回 0（1 项），本机 Native 通知故障时 BFF 立即关闭受影响连接，原生直连随短租约到期结束，无模型调用。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订以 <code>fix: bind native browser transport to observed login</code> 为准。</p>
 
+  <h4 id="t13-provider-dispatch-probe-20261119">11.16.12 模型请求发出前的验证证据</h4>
+  <p>依据 §11.16.7 核对锁定的 DSH 0.2.2-rc.3。在 PiAi 适配器中，<code>llm/stream</code> 进入后仍可能等待凭据和请求整理。公开 <code>llm-pi-ai/request-headers</code> 在这些准备之后、SDK 启动之前同步运行，提供会话、供应商、模型、用途及已解析的服务地址。它不提供原登录、原命令或选模修订，也不能等待 BFF 授权。单凭较早的原生事件、请求头钩子或 <code>llm/stream</code> 出现次数，不能证明模型请求已经发出。</p>
+  <p>在独立临时 Native Profile 中启用原生首个提示词标题生成，并安装只用于本机测试的监听器。通过异步上下文核对 PiAi 公开请求头元数据与 OpenAI 兼容 HTTP 实际调用。夹具只在目标回环地址的 <code>fetch</code> 前请求一次授权判定。模拟供应商独立记录收到的模型和夹具请求标识，原生流结束后按各自标识复核获准及被拒请求。</p>
+  <ul>
+    <li>主推理首次获准，模拟供应商返回 429。Native 记录相同 retryId 的 <code>llm/retry</code> 和 <code>llm/retry-started</code>，随后重新进入传输。第二次在决定前暂停，撤除夹具授权后返回拒绝，供应商最终只收到第一次。</li>
+    <li>后台标题与主推理共用会话，但以 <code>session-title</code> 用途和独立模型进入传输。拒绝标题时主推理仍完成且不生成供应商标题；允许标题的对照确实请求对应模型并写入标题。两种标题请求均能通过原生事件的 <code>messageSeqs</code> 核对原始用户消息，看到该记录本身不代表已外发。</li>
+    <li>原选模持久化与冷重启对照继续通过。验证使用真实 Native 与合成供应商，探针配置不进入产品运行。</li>
+  </ul>
+  <p>本证据把首次请求、Native 退避重试及后台标题各自分开。逐次授权的工程方案仍需明确原登录与实际请求的绑定、短事务授权与外发的定序、持久入箱恢复，以及其他 Native 传输的覆盖。源码核对显示原生 DeepSeek Messages 使用独立的请求扩展准备接口，图片 Files API 可早于该接口发送，不能按 PiAi 证据准出。<code>caffeinate -i pnpm test tests/integration/project-native-paths.test.ts</code> 返回 0（2 项）。</p>
+  <p>独立证据复审 APPROVE，复跑聚焦 2 项通过。关闭的发现项为按请求标识和流终点复核拒绝、直接核对原生退避事件。<code>caffeinate -i pnpm check</code> 返回 0（28 文件、183 项，类型、lint、格式和构建通过），构建仍提示主包体积。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

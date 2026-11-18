@@ -179,6 +179,7 @@
   - 新验收证据：[刷盘与恢复后选路](02-directory-and-engineering-design.html#t13-model-dispatch-evidence-20261118)。强制退出后复用 Native 状态完成两次本机合成推理，目标模型与实例默认分别命中。新的保存与发送方案待复审和实现，原短事务等待 Native 方案继续未准出。
   - 已交付修复：[同键提示词提交竞争](02-directory-and-engineering-design.html#t13-prompt-overlap-evidence-20261119)。重叠发送只允许首个请求持有和清理运行，竞争返回 409，其余会话和串行原键沿用现有 Native 路径。独立复审、整仓 180 项、浏览器 32 项及追溯通过。
   - 已交付修复：[旧标签页的原登录绑定](02-directory-and-engineering-design.html#t13-native-login-binding-evidence-20261119)。Native HTTP 与 WebSocket 按页面原登录校验，Cookie 更换后旧页停发。同账号登录变化后的原草稿可在当前页复制，重新打开后以新登录读取。独立复审、整仓 183 项、浏览器 34 项、本机 Native 断连和追溯校验通过。逐次推理授权和本人选模入口仍待交付。
+  - 实现前验证：[发出前的传输证据](02-directory-and-engineering-design.html#t13-provider-dispatch-probe-20261119)。已在锁定版本的 PiAi HTTP 路径核对首次推理、429 后重试及独立后台标题。夹具可阻断指定的实际请求，标题原生记录可追溯到原消息。产品授权方案继续按 §11.16.7 复审。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。

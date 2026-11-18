@@ -14,15 +14,21 @@ import { NativeWebHost } from '@rdws/dsh/web';
 import { expect, test } from 'vitest';
 
 type Observation = {
+  pid: number;
+  defaultPreset: string;
   workspaceId: string;
   sessionIds: string[];
   created: { sessionId: string; agentPreset: string }[];
   agents: unknown[];
   unknownError?: string;
   error?: string;
+  duplicateError?: string;
+  retainedDefinition?: string;
+  brokenError?: string;
+  invalidComposition?: string;
 };
 
-test('Native preset IDs pin session composition across restarts only when definitions are immutable', async () => {
+test('Native appends preset versions live and restores exact compositions after restart', async () => {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'rdws-preset-'));
   const projectId = 'preset-proof';
   const requirementId = randomUUID();
@@ -39,17 +45,45 @@ test('Native preset IDs pin session composition across restarts only when defini
   let host: NativeWebHost | undefined;
   let bootNumber = 0;
 
+  function definition(id: string, moduleName: string) {
+    return { id, plugins: [{ id: 'marker', name: moduleName }] };
+  }
   function preset(id: string, moduleName: string) {
     return {
       id: 'preset-' + id,
       name: '@deepseek-ai/dsh-agent-preset',
-      config: { id, plugins: [{ id: 'marker', name: moduleName }] },
+      config: definition(id, moduleName),
     };
+  }
+  const live = {
+    signal: join(root, 'register-next'),
+    checkpoint: join(root, 'live-composition.json'),
+    next: definition(nextPreset, nextModule),
+    duplicate: definition(firstPreset, nextModule),
+    broken: definition('rdws-fixture-broken', join(root, 'missing.mjs')),
+  };
+  async function readObservation(path: string) {
+    let report: Observation | undefined;
+    await expect
+      .poll(
+        async () => {
+          const contents = await readFile(path, 'utf8').catch(() => '');
+          if (!contents) return false;
+          report = JSON.parse(contents);
+          return true;
+        },
+        { timeout: 5000 },
+      )
+      .toBe(true);
+    expect(report!.error).toBeUndefined();
+    expect(report!.unknownError).toBe('agent-preset/not-found');
+    return report!;
   }
   async function boot(
     presets: ReturnType<typeof preset>[],
     create: string[],
     resume: string[] = [],
+    livePublication?: typeof live,
   ) {
     await host?.close();
     const checkpoint = join(root, `composition-${++bootNumber}.json`);
@@ -80,6 +114,7 @@ test('Native preset IDs pin session composition across restarts only when defini
                 create,
                 resume,
                 unknownPreset: 'unregistered-fixture',
+                live: livePublication,
               },
             },
           ],
@@ -88,19 +123,7 @@ test('Native preset IDs pin session composition across restarts only when defini
     );
     host = new NativeWebHost(root, config, projectId);
     await host.start();
-    await expect
-      .poll(
-        async () => Boolean(await readFile(checkpoint, 'utf8').catch(() => '')),
-        {
-          timeout: 5000,
-        },
-      )
-      .toBe(true);
-    const report = JSON.parse(
-      await readFile(checkpoint, 'utf8'),
-    ) as Observation;
-    expect(report.error).toBeUndefined();
-    expect(report.unknownError).toBe('agent-preset/not-found');
+    const report = await readObservation(checkpoint);
     return { report, native: host };
   }
   function composition(sessionId: string, id: string, moduleName: string) {
@@ -129,9 +152,11 @@ test('Native preset IDs pin session composition across restarts only when defini
       "export const name = 'marker-next'; export function apply() {}",
     );
 
-    const { report: first } = await boot(
+    const { report: first, native } = await boot(
       [preset(firstPreset, firstModule)],
       [firstPreset],
+      [],
+      live,
     );
     expect(first.created).toEqual([
       { sessionId: expect.any(String), agentPreset: firstPreset },
@@ -142,11 +167,24 @@ test('Native preset IDs pin session composition across restarts only when defini
       composition(firstSession, firstPreset, firstModule),
     ]);
 
-    const { report: second, native } = await boot(
-      [preset(firstPreset, firstModule), preset(nextPreset, nextModule)],
-      [nextPreset],
-      [firstSession],
+    const runningProfile = await readFile(
+      join(profile, 'cordis.patch.yml'),
+      'utf8',
     );
+    await writeFile(live.signal, '', { flag: 'wx' });
+    const second = await readObservation(live.checkpoint);
+    expect(second.pid).toBe(first.pid);
+    expect(second.defaultPreset).toBe(first.defaultPreset);
+    expect(await readFile(join(profile, 'cordis.patch.yml'), 'utf8')).toBe(
+      runningProfile,
+    );
+    expect(second.duplicateError).toBe(
+      `Duplicate agent preset: ${firstPreset}`,
+    );
+    expect(second.retainedDefinition).toContain(firstModule);
+    expect(second.retainedDefinition).not.toContain(nextModule);
+    expect(second.brokenError).toBe('agent-preset/invalid');
+    expect(second.invalidComposition).toContain('missing.mjs');
     expect(second.created).toEqual([
       { sessionId: expect.any(String), agentPreset: nextPreset },
     ]);
@@ -200,6 +238,16 @@ test('Native preset IDs pin session composition across restarts only when defini
         });
       }
     }
+
+    const { report: restored } = await boot(
+      [preset(firstPreset, firstModule), preset(nextPreset, nextModule)],
+      [],
+      [firstSession, nextSession],
+    );
+    expect(restored.workspaceId).toBe(first.workspaceId);
+    expect(restored.sessionIds).toEqual(second.sessionIds);
+    expect(restored.created).toEqual([]);
+    expect(restored.agents).toEqual(second.agents);
 
     const { report: replay } = await boot(
       [preset(firstPreset, nextModule)],

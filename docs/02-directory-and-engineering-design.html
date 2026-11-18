@@ -734,6 +734,16 @@
   <p>本证据把首次请求、Native 退避重试及后台标题各自分开。逐次授权的工程方案仍需明确原登录与实际请求的绑定、短事务授权与外发的定序、持久入箱恢复，以及其他 Native 传输的覆盖。源码核对显示原生 DeepSeek Messages 使用独立的请求扩展准备接口，图片 Files API 可早于该接口发送，不能按 PiAi 证据准出。<code>caffeinate -i pnpm test tests/integration/project-native-paths.test.ts</code> 返回 0（2 项）。</p>
   <p>独立证据复审 APPROVE，复跑聚焦 2 项通过。关闭的发现项为按请求标识和流终点复核拒绝、直接核对原生退避事件。<code>caffeinate -i pnpm check</code> 返回 0（28 文件、183 项，类型、lint、格式和构建通过），构建仍提示主包体积。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。</p>
 
+  <h4 id="t13-deepseek-messages-dispatch-probe-20261119">11.16.13 DeepSeek Messages 与 Files 的外发边界</h4>
+  <p>沿 §11.16.7 验证锁定的 DSH 0.2.2-rc.3。独立临时 Profile 使用原生 <code>deepseek-official</code> 适配器、合成凭据及本机模拟供应商。受信测试插件通过 Native 附件和模型服务直接输入合成 PNG。现有工作台提示词准入只允许文本，本探针的图片路径用于核对适配器行为。</p>
+  <ul>
+    <li>首个 Files 上传在发出前暂停。夹具撤除许可后，供应商未收到上传。适配器随后在 Messages 请求中准备内联图片，单独检查 Messages 并拒绝，供应商未收到正文。</li>
+    <li>允许发出的对照先实际上传 PNG，再进入 Messages 请求扩展准备。扩展提供者抛错后，注册表省略该扩展字段，随后发出带 Files ID 的 Messages 请求，原生推理正常完成。</li>
+    <li>传输前从最终请求体确认内联回退使用 <code>base64</code>，缓存复用使用同一个 <code>file_id</code>。复用无需再次上传，Messages 仍单独检查并被拒绝。三个原生流结束后，回环供应商记录的两次 POST 与两次获准决定按请求标识和路径一一匹配。拒绝的三次尝试均未到达供应商。</li>
+  </ul>
+  <p>逐次授权方案须覆盖实际 Files 请求、文件缓存复用后的 Messages、上传失败后的内联回退，以及扩展准备后的请求。Native 扩展字段适合贡献元数据，扩展提供者的普通异常没有阻止外发的语义。探针使用进程内请求作用域和测试传输拦截，只能证明这两条回环路径的顺序及可观测性。产品的权限定序、原登录和选模修订绑定、持久恢复及适配器覆盖仍按原交付判据复审。</p>
+  <p>独立证据复审 APPROVE，关闭了最终待发正文缺少图片表示和缓存 ID 核对的发现。复审独立聚焦通过 1 项。<code>caffeinate -i pnpm test tests/integration/native-messages-dispatch.test.ts tests/integration/project-native-paths.test.ts</code> 返回 0（2 文件、3 项）。<code>caffeinate -i pnpm check</code> 返回 0（29 文件、184 项，类型、lint、格式和构建通过），构建仍提示主包体积。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

@@ -66,9 +66,12 @@ export function SessionHistory({
       );
       if (!isCurrent()) return;
       if (
-        trace &&
         current &&
-        (page.cursor !== current.cursor || page.beforeSeq >= current.beforeSeq)
+        (page.cursor !== current.cursor ||
+          !(page.beforeSeq < current.beforeSeq) ||
+          page.events.some(
+            ({ seq }) => !(seq >= page.beforeSeq && seq < current.beforeSeq),
+          ))
       ) {
         setError('会话历史分页位置变化，请重试读取同一页。');
         return;
@@ -81,13 +84,13 @@ export function SessionHistory({
     } catch (failure) {
       if (!isCurrent()) return;
       if (
-        trace &&
         failure instanceof Error &&
         'status' in failure &&
         typeof failure.status === 'number' &&
         [401, 403, 404].includes(failure.status)
       ) {
         setHistory(undefined);
+        setError('会话访问已变化，请重新读取历史。');
         onAccessLost?.();
       } else {
         setError(
@@ -129,7 +132,9 @@ export function SessionHistory({
       <p className="muted">
         原生会话历史可能包含中断后的恢复补齐。回放不会重新执行模型或工具。
       </p>
-      {error && <Alert theme="error" message={error} />}
+      {error && (
+        <Alert theme="error" message={<span role="alert">{error}</span>} />
+      )}
       <div className="session-actions">
         {(history?.hasMore || error) && (
           <Button

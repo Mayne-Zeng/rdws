@@ -683,6 +683,11 @@
   <p>在 <code>rdws_test</code> 从 0006 升级并重复应用 0007，迁移只新增表、索引和约束。应用角色可读、可追加，无 UPDATE、DELETE、TRUNCATE 或表所有权；开发库与生产库未迁移。本轮复用已有初始化流程和迁移链，未另重建数据库卷。直接 PostgreSQL 锁回归验证停用先于保存会拒绝，反序时版本保留并标为需修订；等待时到期回滚新增记录与回执，成员失效后清单拒绝返回。</p>
   <p>独立交付复审 APPROVE。首轮两项 P2 已关闭。连续核对时以当前待确认命令恢复草稿；模板命令只刷新模板查询，总览或模板列表暂时读取失败可分别重试，并保留冲突草稿。两项均先由真实浏览器回归复现，改后配合断线回执、版号、项目成员隔离和窄屏验证通过。Native preset 生成及需求绑定另按 T14 继续。</p>
   <p><code>pnpm check</code> 通过（17 文件、112 项测试，类型、lint、格式和构建通过），<code>pnpm test:e2e</code> 通过（25 项，38.8s），<code>pnpm validate:baseline</code> 通过（29 任务、62 个追溯点、16 个视图）。390px 项目侧截图在本地忽略目录 <code>.impeccable/review/t14-project-templates-mobile.png</code>。</p>
+  <h4 id="t14-native-preset-evidence-20261118">11.17.4 原生 preset 冷恢复验证</h4>
+  <p>D4／D21 要求同项目实例按需求选择 preset，模板调整只影响后建会话。固定版本 DSH <code>0.2.2-rc.3</code> 在创建时记录 <code>agentPreset</code>，恢复时按该 ID 重新装配当前定义。原生服务可按 ID 创建，现有 RDWS 浏览器和专用创建票据仍限制调用方填写 preset。</p>
+  <p>在临时运行根启动真实 Native 进程。先以旧 ID 创建并刷盘，随后保留旧定义并加入新 ID，冷恢复旧会话并为同一 workspace 创建新会话。两者的原生会话记录与实际挂载模块分别匹配旧版、新版。第三次启动用新版定义覆盖旧 ID 并移除新版 ID，旧会话按旧 ID 加载到新版模块，新会话因其定义缺失而拒绝恢复。未知 preset 无法创建。对已注册的新 ID，浏览器得到原生拒绝，创建票据得到 HTTP 403，二者均未新增会话。</p>
+  <p>正式接线需为每一生效版本保留不可变标识及其精确内容，保护历史恢复。需求绑定的写权限需确认，样稿把需求列表的应用入口交给导入权限，把上下文页入口交给普通会话权限。新版本如何装载到运行中的实例和如何验证真实制品仍待实现。本轮仅使用无操作模块及临时 Native 数据，未调用供应商、装载生产插件或调整产品权限。</p>
+  <p>验证用例位于 <code>tests/integration/native-preset-composition.test.ts</code>。按原生服务、装配证据、拒绝路径与清理范围完成有证据自检。<code>pnpm check</code> 通过（18 文件、113 项测试，类型、lint、格式和构建通过），<code>pnpm validate:baseline</code> 通过（29 任务、62 个追溯点、16 个视图）。</p>
 
   <h2 id="s0"><span class="num">0</span>评审结论</h2>
   <div class="verdict">

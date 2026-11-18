@@ -1,0 +1,22 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": ["docs/02-directory-and-engineering-design.html"],
+        "createdAt": "2026-11-18T02:41:53.769Z",
+        "reason": "Agent triage: existing engineering document intentionally uses a header rule, verdict emphasis, code-block borders and semantic warning/error/success borders; CSS is identical to HEAD bf0570a and this change only appends plan text. Preserve established historical document styling."
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": ["docs/00-decision-ledger.html"],
+        "createdAt": "2026-11-18T03:35:32.616Z",
+        "reason": "Agent triage: established decision-ledger header, verdict, code and semantic warning/error/success borders are intentional documentation markers; CSS is byte-identical to HEAD and current edits only add approved implementation content."
+      }
+    ]
+  }
+}

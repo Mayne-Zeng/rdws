@@ -136,8 +136,44 @@ export const nativeSession = pgTable('native_session', {
   ownerId: text('owner_id')
     .notNull()
     .references(() => user.id),
+  sourceSessionId: text('source_session_id'),
+  sourceThroughSeq: integer('source_through_seq'),
   ...timestamps,
 });
+export const sessionOperation = pgTable(
+  'session_operation',
+  {
+    id: text('id').primaryKey(),
+    actorId: text('actor_id')
+      .notNull()
+      .references(() => user.id),
+    requirementId: text('requirement_id')
+      .notNull()
+      .references(() => requirement.id),
+    operation: text('operation').notNull(),
+    commandId: text('command_id').notNull(),
+    digest: text('digest').notNull(),
+    status: text('status').notNull().default('reserved'),
+    generation: text('generation'),
+    sourceSessionId: text('source_session_id'),
+    frozen: jsonb('frozen').$type<{
+      workspaceId: string;
+      cwd: string;
+      atSeq?: number;
+      requestDigest?: string;
+    }>(),
+    nativeSessionId: text('native_session_id'),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('session_operation_command_idx').on(
+      t.actorId,
+      t.requirementId,
+      t.operation,
+      t.commandId,
+    ),
+  ],
+);
 export const task = pgTable(
   'task',
   {

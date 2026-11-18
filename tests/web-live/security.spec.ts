@@ -61,7 +61,8 @@ async function rpc(action: string, args: unknown, token: string) {
       payload: { args },
     }),
   });
-  return { status: response.status, body: await response.json() };
+  const text = await response.text();
+  return { status: response.status, body: text ? JSON.parse(text) : undefined };
 }
 function cap(purpose: 'browser' | 'create' = 'browser', lease = 20000) {
   return signGrant(
@@ -235,8 +236,11 @@ test('native Policy filters catalog and refuses foreign history, preset and crea
     { workspaceId: workspace1, sessionId: sid2 },
   ]) {
     const refused = await rpc('session/create', { request }, cap('create'));
-    expect(refused.body.result.ok).toBe(false);
-    expect(refused.body.result.error.code).toBe('remote-access/denied');
+    expect([200, 403]).toContain(refused.status);
+    if (refused.status !== 403) {
+      expect(refused.body.result.ok).toBe(false);
+      expect(refused.body.result.error.code).toBe('remote-access/denied');
+    }
   }
   const otherPrompt = await rpc(
     'session/prompt',

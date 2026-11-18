@@ -613,5 +613,39 @@ export function createBusiness(db: Database) {
       { isolationLevel: 'repeatable read', accessMode: 'read only' },
     );
   }
-  return { create, execute, read };
+  async function sessionTransaction<T>(
+    who: Actor,
+    id: string,
+    sourceId: string | undefined,
+    work: (
+      tx: Transaction,
+      item: typeof schema.requirement.$inferSelect,
+    ) => Promise<T>,
+  ) {
+    return transaction(async (tx) => {
+      const [found] = await tx
+        .select({ projectId: schema.requirement.projectId })
+        .from(schema.requirement)
+        .where(eq(schema.requirement.id, id));
+      if (!found) businessError(404, '需求不存在');
+      await identity(tx, who, found.projectId, [], true);
+      const state = await scope(tx, who, id, true);
+      if (sourceId) {
+        const [source] = await tx
+          .select()
+          .from(schema.nativeSession)
+          .where(
+            and(
+              eq(schema.nativeSession.id, sourceId),
+              eq(schema.nativeSession.requirementId, id),
+              eq(schema.nativeSession.ownerId, who.userId),
+            ),
+          )
+          .for('share');
+        if (!source) businessError(403, '只能派生本人在当前需求中的会话');
+      }
+      return work(tx, state.item);
+    });
+  }
+  return { create, execute, read, sessionTransaction };
 }

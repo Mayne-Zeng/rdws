@@ -7,6 +7,7 @@
     "./events": "./bridge/events.ts",
     "./web": "./host/web.ts",
     "./access": "./bridge/access.ts",
+    "./sessions": "./bridge/sessions.ts",
     "./wire": "./bridge/wire.ts"
   },
   "dependencies": {

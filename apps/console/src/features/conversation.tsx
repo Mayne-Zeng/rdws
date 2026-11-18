@@ -8,6 +8,12 @@ import {
 import { Alert, Button, Loading } from 'tdesign-react';
 import type { SessionBinding } from '@deepseek-ai/dsh-api-session-controller/client';
 import { connectNative, type NativeRuntime } from '../lib/native.ts';
+import { authClient } from '../lib/auth.ts';
+import { Icon } from '../lib/ui.tsx';
+import type {
+  SessionHistoryPage,
+  SessionOperationResult,
+} from '@rdws/contracts';
 function text(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -244,21 +250,135 @@ function SessionPanel({
     </div>
   );
 }
+function History({ runtime, id }: { runtime: NativeRuntime; id: string }) {
+  const [history, setHistory] = useState<SessionHistoryPage>();
+  const [busy, setBusy] = useState(false),
+    [error, setError] = useState('');
+  const controller = useRef(new AbortController()),
+    pending = useRef(false);
+  async function load(current?: SessionHistoryPage) {
+    if (pending.current) return;
+    pending.current = true;
+    const requestController = controller.current;
+    setBusy(true);
+    setError('');
+    try {
+      const page = await runtime.history(
+        id,
+        current
+          ? { throughSeq: current.cursor, beforeSeq: current.beforeSeq }
+          : {},
+        requestController.signal,
+      );
+      if (requestController.signal.aborted) return;
+      setHistory(
+        current
+          ? { ...page, events: [...page.events, ...current.events] }
+          : page,
+      );
+    } catch (e) {
+      if (!requestController.signal.aborted) setError((e as Error).message);
+    } finally {
+      if (controller.current === requestController) pending.current = false;
+      if (!requestController.signal.aborted) setBusy(false);
+    }
+  }
+  useEffect(() => {
+    const current = new AbortController();
+    controller.current = current;
+    pending.current = false;
+    void load();
+    return () => current.abort();
+  }, [runtime, id]);
+  return (
+    <section className="history-panel" aria-label="会话历史回放">
+      <div className="conversation-title">
+        <strong>历史回放</strong>
+        <span className="muted">
+          {history
+            ? history.cursor < 0
+              ? '空历史'
+              : `固定至事件 ${history.cursor}`
+            : '正在确定回放位置'}
+        </span>
+      </div>
+      <p className="muted">
+        原生会话历史可能包含中断后的恢复补齐。回放不会重新执行模型或工具。
+      </p>
+      {error && <Alert theme="error" message={error} />}
+      <div className="session-actions">
+        {(history?.hasMore || error) && (
+          <Button onClick={() => void load(history)} loading={busy}>
+            {error ? '重试读取历史' : '加载更早事件'}
+          </Button>
+        )}
+        {busy && <span role="status">正在读取历史…</span>}
+        {history && !history.hasMore && (
+          <span className="muted">
+            已加载至历史起点 · {history.events.length} 条可展示事件
+          </span>
+        )}
+      </div>
+      <ol className="history-events" aria-label="历史事件序列">
+        {history?.events.map((event) => (
+          <li key={event.seq} className="history-event">
+            <div>
+              <span className="muted">#{event.seq}</span>
+              <strong>{event.label}</strong>
+              {event.outcome && <span>{event.outcome}</span>}
+            </div>
+            {event.text !== undefined && <p>{event.text}</p>}
+          </li>
+        ))}
+      </ol>
+      {history && !history.events.length && (
+        <p className="muted">当前范围暂无可展示事件。</p>
+      )}
+    </section>
+  );
+}
+type PendingSession = { commandId: string; sourceSessionId?: string };
 export function Conversation({ requirementId }: { requirementId: string }) {
+  const { data: identity } = authClient.useSession();
+  const storageKey = identity
+    ? 'rdws:session-operation:' + identity.user.id + ':' + requirementId
+    : '';
   const [runtime, setRuntime] = useState<NativeRuntime>();
-  const [sessions, setSessions] = useState<{ id: string; own: boolean }[]>([]);
+  const [sessions, setSessions] = useState<
+    { id: string; own: boolean; sourceSessionId?: string }[]
+  >([]);
   const [selected, setSelected] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [replay, setReplay] = useState(false),
+    [intent, setIntent] = useState<PendingSession>();
+  const live = useRef(true),
+    sending = useRef(false),
+    refreshSequence = useRef(0);
+  useEffect(() => {
+    if (!storageKey) return;
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null');
+      if (saved && typeof saved.commandId === 'string') {
+        setIntent(saved);
+        setError('有一项会话操作尚未确认，请先核对原操作。');
+      }
+    } catch {
+      setError('本页无法保留会话操作标识，请检查浏览器存储设置。');
+    }
+  }, [storageKey]);
   async function refresh() {
+    const sequence = ++refreshSequence.current;
     const response = await fetch(`/api/requirements/${requirementId}/sessions`);
     if (!response.ok) throw new Error('会话列表读取失败');
     const data = await response.json();
-    setSessions(data.sessions);
+    if (live.current && sequence === refreshSequence.current)
+      setSessions(data.sessions);
   }
   useEffect(() => {
     const controller = new AbortController();
     let current: NativeRuntime | undefined;
+    live.current = true;
     setRuntime(undefined);
     setSelected('');
     setError('');
@@ -277,32 +397,82 @@ export function Conversation({ requirementId }: { requirementId: string }) {
           setError(error instanceof Error ? error.message : '会话连接失败');
       });
     return () => {
+      live.current = false;
       controller.abort();
       void current?.dispose();
     };
   }, [requirementId]);
-  async function create() {
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible')
+        void refresh().catch(() => {});
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [requirementId]);
+  async function create(sourceSessionId?: string, retry?: PendingSession) {
+    if (sending.current || !storageKey) return;
+    const operation = retry ?? {
+      commandId: crypto.randomUUID(),
+      ...(sourceSessionId ? { sourceSessionId } : {}),
+    };
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify(operation));
+    } catch {
+      setError('无法保留操作标识，请检查浏览器存储设置后重试。');
+      return;
+    }
+    sending.current = true;
+    setIntent(operation);
     setBusy(true);
     setError('');
     try {
       const response = await fetch(
-        `/api/requirements/${requirementId}/sessions`,
+        `/api/requirements/${requirementId}/sessions${operation.sourceSessionId ? '/' + encodeURIComponent(operation.sourceSessionId) + '/fork' : ''}`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: '{}',
+          body: JSON.stringify({ commandId: operation.commandId }),
         },
       );
-      if (!response.ok) throw new Error('会话创建失败');
-      const data = await response.json();
+      const data = (await response.json()) as SessionOperationResult & {
+        error?: string;
+      };
+      if (!live.current) return;
+      if (data.commandId !== operation.commandId)
+        throw new Error('Unexpected operation response');
+      if (data.status === 'rejected') {
+        sessionStorage.removeItem(storageKey);
+        setIntent(undefined);
+        setError(data.error ?? '本次操作未执行，可重新发起。');
+        return;
+      }
+      if (!response.ok) {
+        setError(data.error ?? '会话操作失败，请核对原操作');
+        return;
+      }
+      if (data.status !== 'mapped' || !data.sessionId) {
+        setError(
+          data.status === 'unknown'
+            ? '会话结果尚不能确认，请联系管理员核对。核对原操作不会再次创建会话。'
+            : '会话操作仍在处理中，请稍后核对原操作。',
+        );
+        return;
+      }
       await runtime?.reconnect();
+      if (!live.current) return;
       await runtime?.sessions.refresh();
+      if (!live.current) return;
       await refresh();
+      if (!live.current) return;
+      sessionStorage.removeItem(storageKey);
+      setIntent(undefined);
       setSelected(data.sessionId);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : '会话创建失败');
+      setReplay(false);
+    } catch {
+      if (live.current) setError('会话结果未确认，请核对原操作。');
     } finally {
-      setBusy(false);
+      sending.current = false;
+      if (live.current) setBusy(false);
     }
   }
   return (
@@ -310,35 +480,94 @@ export function Conversation({ requirementId }: { requirementId: string }) {
       <div className="title-row">
         <h3>会话工作区</h3>
         <Button
+          tag="button"
           onClick={() => void create()}
           loading={busy}
-          disabled={!runtime}
+          disabled={!runtime || !!intent || !storageKey}
         >
           新建会话
         </Button>
       </div>
       {error && <Alert theme="error" message={error} />}
+      {intent && (
+        <Button
+          tag="button"
+          variant="outline"
+          onClick={() => void create(undefined, intent)}
+          loading={busy}
+          disabled={!runtime}
+        >
+          核对原操作
+        </Button>
+      )}
       <div className="session-layout">
         <nav aria-label="需求会话列表">
-          {sessions.map((session) => (
-            <Button
-              key={session.id}
-              variant={selected === session.id ? 'base' : 'text'}
-              onClick={() => setSelected(session.id)}
-            >
-              会话 {sessions.indexOf(session) + 1}
-              {session.own ? ' · 本人' : ''}
-            </Button>
+          {sessions.map((session, index) => (
+            <div className="session-row" key={session.id}>
+              <Button
+                variant={selected === session.id ? 'base' : 'text'}
+                onClick={() => {
+                  setSelected(session.id);
+                  setReplay(false);
+                }}
+              >
+                会话 {sessions.indexOf(session) + 1}
+                {session.own ? ' · 本人' : ''}
+                {session.sourceSessionId ? ' · 派生' : ''}
+              </Button>
+              <Button
+                className="session-replay"
+                variant="text"
+                shape="square"
+                aria-label={'回放会话 ' + (index + 1)}
+                title={'回放会话 ' + (index + 1)}
+                icon={<Icon name="clock" />}
+                onClick={() => {
+                  setSelected(session.id);
+                  setReplay(true);
+                }}
+              />
+            </div>
           ))}
           {sessions.length === 0 && <p className="muted">暂无会话</p>}
         </nav>
         {runtime && selected ? (
-          <SessionPanel
-            key={selected}
-            runtime={runtime}
-            id={selected}
-            own={sessions.find((item) => item.id === selected)?.own ?? false}
-          />
+          <div className="conversation">
+            <div className="session-actions" aria-label="当前会话操作">
+              {sessions.find((s) => s.id === selected)?.own && (
+                <Button
+                  tag="button"
+                  variant="outline"
+                  onClick={() => void create(selected)}
+                  disabled={busy || !!intent}
+                >
+                  派生当前会话
+                </Button>
+              )}
+              <Button
+                variant="text"
+                onClick={() => setReplay((value) => !value)}
+              >
+                {replay ? '返回会话' : '回放历史'}
+              </Button>
+            </div>
+            {replay ? (
+              <History
+                key={'history-' + selected}
+                runtime={runtime}
+                id={selected}
+              />
+            ) : (
+              <SessionPanel
+                key={selected}
+                runtime={runtime}
+                id={selected}
+                own={
+                  sessions.find((item) => item.id === selected)?.own ?? false
+                }
+              />
+            )}
+          </div>
         ) : (
           <p className="muted">选择或新建一个需求会话。</p>
         )}

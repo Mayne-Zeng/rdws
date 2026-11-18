@@ -1150,8 +1150,45 @@ input[type='checkbox'] {
   white-space: normal;
   justify-content: flex-start;
 }
+.session-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+}
+.session-layout nav .session-replay {
+  width: var(--control-h);
+  height: var(--control-h);
+  justify-content: center;
+}
 .conversation {
   min-width: 0;
+}
+.session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+}
+.history-events {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0;
+}
+.history-event {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.history-event > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px;
+}
+.history-event p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .conversation-title {
   display: flex;
@@ -1463,6 +1500,9 @@ input[type='checkbox'] {
   }
   .session-layout nav .t-button {
     min-height: var(--control-h);
+    flex-shrink: 0;
+  }
+  .session-row {
     flex-shrink: 0;
   }
   .conversation-title {

@@ -5,6 +5,9 @@ import {
   resourceRoles,
   bodyHash,
   LEASE_MS,
+  actionAllowed,
+  isRecord,
+  onlyKeys,
 } from '../../bridge/access.ts';
 import { bootInjections } from '@deepseek-ai/dsh-client-modules';
 import { RemoteStreamMuxServer } from '@deepseek-ai/dsh-api-gateway/src/stream-server.ts';
@@ -18,6 +21,7 @@ export const inject = [
   'workspaceRegistry',
   'typertGateway',
   'tools',
+  'sessionQuery',
 ];
 export function apply(ctx, config) {
   if (process.send)
@@ -53,6 +57,19 @@ export function apply(ctx, config) {
       config.audience,
     );
     if (!cap || outdated(cap)) return;
+    if (
+      cap.purpose === 'fork' &&
+      !ctx.workspaceRegistry
+        .list()
+        .some(
+          (workspace) =>
+            workspace.id === cap.workspaceId &&
+            workspace.path === cap.cwd &&
+            cap.cwd === resolve(config.demandRoot, String(cap.requirementId)) &&
+            workspace.sessionIds.includes(cap.sourceSessionId),
+        )
+    )
+      return;
     let record = peers.get(cap.nonce);
     if (!record) {
       const peer = ctx.connection.createPeer({
@@ -127,6 +144,24 @@ export function apply(ctx, config) {
   }
   installContext(ctx, config, key, route);
   route('health', () => ({ ready: true, metrics }));
+  route('session.inspect', async (input) => {
+    const workspace = ctx.workspaceRegistry
+      .list()
+      .find(
+        (w) =>
+          w.path === resolve(config.demandRoot, String(input.requirementId)) &&
+          w.sessionIds.includes(input.sessionId),
+      );
+    if (!workspace) throw new Error('Session workspace mismatch');
+    const observation = await ctx.sessionQuery.observeSession(input.sessionId);
+    try {
+      if (observation.header.cwd !== workspace.path)
+        throw new Error('Session cwd mismatch');
+      return { workspaceId: workspace.id, cwd: observation.header.cwd };
+    } finally {
+      observation[Symbol.dispose]();
+    }
+  });
   route('workspace', async (input) => {
     const path = resolve(input.cwd);
     if (
@@ -195,6 +230,29 @@ export function apply(ctx, config) {
       try {
         const text = await body(request);
         const url = new URL(request.url, 'http://rdws.invalid');
+        if (['fork', 'create'].includes(record.cap.purpose)) {
+          const action = 'session/' + record.cap.purpose;
+          let envelope;
+          try {
+            envelope = JSON.parse(text);
+          } catch {
+            envelope = undefined;
+          }
+          if (
+            url.pathname !== '/_rdws/api/' + action ||
+            !onlyKeys(envelope, ['type', 'rpcId', 'method', 'payload']) ||
+            envelope.type !== 'client-request' ||
+            typeof envelope.rpcId !== 'string' ||
+            envelope.method !== action ||
+            !onlyKeys(envelope.payload, ['args']) ||
+            !isRecord(envelope.payload.args) ||
+            !actionAllowed(record.cap, action, envelope.payload.args)
+          ) {
+            response.writeHead(403);
+            response.end();
+            return;
+          }
+        }
         const canonical = new Request(
           'http://rdws.invalid' +
             url.pathname.slice('/_rdws'.length) +

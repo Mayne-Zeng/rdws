@@ -278,6 +278,67 @@
   <p><strong>依赖审计未通过：</strong>pnpm audit --prod --audit-level high exit 1，当前 1 high / 3 moderate。<a href="https://github.com/advisories/GHSA-fc5q-39xc-vjpf">picomatch 官方高危通告</a>列 ≤4.0.7、无修复版本。独立只读核对 HMR ignored / Forge 构造参数以及 RDWS 允许表，未发现普通业务入口控制恶意 pattern 的路径；保留已有 Profile bundles 的能力意味着不能断言所有私有实例都未加载 Forge。漏洞并未修复，不以功能 / 视觉验收替代安全或生产发布结论；详见 SECURITY.md。</p>
   <p>脱敏最终真实报告为 <code>$RDWS_HOME/state/exports/business-slice-20261118-web-live.json</code>，mode 600；原生历史与测试数据保留。Demo 对照截图在忽略的 <code>.impeccable/review/</code>，由在仓库内的浏览器用例生成，不是隐藏测试 fixture。平台 PostgreSQL 继续本机 Docker PG18.7 / 独立命名卷，不重置其他项目数据。代码单写、文件 / Shell / sources 验收、五会话 fork / replay、GitLab 与 Linux 仍按后续阶段执行；R-A / R-B 不变。</p>
 
+  <h3 id="session-lifecycle-plan-20261118">11.10 已批准实施：只读多会话、派生与历史回放</h3>
+  <p><strong>状态：2026-11-18 用户确认实施；开发与内部验收通过，待用户侧验收。</strong>用户请求为“继续我们当前产品的研发工作”，并明确确认本切片方案。依据台账 I2 / I2-AUTH / I3-WRITE / I3-CONTEXT / I4-UI、§8.4 的五会话恢复 / fork / 回放验收和 Demo 会话操作，先补齐只读多会话基础，再进入代码单写交接。该切片不替代单写、sources、GitLab 或 Linux 验收。按 R3 强度审阅新增原生派生准入与跨 PG / Native 失败路径；本次为非批量动作，交付一条会话生命周期路径，没有同构批量替换或外部写入。</p>
+
+  <h4>11.10.1 已核实事实与建议边界</h4>
+  <p>当前工作区起点为 <code>bf0570a</code>，检查时无未提交改动。现有 <code>workbench.ts</code> 提供创建 / 列表、本人发送和需求内读取，<code>native_session</code> 只存 ID、需求与所有者；浏览器与 Native 两道允许表均未开放 fork。<code>rdws-access</code> 的执行 guard 与 Agent 工具限制继续保持，文件 / Shell / Git 工具为零。</p>
+  <p>已安装 rc.3 的公开 <code>SessionForkRequest</code> 仅接收 sessionId、atSeq、allowMigration；返回新 sessionId，不支持指定子 ID 或幂等 key。公开 <code>session/fork</code> 默认取 Native 逻辑历史中最后一个 turn/end，继续包含其后、下一次 turn/start、append user/message 或 inbox splice 之前的事件；保留 cwd 并附着源 workspace。空会话没有可派生的已结束 turn。<code>session/events</code> 支持精确 throughSeq 的被动分页，不启动模型。以上来自安装产物的 types.ts、commands.ts、history/controller.ts，不以参考源码替代发布包事实，运行行为仍待真实验证。</p>
+  <p><strong>三个边界分开：</strong>P 是原始持久日志末尾，仅验收器通过原生日志读取取证；C 是 session/events 返回的 Native 逻辑观察边界；B 是本次派生冻结的逻辑切点，B ≤ C。冷读会在内存补齐 interrupted turn 的结束事件，不回写原日志，因此 C 可能大于 P，公开 events 不提供 P 或逐事件持久来源。建议沿用 Native 逻辑语义选 B，可包含中断恢复补齐；界面明确“Native 逻辑历史，可能包含恢复补齐”，中断不显示为正常完成，也不凭 reason=interrupted 断言某事件尚未持久化。无需新增运行时磁盘日志解析器或第二份轨迹权威。</p>
+  <p>建议本轮只允许派生<strong>本人且仍可访问的会话</strong>，子会话归当前操作者、保留同一需求 / workspace，初始为只读分析。读取他人会话沿用既有需求权限，但不据此代操作或派生他人会话。派生按钮使用最近已结束 turn，不提供任意事件截断编辑器；源会话可以继续运行，正在进行的 turn 不进入该次派生。恢复表示重新打开原 ID 及历史，只有本人明确发送才开始新推理；回放表示读取固定日志边界的事件时间线，不重跑模型或工具。</p>
+
+  <h4>11.10.2 完整路径、契约与失败处理</h4>
+  <ol>
+    <li><strong>同需求会话目录：</strong>列表按服务端稳定顺序展示，会话选择与当前需求绑定，旧需求的迟到响应不得覆盖新选择。保留新建与本人发送；增加本人会话“派生”，并在目录直接提供可读会话的“回放”入口，不先打开或激活会话。沿用 Demo 会话级作用域、TDesign、明暗与窄屏令牌，使用页内回放面板；未实现的写锁入口不展示。</li>
+    <li><strong>派生准入：</strong>新增需求 / 源会话作用域 BFF 动作，客户端只提交 commandId 和源会话标识。服务器从 PG 登录与参与关系还原身份，复核源所有权、实际 workspace / cwd、原生稳定前缀；原生参数不接受 actor、目标 workspace、cwd、preset 或自选子 ID。复用真人权限读取及短事务锁顺序；不得持有 PG 锁等待 Native。调用前重验，完成映射和返回前再次检查当前权限，撤权时不下发新浏览器准入。</li>
+    <li><strong>原生第二道闸：</strong>只签发 BFF 专用派生能力，绑定源会话、需求、workspace、cwd、精确 atSeq 和有效期；仅允许对应 session/fork 及核对所需的最小读取，仍使用 non-owner Peer。浏览器 grant 不增加 fork、create 或设置权限，Native 不能仅凭“可读源会话”放行派生。对公开 handler 的能力组合做真实原生拒绝测试，不调用上游私有 core、不修改上游。</li>
+    <li><strong>操作防重：</strong>为原生创建 / 派生建立专用操作记录，键为 actor × 需求 × operation × commandId，保存请求摘要、reserved / rejected / dispatched / native-created / mapped / unknown 状态及结果；rejected 仅由 reserved 条件更新取得，表示确定未派发，原 key 永不执行，界面可解除本次操作。此终态落实已确认的失败 / 重试边界；业务 CommandReceipt 的原子事务语义不扩展为跨进程事务。先短事务预留；派生在 dispatched 前冻结源 ID、服务器解析的精确 B / atSeq、workspace / cwd 和原生请求摘要，通过唯一约束与条件状态更新取得唯一 dispatch 权，再调用 Native。重试与恢复只读已冻结参数，源后来完成新 turn 也不重算切点；拿到原生 ID 后保存结果并原子落映射。同 key 不同请求拒绝，相同请求并发仅一个 dispatch，mapped 重试返回原 ID。现有新建入口一并接入同一防重流程，保留旧会话数据；模型对话正文和凭据不进操作记录。</li>
+    <li><strong>未知结果与重启：</strong>Native 已接收但响应丢失、进程在 dispatched 后退出、映射或结果落库失败均不得自动再次调用 create / fork。重试只查询原操作：已知 ID 可在重新鉴权后补映射；无可证明 ID 的操作标记 unknown 并提示核对，保留原生轨迹和最小孤立结果记录。对尚在执行的请求区分进行中与未知；重启只恢复可证明的状态，不承诺无法实现的跨 PG / Native exactly-once。UI 保留原 commandId，成功与结果未知不得都显示为可直接重做的新操作。</li>
+    <li><strong>派生映射与上下文：</strong>NativeSession 增加可选源 ID / 实际截断 seq，旧行保持无来源；子 ID / workspace / cwd 核验一致才落映射。原生日志继续为轨迹权威，不复制第二份消息日志。源历史中的 actor、principal、旧 rdws-context 都是历史数据，不转为子会话运行授权；子会话首次发送必须按当前登录、新 sessionId 和新请求建立运行绑定，再从 PG 获取当前上下文。继承历史不能使源会话的旧运行绑定复活，也不能凭旧权限继续执行。</li>
+    <li><strong>历史回放：</strong>首次公开 session/events 读取捕获逻辑边界 C，后续固定 throughSeq=C、以已读最小 seq 作为 beforeSeq 向前分页；从 dsh/client 适配使用被动读取，不借 retain / follow(activate:true) 激活恢复。按 Native seq 展示逻辑历史、边界、加载进度、空态和重试；超出已加载范围不得称为完整历史。冷读的内存恢复补齐可能属于该逻辑视图，不能逐条冒称磁盘记录。时间线仅渲染白名单类型的安全摘要与对话文本，不直接展示 principal、票据、上下文内部载荷或原始 JSON；文本保持 React 转义。实时 transient 帧不混入固定回放。回放与翻页不创建运行绑定、不调用 prompt、不追加会话事件；离开后释放请求，源会话仍可独立运行。正常重新打开会话的激活恢复可能持久补齐日志，不能把它当作被动回放证据。</li>
+  </ol>
+
+  <h4>11.10.3 约束、威胁与验证对应</h4>
+  <table><tr><th>来源 / 风险</th><th>执行点与失败行为</th><th>验收证据</th></tr>
+    <tr><td>I2-AUTH；伪造源 / 跨需求 / 管理身份越权</td><td>BFF 当前身份、需求参与及本人源检查；Native 精确源与切点能力；失败拒绝，不创建可用映射。</td><td>匿名、未参与、仅管理、他人会话、跨项目 / 需求、假 cwd / workspace / preset，以及浏览器直调 fork 的双闸反例。</td></tr>
+    <tr><td>I3-WRITE；历史工具 / principal 导致扩权</td><td>沿用零工具 guard 与 preset 限制；恢复 / 派生不继承运行权限；首次新推理重读 PG。</td><td>至少五会话的 Native header cwd / workspace、工具声明与调用为零；旧 principal / 运行绑定拒绝，子会话新请求冻结上下文为当前版本。</td></tr>
+    <tr><td>I3-CONTEXT；撤权与慢响应竞争</td><td>短事务身份定序；跨 Native 等待后重新鉴权，旧 generation 不下发新准入。</td><td>停用 / 退出 / 撤权在调用前、调用中、映射后各检查点的反例；不得将已创建孤立对象当成授权成功。</td></tr>
+    <tr><td>I4-UI；网络未知、重复创建与迟到覆盖</td><td>持久操作状态 / 原 commandId；未知不再 dispatch；选择代次约束。</td><td>并发相同 key、不同 payload、已提交响应丢失、原生响应丢失、PG 故障、重启与 A→B 迟到响应；核对真实原生会话计数。</td></tr>
+    <tr><td>D1 / D7；假回放、漏分页与内容注入</td><td>原生固定逻辑 cut 被动读取；区分持久前缀与恢复补齐；安全摘要；无模型 / 工具重执行。</td><td>超过一页的真实轨迹核对 P 以内原始前缀与 C 以内预期补齐后缀；源继续生成时 cut 不变。回放前后日志前缀与模型 / 工具调用计数不变，恶意 HTML 按文本显示；冷读中断尾部不能宣称正常完成。</td></tr>
+  </table>
+  <p>R-A / R-B 保持原有边界；本切片不引入执行工具、生产依赖、外部仓库、真实 push / MR 或生产数据。现有依赖漏洞只沿用 SECURITY.md 已记录风险，不把历史审计当成本轮新鲜通过证据。</p>
+
+  <h4>11.10.4 实施顺序、文件集与验证阶梯</h4>
+  <table><tr><th>顺序</th><th>行为及主要文件</th><th>检查点</th></tr>
+    <tr><td>1</td><td>先补创建 / 派生防重与授权反例；packages/contracts、packages/db schema / 新增量 migration、apps/server 的 session 操作模块及 workbench 接线、dsh/bridge/access 和必要 Host 控制适配。</td><td>聚焦 Vitest：真实 PG 的状态竞争 / 重启与 Native 可控故障；现有创建兼容。迁移通过 db:generate 生成，先在测试库验证，不改已应用迁移。</td></tr>
+    <tr><td>2</td><td>会话列表 → 本人派生 → 新会话继续讨论，及被动历史回放。apps/console/features/conversation.tsx、必要 theme.css、dsh/client/runtime.ts；上下文绑定仅在新测试证明需要时改对应模块。</td><td>浏览器覆盖空态 / 忙碌 / 失败 / 未知 / 重试 / 跨需求切换，1440 / 1024 / 820 / 390px 明暗、键盘和对比度。回放不得影响运行中的源会话。</td></tr>
+    <tr><td>3</td><td>tests/integration 的会话生命周期与权限回归、tests/e2e 的故障旅程、tests/web-live 的五会话恢复 / fork / replay；按验证事实同步本节、台账、README 的阶段状态。</td><td>真实 GLM、Native non-owner、原始日志与冷重启核对；派生前后源持久前缀不改写，五个原 ID 可恢复，派生后可使用新上下文继续本人对话。增加 turn 中途终止 → 未激活冷读 → 多页回放 / 派生，分别核对 P / C / B；冻结 B 后源再完成 turn、映射失败再重启时仍用原 B。正常激活恢复新增尾部与被动读取分别验收；空源、跨页找稳定 cut 也覆盖。不能以 mock 通过代替真实验收。</td></tr>
+  </table>
+  <p>命令来自根 package.json：先用 <code>pnpm test &lt;聚焦测试文件&gt;</code>、<code>pnpm test:e2e &lt;受影响 spec&gt;</code>、<code>pnpm test:web-live &lt;新增 spec&gt;</code>，再做邻域回归与交付独立复核；代码稳定后一次 <code>pnpm check</code>、<code>pnpm test:e2e</code>、<code>pnpm test:web-live</code>。check 已含 typecheck / lint / format:check / test / build。测试与 fixture 必须在 clean checkout 可取；真实调用沿用独立运行空间，模型凭据仅引用既有原生配置。</p>
+  <p>恢复方式：失败时关闭新增操作准入、保留既有会话 / 数据 / 操作记录和原生日志；不自动删 Native 对象、不删库 / 卷、不回退已应用迁移。仅停止本轮新建验证服务。开发库迁移在测试证据通过且明确本轮授权后执行；Linux 和单写交接继续单独验收，不提前标完成。</p>
+
+  <h4>11.10.5 审阅与确认记录</h4>
+  <p>首轮独立 A 面（正确性 / 可行性）与 B 面（权限 / 故障）均 APPROVE_WITH_CHANGES：共同发现冷读恢复补齐不能称为全部持久事件；A 面另指出派生切点必须在 dispatch 前冻结。作者已对照安装产物 cold-read.ts / observation.ts / commands.ts 核实并全部采纳，补充 P / C / B、被动读取与激活恢复的区别、冻结输入及中断 / 重启反例。第二轮全量复审 A 面 APPROVE、B 面 APPROVE，均无未关闭项；结论仅覆盖方案，不代表代码或真实验收通过。2026-11-18 用户明确回复“确认”，授权本切片多文件实施与分阶段验证。</p>
+  <p>方案草案阶段（实施前时点）仅修改本方案：git diff --check 通过；本文件 19 个唯一 ID、19 个链接的本地目标 / 锚点校验通过。Playwright 打开文档，1440px 无横向溢出；390px 的 scrollWidth=630，HEAD 原文同为 630，属于既有文档布局限制，未顺带改样式。当时未运行代码测试、模型调用或迁移；文档检查不作为产品实现证据。</p>
+
+  <h4>11.10.6 实施检查点（执行证据）</h4>
+  <p>2026-11-18：开发 / 测试库均已执行生成的增量迁移 0004，新增 session_operation，NativeSession 增加派生来源与切点，合计 13 表；开发库读回确认两列及应用角色操作表权限。会话操作沿用既有身份锁顺序，PG / Native 分段执行，结果未知不重复派发；已知原生 ID 在映射失败后保留，结果落库失败以 mode 600 的最小孤立记录补证。原生派生使用专用 non-owner 能力，绑定源、切点和实际 workspace / cwd；浏览器允许表未增加 fork。回放走公开被动 events 的安全投影，不复用会激活恢复的 retain。</p>
+  <p>聚焦与邻域 Vitest 4 文件 / 33 项通过；新增浏览器故障 3 项通过，覆盖断网、坏 JSON、刷新保留 commandId 和 A→B 迟到目录。真实五会话 / 本人派生 / 新上下文 / 固定分页用例通过；独立运行空间的真实中断冷启动用例通过，分别核对 P / C / B、被动回放源字节不变及五个原 ID 恢复后继续对话。1440 / 1024 / 820 / 390px 明暗截图无横向溢出。实现中发现原生 request/header 可复用，并非每请求一条；中断验证改以真实持久 open turn / step 作为终止点，不改变产品验收。此为中间检查点，交付独立复核、最终全量与日常实例验收仍待完成。</p>
+  <p>首轮交付复核：A 面 APPROVE_WITH_CHANGES（3 项 P2），B 面 BLOCK（1 项 P1、2 项 P2）。已逐项复现并统一修正：兼容无 body 创建；未派发拒绝持久终结并解除 UI；目录直接被动回放；Native 错误携带子 ID 时复用 mode 600 补证；通知等待后以新鲜身份与源所有权复查；create / fork 原始 envelope 在上游 codec 剔除字段前严格校验。新增 4 项服务端红绿回归，当前聚焦与邻域 37 项通过；3 项浏览器回归覆盖拒绝后继续创建和目录直接回放。真实 Native 额外字段误放行已复现，修复后真实双用例通过；冷浏览器从目录进入回放前后原始日志字节保持一致。修订稿待双面复审，未自签放行。</p>
+
+  <h4 id="session-lifecycle-live-20261118">11.10.7 最终交付证据与剩余边界</h4>
+  <p>第二轮完整交付复审：A 面 APPROVE、B 面 APPROVE；六项首轮发现全部修复且有关闭证据，无未关闭项。A 面独立执行类型 / lint / diff 检查，B 面独立复现通知等待后的撤权返回 401；两面均核对新增源码、迁移、测试和 fixture 的干净检出可达性。原生包和 SDK 保持 0.2.2-rc.3，未修改上游或新增生产依赖。</p>
+  <table><tr><th>最终命令 / 检查</th><th>实际结果</th></tr>
+    <tr><td>pnpm check</td><td>exit 0：类型、lint、格式、11 文件 / 74 测试和 Web build；主 JS 895.78kB / gzip 253.36kB，保留既有大包体积提示。</td></tr>
+    <tr><td>pnpm test:e2e</td><td>exit 0，8 passed（16.1s）：原登录 / 业务旅程，加断网 / 坏 JSON 跨刷新重试、确定未派发拒绝后继续新建、B 先完成而 A 后返回的目录隔离及直接回放。</td></tr>
+    <tr><td>pnpm test:web-live</td><td>最终 exit 0，12 passed（3.4min）：真实 GLM、上下文失败时模型调用 0、Native 双闸、撤权故障、五会话及冷启动恢复。长流 125354ms / 7 次 generation / 9207 实时文本帧，展示 / 刷新等于原生日志、页面错误 0，工具声明 / 调用 0；仅为本次观察，非性能 SLA。</td></tr>
+    <tr><td>真实生命周期</td><td>五个映射、派生 B=17、回放 C=28、子会话新请求使用 contextVersion=2；原始继承前缀一致。冷场景 P=23 / C=25 / B=25，分别核对原始前缀与内存补齐；直接浏览器回放不激活恢复、源日志字节及模型请求计数不变，五原 ID 后续均可重新绑定并回复。</td></tr>
+    <tr><td>日常实例与视觉</td><td>5173 / 3001 本轮启动；真实新建、回复、本人派生、目录回放通过。1440 / 1024 / 820 / 390px 明暗截图与日常桌面 / 390px 复核无页面横向溢出；新增禁用按钮保持 button 语义，键盘可打开回放。最终 Demo 一致性仍待用户确认。</td></tr>
+  </table>
+  <p>最终真实报告为运行根 <code>state/exports/session-lifecycle-web.json</code>、<code>session-lifecycle-cold.json</code>、<code>daily-session-lifecycle.json</code>，均 mode 600；原生轨迹、合成验收需求与截图保留。源码中的测试及 <code>tests/helpers/auth-session.ts</code> 可在 clean checkout 取得，后者仅通过既有认证服务为测试准备真人登录会话，不改变生产登录限流。第一次全量 live 因旧测试把预检 HTTP 403 当 JSON 而失败，worker 重启的重复登录又触发限流；测试现区分 HTTP / RPC 拒绝，并让新增 setup 复用认证 fixture，最终全量已通过，未降低权限断言。</p>
+  <p>工具检查的偏差：Impeccable 机器缓存不纳入 Prettier，共享配置仍受格式检查；两份历史 HTML 的 CSS 与 HEAD 一致，页眉 / 结论 / 警示边框按文件记录 side-tab 例外，未关闭其他规则。最终检测返回空数组。历史文档 390px 宽度 630px 的既有布局限制保留；产品页面窄屏验证通过。既有依赖审计条目未关闭，本轮未重新审计；生产安全、代码写执行 / 单写交接、sources、GitLab 与 Linux 验收均未纳入本切片。<a href="05-development-backlog.md">T02</a> 待用户侧验收；内部验收结束时尚未提交或推送，后续本地交付及修订见 T02 记录和 Git 功能提交。</p>
+  <p>最终读回：两份 HTML 的 17 / 20 个 ID 均唯一，各 20 个链接的本地目标与锚点有效。31 个改动 / 构建文件对照 27 个本机已知私有值，匹配 0；扫描正反样本通过，apiKeyEnv 仅作为公开引用名处理。三份脱敏报告 mode 600，日常 5173 / 3001 health 均为 200。此为有限核对，不代表完整安全审计。</p>
+
   <div class="warn">以下 §0–§10 为历史设计与实测记录；涉及阶段审批、rebase、完整插件 / 部署骨架等旧方案不作为本轮实施要求，当前决定以台账 v4 §8 和本页 §11 为准。</div>
   <h2 id="s0"><span class="num">0</span>评审结论</h2>
   <div class="verdict">

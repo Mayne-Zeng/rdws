@@ -3,21 +3,28 @@ import websocket from '@fastify/websocket';
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { RequirementInput, BusinessCommand } from '@rdws/contracts';
+import {
+  RequirementInput,
+  BusinessCommand,
+  SessionCreate,
+  SessionFork,
+} from '@rdws/contracts';
 import { createBusiness } from './business.ts';
+import { createSessionOperations } from './session-operations.ts';
 import {
   ContextRuns,
   contextSnapshot,
   type RunBinding,
 } from './runtime-context.ts';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, asc } from 'drizzle-orm';
 import { fromNodeHeaders } from 'better-auth/node';
 import { schema, type connectDatabase } from '@rdws/db';
 import { NativeWebHost } from '@rdws/dsh/web';
+import { sessionPage } from '@rdws/dsh/sessions';
 import {
   actionAllowed,
   isRecord,
+  onlyKeys,
   LEASE_MS,
   type Grant,
 } from '@rdws/dsh/access';
@@ -49,6 +56,7 @@ export async function registerWorkbench(
         : undefined,
     );
   const business = createBusiness(db);
+  const sessionOperations = createSessionOperations(db, business, native);
   let authorizationEpoch = 0;
   const closingSessions = new Set<string>();
   const runs = new ContextRuns(
@@ -159,7 +167,11 @@ export async function registerWorkbench(
     const sessions = await db
       .select()
       .from(schema.nativeSession)
-      .where(eq(schema.nativeSession.requirementId, id));
+      .where(eq(schema.nativeSession.requirementId, id))
+      .orderBy(
+        asc(schema.nativeSession.createdAt),
+        asc(schema.nativeSession.id),
+      );
     if (epochFor(who.authSessionId, id) > epoch) fail(401, '授权已变化');
     return { who, item, roles, sessions, epoch };
   }
@@ -369,72 +381,216 @@ export async function registerWorkbench(
         id: row.id,
         ownerId: row.ownerId,
         own: row.ownerId === scope.who.userId,
+        sourceSessionId: row.sourceSessionId,
+        sourceThroughSeq: row.sourceThroughSeq,
       })),
     };
   });
-  app.post('/api/requirements/:id/sessions', async (request) => {
-    if (
-      request.body &&
-      (!isRecord(request.body) || Object.keys(request.body).length)
-    )
-      fail(400, '创建参数由服务器确定');
+  async function sessionOperation(
+    request: FastifyRequest,
+    sourceSessionId?: string,
+  ) {
     const requirementId = (request.params as { id: string }).id;
-    await prepared(await access(request.headers, requirementId));
     const scope = await access(request.headers, requirementId);
-    const rpcId = randomUUID();
-    const response = await native.fetch(
-      '/api/session/create',
-      grant(scope, 'create'),
+    const assertOpen = () => {
+      if (stale(scope)) fail(401, '授权已变化');
+    };
+    return sessionOperations.execute(
+      scope.who,
+      requirementId,
+      (request.body as { commandId?: string })?.commandId ?? randomUUID(),
+      sourceSessionId,
       {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          type: 'client-request',
-          rpcId,
-          method: 'session/create',
-          payload: {
-            args: { request: { workspaceId: scope.item.nativeWorkspaceId } },
-          },
-        }),
+        assertOpen,
+        current: async () => {
+          assertOpen();
+          await access(request.headers, requirementId);
+          assertOpen();
+        },
+        prepare: async () => {
+          await prepared(await access(request.headers, requirementId));
+          const fresh = await access(request.headers, requirementId);
+          assertOpen();
+          return {
+            workspaceId: fresh.item.nativeWorkspaceId!,
+            cwd: join(native.demandRoot, requirementId),
+            grant: grant(fresh),
+          };
+        },
+        mapped: async () => {
+          const groups = new Set([
+            scope.who.authSessionId,
+            ...[...bridges]
+              .filter((item) => item.requirementId === requirementId)
+              .map((item) => item.authSessionId),
+          ]);
+          for (const group of groups) await revoke(group, requirementId);
+        },
+        validateReturn: async () => {
+          await access(request.headers, requirementId);
+          await business.sessionTransaction(
+            scope.who,
+            requirementId,
+            sourceSessionId,
+            async () => {
+              if (closingSessions.has(scope.who.authSessionId))
+                fail(401, '登录已失效');
+            },
+          );
+        },
       },
     );
-    const result = (await response.json()) as {
-      rpcId: string;
-      result: { ok: boolean; value?: { sessionId: string }; error?: unknown };
-    };
-    if (
-      !response.ok ||
-      !result.result.ok ||
-      typeof result.result.value?.sessionId !== 'string'
-    )
-      fail(503, '会话创建失败');
-    const sessionId = result.result.value.sessionId;
-    try {
-      await db.insert(schema.nativeSession).values({
-        id: sessionId,
-        requirementId: scope.item.id,
-        ownerId: scope.who.userId,
-      });
-    } catch {
-      const directory = join(runtimeHome, 'state', 'exports');
-      await mkdir(directory, { recursive: true, mode: 0o700 });
-      await writeFile(
-        join(directory, `orphan-session-${randomUUID()}.json`),
-        JSON.stringify({ sessionId, requirementId: scope.item.id }),
-        { mode: 0o600 },
+  }
+  const validateSessionBody = async (request: FastifyRequest) => {
+    if (!onlyKeys(request.body, ['commandId']))
+      fail(400, '会话参数由服务器确定');
+  };
+  app.post(
+    '/api/requirements/:id/sessions',
+    {
+      schema: { body: SessionCreate },
+      preValidation: async (request) => {
+        request.body ??= {};
+        await validateSessionBody(request);
+      },
+    },
+    async (request, reply) => {
+      const result = await sessionOperation(request);
+      return reply
+        .code(
+          result.status === 'mapped'
+            ? 200
+            : result.status === 'rejected'
+              ? 409
+              : 202,
+        )
+        .send(result);
+    },
+  );
+  app.post(
+    '/api/requirements/:id/sessions/:sessionId/fork',
+    { schema: { body: SessionFork }, preValidation: validateSessionBody },
+    async (request, reply) => {
+      const result = await sessionOperation(
+        request,
+        (request.params as { sessionId: string }).sessionId,
       );
-      fail(503, '会话映射保存失败，请联系管理员核对，不要重复创建');
-    }
-    const groups = new Set([
-      scope.who.authSessionId,
-      ...[...bridges]
-        .filter((item) => item.requirementId === scope.item.id)
-        .map((item) => item.authSessionId),
-    ]);
-    for (const group of groups) await revoke(group, scope.item.id);
-    await access(request.headers, scope.item.id);
-    return { sessionId };
-  });
+      return reply
+        .code(
+          result.status === 'mapped'
+            ? 200
+            : result.status === 'rejected'
+              ? 409
+              : 202,
+        )
+        .send(result);
+    },
+  );
+  app.get(
+    '/api/requirements/:id/sessions/:sessionId/history',
+    async (request) => {
+      const { id, sessionId } = request.params as {
+        id: string;
+        sessionId: string;
+      };
+      const scope = await access(request.headers, id);
+      if (!scope.sessions.some((s) => s.id === sessionId))
+        fail(403, '无权读取该会话历史');
+      const query = request.query as Record<string, string>;
+      if (!onlyKeys(query, ['throughSeq', 'beforeSeq', 'pageSize']))
+        fail(400, '回放参数不正确');
+      function position(key: string, min: number) {
+        const value = query[key];
+        if (value === undefined) return undefined;
+        if (
+          !/^-?\d+$/.test(value) ||
+          !Number.isSafeInteger(Number(value)) ||
+          Number(value) < min
+        )
+          fail(400, '回放位置不正确');
+        return Number(value);
+      }
+      await prepared(scope);
+      const pageSize = position('pageSize', 1) ?? 20;
+      if (pageSize > 50) fail(400, '回放每页最多读取 50 条消息');
+      const page = await sessionPage(
+        native,
+        grant(scope),
+        sessionId,
+        position('throughSeq', -1),
+        position('beforeSeq', 0),
+        pageSize,
+      );
+      await access(request.headers, id);
+      if (stale(scope)) fail(401, '授权已变化');
+      const labels: Record<string, string> = {
+        'turn/start': '轮次开始',
+        'turn/end': '轮次结束',
+        'user/message': '用户消息',
+        'assistant/message': '助手回复',
+        'agent/error': '本轮发生错误',
+      };
+      const events = page.records.flatMap(({ event }) => {
+        const label = labels[event.type];
+        if (!label) return [];
+        let text: string | undefined;
+        if (['user/message', 'assistant/message'].includes(event.type)) {
+          if (
+            event.type === 'user/message' &&
+            (!isRecord(event.data.source) ||
+              !['user', 'retry'].includes(String(event.data.source.kind)))
+          )
+            return [];
+          const message = isRecord(event.data.message)
+            ? event.data.message
+            : {};
+          const content = message.content ?? event.data.content;
+          text =
+            typeof content === 'string'
+              ? content
+              : Array.isArray(content)
+                ? content
+                    .filter(
+                      (p) =>
+                        isRecord(p) &&
+                        p.type === 'text' &&
+                        typeof p.text === 'string',
+                    )
+                    .map((p) => p.text)
+                    .join('')
+                : '';
+        }
+        const reason = isRecord(event.data.reason)
+          ? event.data.reason.kind
+          : undefined;
+        const outcomes: Record<string, string> = {
+          completed: '已完成',
+          interrupted: '已中断',
+          forked: '派生时结束',
+          cancelled: '已取消',
+          blocked: '已阻止',
+          failed: '执行失败',
+        };
+        return [
+          {
+            seq: event.seq,
+            type: event.type,
+            label,
+            ...(text === undefined ? {} : { text }),
+            ...(event.type === 'turn/end'
+              ? { outcome: outcomes[String(reason)] ?? '已结束' }
+              : {}),
+          },
+        ];
+      });
+      return {
+        cursor: page.cursor,
+        beforeSeq: page.records[0]?.event.seq ?? 0,
+        hasMore: page.hasMore,
+        events,
+      };
+    },
+  );
   app.get('/api/dsh/:id/bootstrap', async (request) => {
     const requirementId = (request.params as { id: string }).id;
     await prepared(await access(request.headers, requirementId));

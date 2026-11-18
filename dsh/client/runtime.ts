@@ -140,6 +140,32 @@ export function connectNative(requirementId: string, signal: AbortSignal) {
         const runtime = {
           sessions,
           root,
+          async history(
+            sessionId: string,
+            positions: { throughSeq?: number; beforeSeq?: number } = {},
+            signal?: AbortSignal,
+          ) {
+            const query = new URLSearchParams();
+            for (const [key, value] of Object.entries(positions))
+              if (value !== undefined) query.set(key, String(value));
+            const response = await fetch(
+              `/api/requirements/${requirementId}/sessions/${encodeURIComponent(sessionId)}/history?${query}`,
+              { signal },
+            );
+            if (!response.ok) throw new Error('会话历史读取失败，请重试');
+            return response.json() as Promise<{
+              cursor: number;
+              beforeSeq: number;
+              hasMore: boolean;
+              events: {
+                seq: number;
+                type: string;
+                label: string;
+                text?: string;
+                outcome?: string;
+              }[];
+            }>;
+          },
           async reconnect() {
             const connection = root.get('connection') as {
               reconnect: () => void;

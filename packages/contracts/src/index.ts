@@ -11,6 +11,42 @@ export const ProjectList = Type.Object({
 export type ProjectList = Static<typeof ProjectList>;
 export const Health = Type.Object({ status: Type.Literal('ok') });
 export const ApiError = Type.Object({ error: Type.String() });
+export const SessionCreate = Type.Object(
+  {
+    commandId: Type.Optional(Type.String({ format: 'uuid' })),
+  },
+  { additionalProperties: false },
+);
+export const SessionFork = Type.Object(
+  {
+    commandId: Type.String({ format: 'uuid' }),
+  },
+  { additionalProperties: false },
+);
+export interface SessionOperationResult {
+  commandId: string;
+  status:
+    | 'reserved'
+    | 'dispatched'
+    | 'native-created'
+    | 'mapped'
+    | 'unknown'
+    | 'rejected';
+  sessionId?: string;
+  error?: string;
+}
+export interface SessionHistoryPage {
+  cursor: number;
+  beforeSeq: number;
+  hasMore: boolean;
+  events: {
+    seq: number;
+    type: string;
+    label: string;
+    text?: string;
+    outcome?: string;
+  }[];
+}
 export const stageLabels = {
   intake: '录入',
   assignment: '指派',

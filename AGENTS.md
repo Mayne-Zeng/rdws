@@ -8,6 +8,7 @@ DSH 接入归 `dsh/`，`dsh/client` 承载原生浏览器运行时适配，业�
 
 ## 任务阅读入口
 
+- 选择或继续研发任务：先读 [开发任务清单](docs/05-development-backlog.md)，按前置依赖和协调登记领取；完成一项即同步状态与验收证据，再推进依赖任务。
 - 改范围、权限或数据模型：读 [决策台账当前基线](docs/00-decision-ledger.html#implementation-20261117)。
 - 改目录、DSH 或运行配置：读 [工程实施基线](docs/02-directory-and-engineering-design.html#implementation-20261117)。
 - 改界面：读 [设计基线](docs/04-design-baseline.html)，复用 TDesign 与 RDWS 主题令牌。
@@ -27,6 +28,10 @@ DSH 接入归 `dsh/`，`dsh/client` 承载原生浏览器运行时适配，业�
 
 ## 交付与指南维护
 
-提交沿用英文 Conventional Commits，如 `feat: add local authentication`。PR 描述目的、关联决策和验证结果，界面改动附截图。提交、推送、PR 和外部写入需要明确授权。
+每完成一个完整功能，完成约定验证、同步相关文档与[研发清单](docs/05-development-backlog.md)、通过必要审阅并按结论处置发现后，自动执行本地 `git commit`，无需逐次申请授权。按完整功能归集所需代码、测试、迁移、文档和进度记录，保留无关改动；必需验证未通过或审阅有阻塞项时先解决，不按已完成功能提交。
+
+本地提交与用户侧验收分别记录；用户侧验收尚未确认时，清单如实保留待验收状态。仅本地提交，不自动推送；推送、PR、部署及其他对外写入仍需用户另外明确要求。
+
+提交沿用英文 Conventional Commits，如 `feat: add local authentication`。PR 描述目的、关联决策和验证结果，界面改动附截图。
 
 工具链或目录变化时同步本指南与 README；详细决定保留在台账，实际 scripts 是命令事实源。本指南保持导航性质，不追加逐轮执行日志。

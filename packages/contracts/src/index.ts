@@ -285,6 +285,22 @@ const CapabilityRevision = Type.String({
   maxLength: 128,
   pattern: '^[A-Za-z0-9][A-Za-z0-9._:+-]*$(?![\\s\\S])',
 });
+const CapabilityVersion = Type.Object(
+  {
+    kind: CapabilityKind,
+    reference: CapabilityReference,
+    revision: CapabilityRevision,
+  },
+  { additionalProperties: false },
+);
+export type CapabilityVersion = Static<typeof CapabilityVersion>;
+export function capabilityKey({
+  kind,
+  reference,
+  revision,
+}: CapabilityVersion) {
+  return JSON.stringify([kind, reference, revision]);
+}
 export const ManagementCommand = Type.Union([
   Type.Object(
     {
@@ -345,6 +361,21 @@ export const ManagementCommand = Type.Union([
     },
     { additionalProperties: false },
   ),
+  Type.Object(
+    {
+      kind: Type.Literal('capability.template.save'),
+      commandId: ManagementCommandId,
+      projectId: ManagedProjectId,
+      templateId: Type.Optional(Type.String({ format: 'uuid' })),
+      expectedRevision: Type.Optional(
+        Type.Integer({ minimum: 1, maximum: 2147483646 }),
+      ),
+      name: ManagedName,
+      description: Type.String({ maxLength: 1000 }),
+      capabilities: Type.Array(CapabilityVersion, { maxItems: 64 }),
+    },
+    { additionalProperties: false },
+  ),
 ]);
 export type ManagementCommand = Static<typeof ManagementCommand>;
 export interface CapabilityApprovalList {
@@ -354,6 +385,18 @@ export interface CapabilityApprovalList {
     revision: string;
     approved: boolean;
   }[];
+}
+export interface CapabilityTemplateList {
+  templates: {
+    templateId: string;
+    revision: number;
+    name: string;
+    description: string;
+    capabilities: (CapabilityVersion & { approved: boolean })[];
+  }[];
+}
+export interface CapabilityTemplateManagement extends CapabilityTemplateList {
+  options: CapabilityVersion[];
 }
 export interface ManagementAccount {
   username: string;
@@ -377,4 +420,9 @@ export interface ManagementResult {
   changed: boolean;
   replayed: boolean;
   revocation: 'confirmed' | 'lease-expiry' | 'none' | 'previously-recorded';
+  template?: {
+    status: 'saved' | 'unchanged' | 'conflict' | 'unavailable';
+    templateId?: string;
+    revision?: number;
+  };
 }

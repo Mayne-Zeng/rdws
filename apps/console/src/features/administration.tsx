@@ -9,6 +9,7 @@ import type {
 } from '@rdws/contracts';
 import { api, roleLabels } from '../lib/ui.tsx';
 import { CapabilityApprovals } from './capability-approvals.tsx';
+import { CapabilityTemplates } from './capability-templates.tsx';
 
 type Intent = ManagementCommand extends infer Command
   ? Command extends ManagementCommand
@@ -61,6 +62,10 @@ function useManagement(userId: string) {
   const [unknown, setUnknown] = useState(!!initial);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [templateResult, setTemplateResult] = useState<{
+    projectId: string;
+    status: NonNullable<ManagementResult['template']>['status'];
+  }>();
   async function send(input?: Intent) {
     if (active.current || (input && intent.current)) return;
     if (input) intent.current = { ...input, commandId: crypto.randomUUID() };
@@ -91,7 +96,24 @@ function useManagement(userId: string) {
         none: response.changed ? '已保存。' : '当前设置已一致。',
         'previously-recorded': '已核对原操作，当前设置已刷新。',
       };
-      if (submitted.kind === 'capability.approval') {
+      if (submitted.kind === 'capability.template.save' && response.template) {
+        setTemplateResult({
+          projectId: submitted.projectId,
+          status: response.template.status,
+        });
+        if (response.template.status === 'conflict')
+          setError('模板版本已变化，请核对当前清单后重新编辑。');
+        else if (response.template.status === 'unavailable')
+          setError('所选审核版本已停用，请核对当前清单。');
+        else
+          setNotice(
+            response.replayed
+              ? '原模板命令已核对。'
+              : response.changed
+                ? '模板版本已保存。'
+                : '模板版本未变。',
+          );
+      } else if (submitted.kind === 'capability.approval') {
         setNotice(
           response.replayed
             ? '原审核命令已核对，请以当前清单为准。'
@@ -110,18 +132,33 @@ function useManagement(userId: string) {
       }
     } finally {
       try {
-        await Promise.all([
-          client.invalidateQueries({ queryKey: ['administration'] }),
-          client.invalidateQueries({ queryKey: ['projects'] }),
-          client.invalidateQueries({ queryKey: ['requirements'] }),
-        ]);
+        if (submitted.kind === 'capability.template.save') {
+          await client.invalidateQueries({
+            queryKey: ['administration', 'capability-templates'],
+          });
+        } else {
+          await Promise.all([
+            client.invalidateQueries({ queryKey: ['administration'] }),
+            client.invalidateQueries({ queryKey: ['projects'] }),
+            client.invalidateQueries({ queryKey: ['requirements'] }),
+          ]);
+        }
       } finally {
         active.current = false;
         setBusy(false);
       }
     }
   }
-  return { send, busy, unknown, notice, error, locked: busy || unknown };
+  return {
+    send,
+    busy,
+    unknown,
+    notice,
+    error,
+    templateResult,
+    pending: unknown ? intent.current : undefined,
+    locked: busy || unknown,
+  };
 }
 
 function Feedback({ action }: { action: ReturnType<typeof useManagement> }) {
@@ -317,12 +354,20 @@ export function PlatformPage({
   const [projectId, setProjectId] = useState('');
   const [name, setName] = useState('');
   const [admin, setAdmin] = useState('');
-  const [target, setTarget] = useState('');
+  const [target, setTarget] = useState(() => {
+    const pending = pendingManagement(userId);
+    return pending?.kind === 'capability.template.save'
+      ? pending.projectId
+      : '';
+  });
   const [newName, setNewName] = useState('');
   const [targetAdmin, setTargetAdmin] = useState('');
   const selected = query.data?.projects.find(
     (project) => project.id === target,
   );
+  const transientOverviewFailure =
+    query.isError &&
+    (query.error as Error & { resultUnknown?: boolean }).resultUnknown === true;
 
   return (
     <main className="shell">
@@ -358,7 +403,17 @@ export function PlatformPage({
           <Feedback action={action} />
           {query.isPending && <Loading text="正在读取平台设置…" />}
           {query.isError && (
-            <Alert theme="error" message={query.error.message} />
+            <div className="inline-feedback">
+              <Alert theme="error" message={query.error.message} />
+              <Button
+                tag="button"
+                variant="outline"
+                loading={query.isFetching}
+                onClick={() => void query.refetch()}
+              >
+                重试读取平台设置
+              </Button>
+            </div>
           )}
           {query.data && !query.isError && (
             <>
@@ -528,6 +583,22 @@ export function PlatformPage({
                   )}
                 </fieldset>
               </section>
+            </>
+          )}
+          {target && (!query.isError || transientOverviewFailure) && (
+            <CapabilityTemplates
+              key={target}
+              projectId={target}
+              editor={{
+                save: action.send,
+                locked: action.locked || query.isError || !query.data,
+                result: action.templateResult,
+                pending: action.pending,
+              }}
+            />
+          )}
+          {query.data && !query.isError && (
+            <>
               <section className="document-section">
                 <h2>账号状态</h2>
                 <p className="muted">

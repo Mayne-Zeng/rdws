@@ -12,6 +12,7 @@ import { RequirementForm } from './requirement-form.tsx';
 import { RequirementPage } from './requirement.tsx';
 import { MembersPage } from './administration.tsx';
 import { RepositoriesPage } from './repositories.tsx';
+import { CapabilityTemplates } from './capability-templates.tsx';
 export type View =
   | 'requirements'
   | 'overview'
@@ -20,6 +21,7 @@ export type View =
   | 'create'
   | 'repos'
   | 'members'
+  | 'capabilities'
   | 'platform'
   | 'design';
 export type Project = ProjectList['projects'][number];
@@ -55,6 +57,7 @@ export function ProjectWorkspace({
     'create',
     'repos',
     'members',
+    'capabilities',
   ].includes(current ?? '')
     ? (current as View)
     : 'requirements';
@@ -142,7 +145,11 @@ export function ProjectWorkspace({
       r.title.toLocaleLowerCase().includes(filter.toLocaleLowerCase()),
     ) ?? [];
   const demandView =
-    !!selected && view !== 'create' && view !== 'repos' && view !== 'members';
+    !!selected &&
+    view !== 'create' &&
+    view !== 'repos' &&
+    view !== 'members' &&
+    view !== 'capabilities';
   const showTabs = demandView && projectMatches && !!summary;
   const scopeLabel = view === 'chat' ? '会话视图' : '需求级';
   const activeView = view === 'requirements' ? 'overview' : view;
@@ -287,6 +294,18 @@ export function ProjectWorkspace({
               <span>成员与权限</span>
             </button>
           )}
+          <button
+            aria-label="能力模板"
+            title="能力模板"
+            aria-current={view === 'capabilities' ? 'page' : undefined}
+            disabled={protectedForm}
+            className={'nav-item' + (view === 'capabilities' ? ' active' : '')}
+            style={{ minHeight: 'var(--control-h)' }}
+            onClick={() => navigate('capabilities', '')}
+          >
+            <Icon name="file" />
+            <span>能力模板</span>
+          </button>
           {platformAdmin && (
             <button
               aria-label="平台设置"
@@ -436,11 +455,13 @@ export function ProjectWorkspace({
             <div className="top-title">
               {view === 'members'
                 ? '成员与权限'
-                : view === 'repos'
-                  ? '仓库与环境'
-                  : view === 'create'
-                    ? '新建需求'
-                    : (summary?.title ?? '需求管理')}
+                : view === 'capabilities'
+                  ? '能力模板'
+                  : view === 'repos'
+                    ? '仓库与环境'
+                    : view === 'create'
+                      ? '新建需求'
+                      : (summary?.title ?? '需求管理')}
             </div>
           </div>
           <span className="pill local-badge">
@@ -520,24 +541,31 @@ export function ProjectWorkspace({
             aria-labelledby={showTabs ? 'view-' + activeView : undefined}
             tabIndex={showTabs ? 0 : undefined}
           >
-            {view !== 'repos' && requirements.isError && (
-              <div className="inline-feedback" role="alert">
-                <Alert theme="error" message={requirements.error.message} />
-                <Button
-                  tag="button"
-                  variant="outline"
-                  loading={requirements.isFetching}
-                  onClick={() => void requirements.refetch()}
-                >
-                  重试读取需求列表
-                </Button>
-              </div>
-            )}
+            {view !== 'repos' &&
+              view !== 'capabilities' &&
+              requirements.isError && (
+                <div className="inline-feedback" role="alert">
+                  <Alert theme="error" message={requirements.error.message} />
+                  <Button
+                    tag="button"
+                    variant="outline"
+                    loading={requirements.isFetching}
+                    onClick={() => void requirements.refetch()}
+                  >
+                    重试读取需求列表
+                  </Button>
+                </div>
+              )}
             {view === 'members' ? (
               <MembersPage
                 key={project.id + userId}
                 projectId={project.id}
                 userId={userId}
+              />
+            ) : view === 'capabilities' ? (
+              <CapabilityTemplates
+                key={project.id + userId}
+                projectId={project.id}
               />
             ) : view === 'repos' ? (
               <RepositoriesPage key={project.id} projectId={project.id} />

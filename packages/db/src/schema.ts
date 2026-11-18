@@ -261,3 +261,45 @@ export const capabilityApproval = pgTable(
     ),
   ],
 );
+export const capabilityTemplateRevision = pgTable(
+  'capability_template_revision',
+  {
+    templateId: text('template_id').notNull(),
+    revision: integer('revision').notNull(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => project.id),
+    name: text('name').notNull(),
+    description: text('description').notNull(),
+    capabilities: jsonb('capabilities')
+      .$type<
+        {
+          kind: 'plugin' | 'skill' | 'mcp';
+          reference: string;
+          revision: string;
+        }[]
+      >()
+      .notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.templateId, t.revision] }),
+    index('capability_template_revision_project_idx').on(
+      t.projectId,
+      t.templateId,
+      t.revision,
+    ),
+    check('capability_template_revision_number', sql`${t.revision} > 0`),
+    check(
+      'capability_template_revision_name',
+      sql`char_length(${t.name}) between 1 and 80`,
+    ),
+    check(
+      'capability_template_revision_description',
+      sql`char_length(${t.description}) <= 1000`,
+    ),
+    check(
+      'capability_template_revision_choices',
+      sql`jsonb_typeof(${t.capabilities}) = 'array' and jsonb_array_length(${t.capabilities}) <= 64`,
+    ),
+  ],
+);

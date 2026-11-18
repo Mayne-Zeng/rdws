@@ -1,12 +1,14 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { and, eq, inArray, asc, desc, gt, sql } from 'drizzle-orm';
+import { and, eq, inArray, asc, desc, gt, or, sql } from 'drizzle-orm';
 import { schema, type connectDatabase } from '@rdws/db';
 import type {
   RequirementInput,
   BusinessCommand,
   ManagementCommand,
+  ManagementResult,
   TaskInput,
 } from '@rdws/contracts';
+import { capabilityKey } from '@rdws/contracts';
 type Database = ReturnType<typeof connectDatabase>['db'];
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 export type Actor = { userId: string; authSessionId: string };
@@ -38,6 +40,18 @@ export function normalizeManagement(input: ManagementCommand) {
     ...('name' in input ? { name: input.name.trim() } : {}),
     ...(input.kind === 'project.roles'
       ? { roles: [...input.roles].sort() }
+      : {}),
+    ...(input.kind === 'capability.template.save'
+      ? {
+          description: input.description.trim(),
+          capabilities: [...input.capabilities].sort((a, b) =>
+            capabilityKey(a) < capabilityKey(b)
+              ? -1
+              : capabilityKey(a) > capabilityKey(b)
+                ? 1
+                : 0,
+          ),
+        }
       : {}),
   } as ManagementCommand;
 }
@@ -668,11 +682,107 @@ export function createBusiness(db: Database) {
     projectId?: string;
     before: unknown;
     after: unknown;
+    template?: ManagementResult['template'];
   };
+  async function saveTemplate(
+    tx: Transaction,
+    input: Extract<ManagementCommand, { kind: 'capability.template.save' }>,
+  ): Promise<ManagementReceipt> {
+    const [project] = await tx
+      .select({ id: schema.project.id })
+      .from(schema.project)
+      .where(eq(schema.project.id, input.projectId));
+    if (!project) businessError(404, '项目不存在');
+    const table = schema.capabilityTemplateRevision;
+    const [previous] = input.templateId
+      ? await tx
+          .select()
+          .from(table)
+          .where(
+            and(
+              eq(table.projectId, input.projectId),
+              eq(table.templateId, input.templateId),
+            ),
+          )
+          .orderBy(desc(table.revision))
+          .limit(1)
+      : [];
+    if (input.templateId && !previous) businessError(404, '模板不存在');
+    const prior = previous
+      ? { templateId: previous.templateId, revision: previous.revision }
+      : null;
+    function unchanged(
+      status: 'conflict' | 'unavailable' | 'unchanged',
+    ): ManagementReceipt {
+      return {
+        changed: false,
+        before: prior,
+        after: prior,
+        template: { status, ...prior },
+      };
+    }
+    if (previous && input.expectedRevision !== previous.revision)
+      return unchanged('conflict');
+    const approval = schema.capabilityApproval;
+    if (input.capabilities.length) {
+      const active = await tx
+        .select({ kind: approval.kind })
+        .from(approval)
+        .where(
+          and(
+            eq(approval.approved, true),
+            or(
+              ...input.capabilities.map((item) =>
+                and(
+                  eq(approval.kind, item.kind),
+                  eq(approval.reference, item.reference),
+                  eq(approval.revision, item.revision),
+                ),
+              ),
+            ),
+          ),
+        )
+        .orderBy(
+          asc(approval.kind),
+          asc(approval.reference),
+          asc(approval.revision),
+        )
+        .for('share');
+      if (active.length !== input.capabilities.length)
+        return unchanged('unavailable');
+    }
+    if (
+      previous &&
+      previous.name === input.name &&
+      previous.description === input.description &&
+      digestOf(previous.capabilities) === digestOf(input.capabilities)
+    )
+      return unchanged('unchanged');
+    const [created] = await tx
+      .insert(table)
+      .values({
+        templateId: input.templateId ?? randomUUID(),
+        revision: (previous?.revision ?? 0) + 1,
+        projectId: input.projectId,
+        name: input.name,
+        description: input.description,
+        capabilities: input.capabilities,
+      })
+      .onConflictDoNothing({ target: [table.templateId, table.revision] })
+      .returning({ templateId: table.templateId, revision: table.revision });
+    if (!created) return unchanged('conflict');
+    return {
+      changed: true,
+      before: prior,
+      after: created,
+      template: { status: 'saved', ...created },
+    };
+  }
   async function manage(
     who: Actor,
     input: ManagementCommand,
     fence: (userId: string, projectId?: string) => void,
+    confirm: () => void,
   ) {
     const normalized = normalizeManagement(input);
     const projectId =
@@ -753,6 +863,13 @@ export function createBusiness(db: Database) {
           normalized.commandId,
           normalized,
         );
+        function confirmTemplate() {
+          if (normalized.kind !== 'capability.template.save') return;
+          if (session!.expiresAt <= new Date())
+            businessError(401, '登录已失效');
+          confirm();
+        }
+        confirmTemplate();
         if ('result' in receipt)
           return {
             receipt: receipt.result as ManagementReceipt,
@@ -787,6 +904,8 @@ export function createBusiness(db: Database) {
                 updatedAt: new Date(),
               })
               .where(eq(schema.user.id, person!.id));
+        } else if (normalized.kind === 'capability.template.save') {
+          Object.assign(result, await saveTemplate(tx, normalized));
         } else if (normalized.kind === 'capability.approval') {
           const table = schema.capabilityApproval;
           const item = {
@@ -923,7 +1042,9 @@ export function createBusiness(db: Database) {
             after,
           });
         }
+        confirmTemplate();
         await finish(tx, receipt.value, result);
+        confirmTemplate();
         if (result.changed && result.targetId) {
           fence(result.targetId, result.projectId);
           fenced = true;

@@ -10,7 +10,10 @@ import {
   SessionFork,
   RepositorySyncInput,
   ManagementCommand,
+  capabilityKey,
   type CapabilityApprovalList,
+  type CapabilityTemplateManagement,
+  type CapabilityVersion,
   type PlatformAdministration,
   type ProjectAdministration,
   type ManagementResult,
@@ -490,6 +493,7 @@ export async function registerWorkbench(
       projectId?: string;
       epoch: number;
       platformOnly?: boolean;
+      memberOnly?: boolean;
     }
   >();
   function assertResponse(
@@ -543,6 +547,34 @@ export async function registerWorkbench(
         if (!current) fail(401, '账号或会话不可用');
         if (!current.platformAdmin)
           businessError(403, '无权读取平台能力白名单');
+      }
+      if (scope.memberOnly) {
+        const [current] = await db
+          .select({
+            expiresAt: schema.session.expiresAt,
+            membership: schema.projectMember.projectId,
+          })
+          .from(schema.session)
+          .innerJoin(schema.user, eq(schema.session.userId, schema.user.id))
+          .leftJoin(
+            schema.projectMember,
+            and(
+              eq(schema.projectMember.userId, schema.user.id),
+              eq(schema.projectMember.projectId, scope.projectId!),
+            ),
+          )
+          .where(
+            and(
+              eq(schema.session.id, scope.authSessionId),
+              eq(schema.user.id, scope.userId),
+              eq(schema.user.active, true),
+              eq(schema.session.authEpoch, schema.user.authEpoch),
+            ),
+          )
+          .limit(1);
+        if (!current || current.expiresAt <= new Date())
+          fail(401, '账号或会话不可用');
+        if (!current.membership) businessError(403, '无权读取当前项目模板');
       }
       assertResponse(scope);
     }
@@ -658,6 +690,89 @@ export async function registerWorkbench(
       };
     },
   );
+  async function projectTemplates(
+    projectId: string,
+  ): Promise<CapabilityTemplateManagement> {
+    return db.transaction(
+      async (tx) => {
+        const table = schema.capabilityTemplateRevision;
+        const rows = await tx
+          .selectDistinctOn([table.templateId], {
+            templateId: table.templateId,
+            revision: table.revision,
+            name: table.name,
+            description: table.description,
+            capabilities: table.capabilities,
+          })
+          .from(table)
+          .where(eq(table.projectId, projectId))
+          .orderBy(asc(table.templateId), desc(table.revision));
+        const approval = schema.capabilityApproval;
+        const options = await tx
+          .select({
+            kind: approval.kind,
+            reference: approval.reference,
+            revision: approval.revision,
+          })
+          .from(approval)
+          .where(eq(approval.approved, true))
+          .orderBy(
+            asc(approval.kind),
+            asc(approval.reference),
+            asc(approval.revision),
+          );
+        const approved = new Set(options.map(capabilityKey));
+        return {
+          options,
+          templates: rows.map((row) => ({
+            ...row,
+            capabilities: row.capabilities.map((item) => ({
+              ...item,
+              approved: approved.has(capabilityKey(item)),
+            })),
+          })),
+        };
+      },
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
+  }
+  app.get<{ Params: { projectId: string } }>(
+    '/api/management/projects/:projectId/capability-templates',
+    async (request, reply) => {
+      reply.header('cache-control', 'no-store');
+      const epoch = authorizationEpoch;
+      const who = await actor(request.headers);
+      if (!who.platformAdmin) businessError(403, '无权管理项目能力模板');
+      const { projectId } = request.params;
+      const [project] = await db
+        .select({ id: schema.project.id })
+        .from(schema.project)
+        .where(eq(schema.project.id, projectId));
+      if (!project) businessError(404, '项目不存在');
+      const data = await projectTemplates(projectId);
+      responseScopes.set(request, { ...who, epoch, platformOnly: true });
+      return data;
+    },
+  );
+  app.get<{ Params: { projectId: string } }>(
+    '/api/projects/:projectId/capability-templates',
+    async (request, reply) => {
+      reply.header('cache-control', 'no-store');
+      const epoch = authorizationEpoch;
+      const who = await actor(request.headers);
+      const { projectId } = request.params;
+      if (!(await projectRoles(who.userId, projectId)).length)
+        businessError(403, '无权读取当前项目模板');
+      const { templates } = await projectTemplates(projectId);
+      responseScopes.set(request, {
+        ...who,
+        epoch,
+        projectId,
+        memberOnly: true,
+      });
+      return { templates };
+    },
+  );
   app.get<{ Params: { projectId: string } }>(
     '/api/projects/:projectId/access',
     async (request): Promise<ProjectAdministration> => {
@@ -754,11 +869,28 @@ export async function registerWorkbench(
       'revision',
       'approved',
     ],
+    'capability.template.save': [
+      'projectId',
+      'templateId',
+      'expectedRevision',
+      'name',
+      'description',
+      'capabilities',
+    ],
   } as const;
   app.post<{ Body: ManagementCommand }>(
     '/api/management/commands',
     {
-      schema: { body: ManagementCommand },
+      schema: {
+        body: {
+          type: 'object',
+          required: ['kind'],
+          allOf: ManagementCommand.anyOf.map((command) => ({
+            if: { properties: { kind: command.properties.kind } },
+            then: command,
+          })),
+        },
+      },
       preValidation: async (request) => {
         const body = request.body;
         if (
@@ -781,9 +913,47 @@ export async function registerWorkbench(
             typeof body.approved !== 'boolean')
         )
           businessError(400, '审核登记参数不正确');
+        if (body.kind === 'capability.template.save') {
+          const {
+            projectId,
+            templateId,
+            expectedRevision,
+            name,
+            description,
+            capabilities,
+          } = body;
+          if (
+            typeof body.commandId !== 'string' ||
+            typeof projectId !== 'string' ||
+            (templateId === undefined) !== (expectedRevision === undefined) ||
+            (templateId !== undefined &&
+              (typeof templateId !== 'string' ||
+                !Number.isInteger(expectedRevision))) ||
+            typeof name !== 'string' ||
+            name.includes('\0') ||
+            typeof description !== 'string' ||
+            description.includes('\0') ||
+            !Array.isArray(capabilities) ||
+            capabilities.some(
+              (item: unknown) =>
+                !isRecord(item) ||
+                !onlyKeys(item, ['kind', 'reference', 'revision']) ||
+                typeof item.kind !== 'string' ||
+                typeof item.reference !== 'string' ||
+                typeof item.revision !== 'string',
+            )
+          )
+            businessError(400, '能力模板参数不正确');
+          if (
+            new Set((capabilities as CapabilityVersion[]).map(capabilityKey))
+              .size !== capabilities.length
+          )
+            businessError(400, '模板引用重复');
+        }
       },
     },
     async (request): Promise<ManagementResult> => {
+      const epoch = authorizationEpoch;
       const who = await actor(request.headers);
       const input = request.body;
       const project = 'projectId' in input ? input.projectId : undefined;
@@ -811,6 +981,7 @@ export async function registerWorkbench(
             if (!fences.has(key)) mine = true;
             fences.set(key, { userId, projectId, digest });
           },
+          () => assertResponse({ ...who, epoch }),
         );
         if ('unknown' in result) {
           retain = true;
@@ -845,6 +1016,7 @@ export async function registerWorkbench(
         return {
           changed: receipt.changed,
           replayed,
+          ...(receipt.template ? { template: receipt.template } : {}),
           revocation:
             replayed && receipt.changed && receipt.targetId
               ? 'previously-recorded'

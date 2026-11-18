@@ -85,6 +85,8 @@ pnpm test:web-live
 
 已有本地开发库通过 `pnpm db:migrate` 应用新增审核表，测试库使用 `RDWS_MODE=test pnpm db:migrate`。部署应用前先核验迁移和应用账号权限。代码回退保留审核表、原命令回执及新版迁移授权脚本，应用账号保持无审核表删除权限。回退前在支持白名单的版本核对待处理命令，必要时恢复该应用版本再核对。[工程方案与证据](docs/02-directory-and-engineering-design.html#t14-allowlist-plan-20261118)
 
+平台管理员在平台设置选择项目后可创建和修改能力模板。每次变更追加新版本，选项来自当前已审核且可用的精确版本。项目成员通过项目侧栏读取本项目模板，含停用引用的模板标为需修订。迁移 0007 增加模板版本表与查询索引，应用角色只读取、追加；回退继续保留新版迁移授权脚本和模板历史。[项目能力模板](docs/02-directory-and-engineering-design.html#t14-template-plan-20261118)
+
 ## 仓库与环境（T04）
 
 运行维护者先按[配置示例](config/repositories.example.json)在 `$RDWS_HOME/config/projects/<project-id>/repositories.json` 登记已授权的 GitLab HTTPS 仓库、完整基线分支和一个非生产目标分支。示例使用不可连接的占位地址。预置项目 ID 为 `poc`，支持每个项目独立登记。配置由运行账户管理，在下一次读取时生效。受管目录和文件应由运行账户所有，目录禁止组与其他用户写入，引用文件名不含目录。更换仓库地址或基线分支时使用新仓库 ID。

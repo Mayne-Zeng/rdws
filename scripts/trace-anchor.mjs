@@ -15,6 +15,7 @@ import {
   validateAnchorAccess,
 } from './trace-anchor-db.mjs';
 import { inspectJournalPrefix } from './trace-prefix.mjs';
+import { inspectJournalCutoff } from './trace-cutoff.mjs';
 
 const bucketName = /^(?:_no-cwd|--[a-zA-Z0-9._~-]{1,251}--)$/;
 const journalNamePattern =
@@ -22,7 +23,7 @@ const journalNamePattern =
 const exactAnchor = `select sha256, recorded_at from audit.session_log_anchor
   where project_id = $1 and session_id = $2 and bucket_sha256 = $3 and journal_name = $4 and through_byte = $5`;
 
-function coordinates(root, path, throughByte) {
+function coordinates(root, path) {
   if (
     !root ||
     !isAbsolute(root) ||
@@ -54,12 +55,13 @@ function coordinates(root, path, throughByte) {
     root,
     bucket,
     sessionId,
+    generation: Number(generation[1] ?? '0'),
+    compressed: journalName.endsWith('.zstd'),
     key: [
       project,
       sessionId,
       createHash('sha256').update(bucket).digest('hex'),
       journalName,
-      throughByte,
     ],
   };
 }
@@ -146,21 +148,22 @@ async function record(client, key, throughByte, sha256) {
 
 async function run() {
   const [action, path, cutoff, ...extra] = process.argv.slice(2);
+  const automatic = action === 'record-auto';
+  const writing = action !== 'verify';
   const throughByte = Number(cutoff);
   if (
-    !['record', 'verify'].includes(action) ||
+    !['record', 'record-auto', 'verify'].includes(action) ||
     !path ||
-    !/^[1-9][0-9]*$/.test(cutoff ?? '') ||
-    !Number.isSafeInteger(throughByte) ||
+    (automatic
+      ? cutoff !== undefined
+      : !/^[1-9][0-9]*$/.test(cutoff ?? '') ||
+        !Number.isSafeInteger(throughByte)) ||
     extra.length
   )
     return { status: 'invalid-input' };
-  const source = coordinates(
-    process.env.RDWS_ANCHOR_SOURCE_DIR,
-    path,
-    throughByte,
-  );
-  if (!source) return { status: 'invalid-source', throughByte };
+  const explicit = automatic ? {} : { throughByte };
+  const source = coordinates(process.env.RDWS_ANCHOR_SOURCE_DIR, path);
+  if (!source) return { status: 'invalid-source', ...explicit };
   const config = explicitDatabaseConnection(
     process.env.RDWS_ANCHOR_DATABASE_URL,
     'writer',
@@ -180,20 +183,19 @@ async function run() {
   client.on('error', () => {});
   try {
     await client.connect();
-    if (!(await validateAnchorAccess(client, action === 'record')))
+    if (!(await validateAnchorAccess(client, writing)))
       return { status: 'database-unauthorized' };
     const initial = await sourceStatus(source);
-    if (initial) return { status: initial, throughByte };
-    const row =
-      action === 'verify' ? await lookup(client, source.key) : undefined;
-    if (action === 'verify' && !row)
-      return { status: 'missing-anchor', throughByte };
-    const observation = await inspectJournalPrefix(
-      path,
-      throughByte,
-      row?.sha256,
-      { singleLink: true },
-    );
+    if (initial) return { status: initial, ...explicit };
+    const row = writing
+      ? undefined
+      : await lookup(client, [...source.key, throughByte]);
+    if (!writing && !row) return { status: 'missing-anchor', throughByte };
+    const observation = automatic
+      ? await inspectJournalCutoff(path, source)
+      : await inspectJournalPrefix(path, throughByte, row?.sha256, {
+          singleLink: true,
+        });
     if (
       !['hashed', 'matched', 'mismatch', 'truncated'].includes(
         observation.status,
@@ -201,10 +203,18 @@ async function run() {
     )
       return observation;
     const current = await sourceStatus(source);
-    if (current) return { status: current, throughByte };
-    return observation.status === 'hashed'
-      ? await record(client, source.key, throughByte, observation.sha256)
-      : observation;
+    if (current)
+      return { status: current, throughByte: observation.throughByte };
+    if (observation.status !== 'hashed') return observation;
+    const result = await record(
+      client,
+      [...source.key, observation.throughByte],
+      observation.throughByte,
+      observation.sha256,
+    );
+    return automatic
+      ? { ...result, ignoredTailBytes: observation.ignoredTailBytes }
+      : result;
   } catch (error) {
     return {
       status: ['42501', '42P01', '3F000', '42883'].includes(error.code)

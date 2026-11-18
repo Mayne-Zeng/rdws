@@ -10,6 +10,7 @@ import {
   readFile,
   readdir,
   realpath,
+  rename,
   rm,
   truncate,
   writeFile,
@@ -19,6 +20,7 @@ import { basename, dirname, join, resolve, sep } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { zstdDecompressSync } from 'node:zlib';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
@@ -63,6 +65,22 @@ test('anchor CLI rejects malformed coordinates without exposing input or using a
       RDWS_ANCHOR_SOURCE_DIR: '',
     }),
   ).toEqual({ status: 'invalid-input' });
+});
+
+test('automatic recording accepts the source coordinates without a numeric cutoff', async () => {
+  const source = '/fictional-project/project-proof/sessions';
+  const file = source + '/--work--/session-example/session.v4.jsonl.zstd';
+  expect(
+    await command(
+      2,
+      ['pnpm', '--silent', 'trace:anchor', 'record-auto', file],
+      {
+        ...process.env,
+        RDWS_ANCHOR_DATABASE_URL: '',
+        RDWS_ANCHOR_SOURCE_DIR: source,
+      },
+    ),
+  ).toEqual({ status: 'database-unconfigured' });
 });
 
 const postgresImage =
@@ -118,6 +136,10 @@ async function createJournal(root: string, demandId: string) {
               create: ['standard'],
               resume: [],
               unknownPreset: 'unused-fixture-preset',
+              selection: {
+                provider: 'rdws-glm',
+                model: 'unused-local-fixture',
+              },
             },
           },
         ],
@@ -164,6 +186,24 @@ async function createJournal(root: string, demandId: string) {
   expect(logs).toHaveLength(1);
   const bytes = await readFile(join(nativeRoot, logs[0]!));
   expect(bytes.readUInt32LE(0)).toBe(0xfd2fb528);
+  const first = zstdDecompressSync(bytes, { info: true }) as unknown as {
+    engine: { bytesWritten: number };
+  };
+  expect(first.engine.bytesWritten).toBeGreaterThan(0);
+  expect(first.engine.bytesWritten).toBeLessThan(bytes.length);
+  const eventText = zstdDecompressSync(
+    bytes.subarray(first.engine.bytesWritten),
+  ).toString();
+  expect(
+    eventText
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line)),
+  ).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ type: 'model/selection' }),
+    ]),
+  );
   return { sessionId, entry: logs[0]!, bytes, nativeRoot };
 }
 
@@ -466,22 +506,47 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
     const cutoff = real.bytes.length;
     const visibleRoot = '/proof/project-' + sourceProject + '/sessions';
     const visibleFile = visibleRoot + '/' + real.entry;
-    async function runVerifier(action: string) {
+    const wireStub = join(fixture, 'lose-commit-result.mjs');
+    const pgPath = pathToFileURL(
+      createRequire(import.meta.url).resolve('pg'),
+    ).href;
+    const loseReply = `
+      const original = pg.Client.prototype.query;
+      pg.Client.prototype.query = function (...args) {
+        const result = original.apply(this, args);
+        if (args[0] !== 'commit') return result;
+        return result.then(() => {
+          this.connection.stream.destroy();
+          throw new Error('fixture dropped the confirmed response');
+        });
+      };`;
+    await writeFile(
+      wireStub,
+      `import pg from ${JSON.stringify(pgPath)};` + loseReply,
+      { mode: 0o600 },
+    );
+    async function runVerifier(action: string, drop = false) {
       if (process.env.RDWS_TEST_ANCHOR_READONLY !== '1') {
         const address = (
           await docker('port', container, '5432/tcp')
         ).stdout.trim();
         expect(address).toMatch(/^127\.0\.0\.1:[1-9][0-9]*$/);
+        const args = [
+          action,
+          journalFile,
+          ...(action === 'record-auto' ? [] : [String(cutoff)]),
+        ];
         return command(
-          0,
-          [
-            'pnpm',
-            '--silent',
-            'trace:anchor',
-            action,
-            journalFile,
-            String(cutoff),
-          ],
+          drop ? 2 : 0,
+          drop
+            ? [
+                process.execPath,
+                '--import',
+                wireStub,
+                'scripts/trace-anchor.mjs',
+                ...args,
+              ]
+            : ['pnpm', '--silent', 'trace:anchor', ...args],
           {
             ...process.env,
             RDWS_ANCHOR_DATABASE_URL: dsn(
@@ -496,14 +561,16 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
       }
       const code = `import { readFile, appendFile } from 'node:fs/promises';
         import assert from 'node:assert/strict';
-        const [, mode, path, cutoff] = process.argv;
+        import pg from '/work/node_modules/pg/lib/index.js';
+        const [, mode, path, cutoff, drop] = process.argv;
         assert.equal(process.getuid(), 65534);
         assert.equal((await readFile(path)).length >= Number(cutoff), true);
         await assert.rejects(appendFile(path, 'forbidden'), { code: 'EROFS' });
-        process.argv = ['node','/work/scripts/trace-anchor.mjs',mode,path,cutoff];
+        if (drop === 'drop') { ${loseReply} }
+        process.argv = ['node','/work/scripts/trace-anchor.mjs',mode,path,...(mode === 'record-auto' ? [] : [cutoff])];
         await import('/work/scripts/trace-anchor.mjs');`;
       return command(
-        0,
+        drop ? 2 : 0,
         [
           'docker',
           'run',
@@ -540,6 +607,7 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
           action,
           visibleFile,
           String(cutoff),
+          drop ? 'drop' : 'normal',
         ],
         {
           ...process.env,
@@ -553,12 +621,18 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
         },
       );
     }
-    const recorded = await runVerifier('record');
+    expect(await runVerifier('record-auto', true)).toEqual({
+      status: 'unconfirmed',
+      throughByte: cutoff,
+      ignoredTailBytes: 0,
+    });
+    const recorded = await runVerifier('record-auto');
     expect(recorded).toMatchObject({
-      status: 'recorded',
+      status: 'replayed',
       throughByte: cutoff,
       sha256: sha(real.bytes),
       recordedAt: expect.any(String),
+      ignoredTailBytes: 0,
     });
     const [bucket] = real.entry.split(sep);
     const independent = (
@@ -594,16 +668,53 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
     ) =>
       command(
         code,
-        ['pnpm', '--silent', 'trace:anchor', action, path, String(bytes)],
+        [
+          'pnpm',
+          '--silent',
+          'trace:anchor',
+          action,
+          path,
+          ...(action === 'record-auto' ? [] : [String(bytes)]),
+        ],
         {
           ...environment,
           ...overrides,
         },
       );
-    expect(await host('record')).toMatchObject({
-      ...(recorded as object),
+    expect(await host('record')).toEqual({
       status: 'replayed',
+      throughByte: cutoff,
+      sha256: sha(real.bytes),
+      recordedAt: independent[0].recorded_at.toISOString(),
     });
+    const wrongBucket = join(snapshotRoot, '--unrelated-workspace--');
+    await rename(join(snapshotRoot, bucket!), wrongBucket);
+    expect(
+      await host(
+        'record-auto',
+        2,
+        cutoff,
+        join(wrongBucket, real.sessionId, basename(journalFile)),
+      ),
+    ).toEqual({ status: 'invalid-journal' });
+    await rename(wrongBucket, join(snapshotRoot, bucket!));
+    await chmod(journalFile, 0o644);
+    await appendFile(journalFile, Buffer.from([0x28, 0xb5, 0x2f]));
+    expect(await host('record-auto')).toMatchObject({
+      status: 'replayed',
+      throughByte: cutoff,
+      ignoredTailBytes: 3,
+    });
+    await appendFile(journalFile, Buffer.from([0]));
+    expect(await host('record-auto', 2)).toEqual({ status: 'invalid-journal' });
+    await writeFile(journalFile, real.bytes);
+    expect(
+      (
+        await owner.query(
+          'select count(*)::integer as count from audit.session_log_anchor',
+        )
+      ).rows[0],
+    ).toEqual({ count: 1 });
     expect(
       await host('verify', 0, cutoff, journalFile, {
         PGUSER: bootstrapRole,
@@ -761,24 +872,6 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
     await writeFile(journalFile, real.bytes);
 
     const ignoredResponseKey = cutoff - 2;
-    const wireStub = join(fixture, 'lose-commit-result.mjs');
-    const pgPath = pathToFileURL(
-      createRequire(import.meta.url).resolve('pg'),
-    ).href;
-    await writeFile(
-      wireStub,
-      `import pg from ${JSON.stringify(pgPath)};
-      const original = pg.Client.prototype.query;
-      pg.Client.prototype.query = function (...args) {
-        const result = original.apply(this, args);
-        if (args[0] !== 'commit') return result;
-        return result.then(() => {
-          this.connection.stream.destroy();
-          throw new Error('fixture dropped the confirmed response');
-        });
-      };`,
-      { mode: 0o600 },
-    );
     expect(
       await command(
         2,

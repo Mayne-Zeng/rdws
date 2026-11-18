@@ -84,7 +84,7 @@ async function registerLive(ctx, fixture, live, before, signal) {
   };
 }
 
-async function observe(ctx, { cwd, create, resume, unknownPreset }) {
+async function observe(ctx, { cwd, create, resume, unknownPreset, selection }) {
   const workspace = await ctx.workspaceRegistry.create(cwd, 'Preset fixture');
   const created = [];
   for (const agentPreset of create)
@@ -106,6 +106,7 @@ async function observe(ctx, { cwd, create, resume, unknownPreset }) {
       continue;
     }
     const { agent } = result;
+    if (selection) agent.model.select(selection);
     const compositions = ctx.agentPresets.inspectCompositions(agent.ctx);
     if (!(await ctx.sessions.flush(agent.session)))
       throw new Error('Fixture did not receive a durable session checkpoint');

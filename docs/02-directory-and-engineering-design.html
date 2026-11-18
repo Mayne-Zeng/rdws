@@ -429,7 +429,7 @@
     <tr data-interface="provider-reference"><td>模型／供应商引用</td><td><a href="05-development-backlog.md#主计划任务">T13</a></td><td>DSH 原生 Provider/Settings/Credentials 与会话选模；业务层管理授权引用。</td><td>不新增第二套参数权威，平台锁定项不被下级覆盖，密钥只写。</td></tr>
     <tr data-interface="preset-capability"><td>需求 preset／能力白名单</td><td><a href="05-development-backlog.md#主计划任务">T14</a></td><td>平台白名单、精确模板版本、封闭发布目录与 Native 定义。</td><td>新建使用当前绑定，派生及恢复保留原生版本，产品执行工具仍受 T07 准入约束。</td></tr>
     <tr data-interface="usage-quota"><td>用量／配额接口</td><td><a href="05-development-backlog.md#主计划任务">T15</a></td><td>原生用量事实与授权查询，配额规则先确认；统计限定当前会话。</td><td>计量 schema 尚未定，不从流帧数伪造 token、费用或超限决策。</td></tr>
-    <tr data-interface="journal-anchor"><td>原始前缀／独立锚点</td><td><a href="05-development-backlog.md#主计划任务">T16</a></td><td>只读原生日志验证者＋PG 只追加锚点；T17 消费索引。</td><td>独立 CLI 记录原始物理字节截止及摘要，逻辑回放仍走原生读侧。可信截止自动提供待验。</td></tr>
+    <tr data-interface="journal-anchor"><td>原始前缀／独立锚点</td><td><a href="05-development-backlog.md#主计划任务">T16</a></td><td>只读原生日志验证者＋PG 只追加锚点；T17 消费索引。</td><td>独立 CLI 记录原始物理字节截止及摘要，逻辑回放仍走原生读侧。可信快照上的自动确定见<a href="#t16-automatic-cutoff-delivery-20261119">自动截止验收</a>。</td></tr>
     <tr data-interface="audit-events"><td>审计查询／事件</td><td><a href="05-development-backlog.md#主计划任务">T17</a></td><td>业务、权限、执行和交付事件索引；消费相关主责提交的证据。</td><td>当前 requirement_event 仅业务历史子集，不冒称完整 AuditEvent。</td></tr>
     <tr data-interface="runtime-maintenance"><td>维护／修复／归档</td><td><a href="05-development-backlog.md#主计划任务">T18</a></td><td>原生实例／工作树修复与备份／导出／清理，由 orchestrator 受控执行。</td><td>不自动删除数据；保留策略与破坏性动作另行明确。</td></tr>
   </table>
@@ -828,6 +828,22 @@
   <p>覆盖真实锁等待与映射双序、回滚后重新追加、两个命令并发返回同一原时间、提交回包丢失与悬空时限、只读取已提交记录、既有身份外键保留、已存在追加、同长改写、稳定截短、硬链接、重复桶、精确代际及路径消隐。CLI 的连接参数显式绑定，不回退 PG 环境或凭据。此轮未向共享开发库、共享测试库或生产应用迁移。可信截止自动提供及正式只读部署仍待验收。</p>
   <p>方案正确性和安全两面复审均为 APPROVE。独立交付复审 APPROVE。交付修订确认显式迁移连接、正端口检查、仅初次授权和客户端等待期限。<code>RDWS_TEST_ANCHOR_READONLY=1 caffeinate -i pnpm test tests/integration/trace-anchor.test.ts tests/integration/trace-prefix.test.ts tests/integration/migration-permissions.test.ts</code> 通过（3 文件、12 项）；最后固定迁移搜索路径后按同参数复验锚点文件（2 项通过）。</p>
   <p><code>caffeinate -i pnpm check</code> 返回 0（27 文件、168 项，类型、lint、格式及构建通过），构建仍有主包体积提示。<code>caffeinate -i pnpm test:e2e</code> 返回 0（32 项，约 1 分钟），<code>pnpm validate:baseline</code> 返回 0（29 任务、62 个追溯点、16 视图）。本地修订以 <code>feat: add append-only session log anchors</code> 为准。</p>
+
+  <h4 id="t16-automatic-cutoff-plan-20261119">11.18.6 自动确定可信快照的物理截止</h4>
+  <p>Change / R3，非批量，基线 <code>75cbc9a</code>。依据 D7、T16 和已批准的可信来源交付单条路径“受信快照 → 自动确定最后完整物理边界 → 独立记录”。来源仍由独立运维方从停稳且确认刷盘的原件或相应不可变快照提供。读取方不停止、启动、激活或修改 Native，不签发实时运行证明。浏览器、生产账号、数据库结构、归档清理均不改动。方案双面独立评审，交付另有独立复核。</p>
+  <ol>
+    <li>新增 <code>pnpm --silent trace:anchor record-auto &lt;absolute-journal&gt;</code>。命名动作明确使用批准的稳态来源，沿用 <code>RDWS_ANCHOR_SOURCE_DIR</code>、独立数据库登录、真实项目和会话关联、原生工作目录桶 SHA-256、唯一归属检查和安全路径。只在记录时自动选边界。核对与重试沿用原件、文件代际和应答里的 <code>throughByte</code>。保留原不可变快照供核对。失败或结果不明后使用同一快照重跑可得到同一键，有 throughByte 时用旧命令按原键核对，不换入之后的快照。</li>
+    <li>自动读取从同一个规范普通文件只读描述符取得字节长度，复用前后 inode、大小、链接数、mtime／ctime 和路径复核。完整 JSONL 记录需以 LF 结束、UTF-8 合法且为对象。编码、结构和单行资源边界适用于已出现 LF 的完整记录，尾行超出缓存时只保留超限标记直到确认是否有 LF。文件首行的 Native <code>type=session</code>、会话 ID、代际及编码后的 Native 工作目录桶与物理坐标一致。普通记录需有类型，拒绝第二头记录。仅确定物理记录边界，不解释消息、事件含义或补齐逻辑序号。纯 JSONL 的最后不完整行排除，之前完整行的语法错误拒绝。本轮覆盖 Native 0–4 代，未知自动格式拒绝，手动核对继续兼容既有字节路径。</li>
+    <li>Zstandard 逐帧解析 RFC 8878 的标准魔数、可变帧头、压缩／原始／RLE 块和可选校验和，拒绝字典、跳过帧和非法结构。将每个已定位的完整帧交给 Node 24 的解压器验证全部消耗、完整 JSONL 和校验和。Native 首帧只能含头记录，后续帧只能含完整事件记录。当前 Node 实测单次解压只消费首帧，因此不得使用全文件单次解压作为末尾判定。快照在最后一帧合法结构中结束时，忽略该不完整帧及其中可能已经解码的记录。依据初始文件长度区别记录内 EOF 与实际短读。尾部 1–3 字节须匹配标准魔数前缀，任何已可观察的非法结构均先拒绝，包括小于完整头的异常魔数、保留类型和超出窗口或 128 KiB 的块。完整帧损坏或尾随非帧字节则拒绝。已确认的标准帧短尾也用截断模式验证已到达的压缩结构，丢弃解出的内容。使用区间读和流式解码，单条完整 JSON 记录限制 64 MiB。按帧头限制原生解码窗口 128 MiB，解压器同设上限。扫描和摘要共享 5 分钟单调处理期限，热循环检查期限，解压可中止，磁盘调用返回后重新检查。超限不写锚点。<a href="https://www.rfc-editor.org/rfc/rfc8878.html#section-3.1.1">RFC 8878</a>、<a href="https://nodejs.org/download/release/v24.14.0/docs/api/zlib.html#zlibcreatezstddecompressoptions">Node.js Zstandard API</a>。</li>
+    <li>确定最后完整物理字节后，在同一文件句柄计算原始前缀 SHA-256，重新核对来源与文件状态后才走原来同步提交、原键冲突和不可辨认结果处理。输出仅为已有稳定摘要与时间、字节截止及已忽略尾部的字节数，省略路径和内容。无完整头返回 cutoff-unavailable，损坏或未知格式返回 invalid-journal，超过处理预算返回 cutoff-limit，读取和状态变化沿用 source-unavailable／source-changed。均退出 2 且不创建锚点。自动动作运行时保留现有可信快照的运维边界，不能把仅对校验账号只读的活体挂载当作停稳快照。手动记录与核对的接口和结果保持。</li>
+    <li>先在公开入口证伪缺少自动模式。使用 Node 编码器的独立已知物理边界覆盖 V0/V4、含多字节 JSONL、多帧／多块、帧校验和、规范截断和同位置非法块／尾部杂质、短读或并发改写、无头、错桶、非法 UTF-8、符号／硬链接和资源上限。真实 Native 持久化头和至少一条完全刷盘的事件帧，停稳后用同一日志贯通独立 Linux 非 root 只读挂载、自动记录、独立 PostgreSQL 字节截止及摘要对照、丢提交应答后的同键恢复、坏输入不新增及保留数据目录重启，原件字节不得改变。新增自动截点无需迁移。回退可继续使用原命令和已经记录的数值，锚点键和持久记录可由旧程序核对。</li>
+  </ol>
+
+  <h4 id="t16-automatic-cutoff-delivery-20261119">11.18.7 自动物理截止交付证据</h4>
+  <p><code>trace:anchor record-auto</code> 按停稳原件或可信不可变快照确定 SHA-256 的最后完整物理边界，无需手填字节数。V0 JSONL 的原始多字节与截断尾行，以及 Zstandard 多帧、多块、校验和和尾帧完整坏块均由独立构造的样本对照。非法头、错目录桶、链接、短读、读取中变动和后置状态检查超时均不可写入。手动命令的字段和原锚点键兼容。</p>
+  <p>隔离真实 Native 实际刷盘了 <code>model/selection</code> 事件，独立经 Node 单帧解码确认存在头及后续事件帧，停稳后以 Linux 非 root 只读挂载运行自动命令。提交后断开，回执带原截止，随后同一快照自动重放。独立 PostgreSQL 连接确认原字节长度、摘要及旧手动命令同键历史。错桶和杂质拒绝且没有额外锚点，合法魔数撕裂返回原键及忽略字节数。保留卷重启后用原来的手动校验命令匹配。正式部署未操作。</p>
+  <p>方案正确性、安全两面复审及独立交付复审均为 APPROVE。复审修订覆盖已到达但尚无帧尾的损坏压缩块，并把最后一次期限检查放到数据与身份复核之后。<code>RDWS_TEST_ANCHOR_READONLY=1 caffeinate -i pnpm test tests/integration/trace-anchor.test.ts tests/integration/trace-cutoff.test.ts tests/integration/trace-prefix.test.ts tests/integration/native-preset-composition.test.ts</code> 退出 0（4 文件、22 项）。</p>
+  <p><code>caffeinate -i pnpm check</code> 返回 0（28 文件、178 项，类型、lint、格式及构建通过），构建仍有主包体积提示。<code>caffeinate -i pnpm test:e2e</code> 返回 0（32 项，约 1 分钟），<code>pnpm validate:baseline</code> 返回 0（29 任务、62 个追溯点、16 视图）。无新增迁移。本地修订以 <code>feat: derive session anchor cutoffs from trusted journals</code> 为准。</p>
 
   <h3 id="t05-worktree-plan-20261118">11.19 T05 需求工作树</h3>
   <p>Change / R3，非批量，基线 <code>e14963e</code>。按 T05、D22、D23、I3-WRITE、I6-COMMAND 和 T04 已验镜像交付“需求创建冻结基线 → 平台准备需求内私有 bare 与工作树 → 在需求根注册 Native workspace”。保留 §3 方案 C 的布局、分支和归属，改用受控本地 Git 传输将冻结 SHA 的可达对象复制到私有仓，避免共享 inode 在随后写阶段影响 sources。真实 T04 镜像的离线验证已证明文件指纹原样、共享对象 inode 为 0、Git 移动及修复可用。当前继续零执行工具。只在隔离测试库执行迁移。</p>

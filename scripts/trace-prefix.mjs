@@ -49,6 +49,47 @@ async function hashBytes(file, throughByte) {
   return digest.digest('hex');
 }
 
+export async function inspectStableJournal(
+  path,
+  { singleLink, throughByte },
+  inspect,
+) {
+  const failure = (status) =>
+    throughByte === undefined ? { status } : { status, throughByte };
+  try {
+    const initial = await journalAt(path);
+    if (!initial)
+      return failure(
+        initial === null ? 'invalid-source' : 'source-unavailable',
+      );
+    if (singleLink && initial.nlink !== 1n) return failure('invalid-source');
+    const file = await open(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    ).catch((error) => {
+      if (pathUnavailable(error)) return undefined;
+      throw error;
+    });
+    if (!file) return failure('source-changed');
+    try {
+      const before = await file.stat({ bigint: true });
+      if (!sameVersion(initial, before)) return failure('source-changed');
+      const result = await inspect(file, before.size).catch(() =>
+        failure('source-unavailable'),
+      );
+      const after = await file.stat({ bigint: true });
+      const current = await journalAt(path);
+      if (!sameVersion(initial, after) || !sameVersion(initial, current))
+        return failure('source-changed');
+      return result;
+    } finally {
+      await file.close();
+    }
+  } catch {
+    return failure('source-unavailable');
+  }
+}
+
 /** @param {string} path @param {number} throughByte @param {string} [expected] */
 export async function inspectJournalPrefix(
   path,
@@ -66,38 +107,16 @@ export async function inspectJournalPrefix(
     (expected !== undefined && !/^[0-9a-f]{64}$/i.test(expected))
   )
     return { status: 'invalid-input' };
-  try {
-    const initial = await journalAt(path);
-    if (!initial)
-      return {
-        status: initial === null ? 'invalid-source' : 'source-unavailable',
-        throughByte,
-      };
-    if (singleLink && initial.nlink !== 1n)
-      return { status: 'invalid-source', throughByte };
-    const file = await open(
-      path,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    ).catch((error) => {
-      if (pathUnavailable(error)) return undefined;
-      throw error;
-    });
-    if (!file) return { status: 'source-changed', throughByte };
-    try {
-      const before = await file.stat({ bigint: true });
-      if (!sameVersion(initial, before))
-        return { status: 'source-changed', throughByte };
-      const short = before.size < BigInt(throughByte);
-      const sha256 = short ? undefined : await hashBytes(file, throughByte);
-      const after = await file.stat({ bigint: true });
-      const current = await journalAt(path);
-      if (!sameVersion(initial, after) || !sameVersion(initial, current))
-        return { status: 'source-changed', throughByte };
-      if (short)
+  return inspectStableJournal(
+    path,
+    { singleLink, throughByte },
+    async (file, size) => {
+      if (size < BigInt(throughByte))
         return {
           status: expected === undefined ? 'cutoff-unavailable' : 'truncated',
           throughByte,
         };
+      const sha256 = await hashBytes(file, throughByte);
       if (!sha256) return { status: 'source-unavailable', throughByte };
       if (expected === undefined)
         return { status: 'hashed', throughByte, sha256 };
@@ -105,12 +124,8 @@ export async function inspectJournalPrefix(
         status: sha256 === expected.toLowerCase() ? 'matched' : 'mismatch',
         throughByte,
       };
-    } finally {
-      await file.close();
-    }
-  } catch {
-    return { status: 'source-unavailable', throughByte };
-  }
+    },
+  );
 }
 
 if (

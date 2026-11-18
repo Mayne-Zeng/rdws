@@ -10,26 +10,41 @@ import {
 import { Icon, api, roleLabels } from '../lib/ui.tsx';
 import { RequirementForm } from './requirement-form.tsx';
 import { RequirementPage } from './requirement.tsx';
+import { MembersPage } from './administration.tsx';
 import { RepositoriesPage } from './repositories.tsx';
 export type View =
-  'requirements' | 'overview' | 'chat' | 'context' | 'create' | 'repos';
+  | 'requirements'
+  | 'overview'
+  | 'chat'
+  | 'context'
+  | 'create'
+  | 'repos'
+  | 'members'
+  | 'platform';
 export type Project = ProjectList['projects'][number];
 export function ProjectWorkspace({
   projects,
+  userId,
+  platformAdmin,
   username,
   logout,
   logoutBusy,
   error,
 }: {
   projects: Project[];
+  userId: string;
+  platformAdmin: boolean;
   username: string;
   logout: () => void;
   logoutBusy: boolean;
   error: string;
 }) {
   const [search, setSearch] = useSearchParams();
+  const requestedProject = search.get('project');
   const project =
-    projects.find((p) => p.id === search.get('project')) ?? projects[0]!;
+    projects.find((p) => p.id === requestedProject) ?? projects[0]!;
+  const projectMatches =
+    requestedProject === null || requestedProject === project.id;
   const selected = search.get('requirement') ?? '';
   const current = search.get('view');
   const view: View = [
@@ -38,6 +53,7 @@ export function ProjectWorkspace({
     'context',
     'create',
     'repos',
+    'members',
   ].includes(current ?? '')
     ? (current as View)
     : 'requirements';
@@ -106,6 +122,7 @@ export function ProjectWorkspace({
         { signal },
       ),
     refetchInterval: 2000,
+    enabled: projectMatches,
   });
   function navigate(next: View, id = selected) {
     if (protectedForm) return;
@@ -123,13 +140,25 @@ export function ProjectWorkspace({
     requirements.data?.requirements.filter((r) =>
       r.title.toLocaleLowerCase().includes(filter.toLocaleLowerCase()),
     ) ?? [];
-  const showTabs = !!selected && view !== 'create' && view !== 'repos';
+  const demandView =
+    !!selected && view !== 'create' && view !== 'repos' && view !== 'members';
+  const showTabs = demandView && projectMatches && !!summary;
   const activeView = view === 'requirements' ? 'overview' : view;
   const tabs = [
     { view: 'chat', label: '对话', icon: 'chat' },
     { view: 'overview', label: '需求档案', icon: 'grid' },
     { view: 'context', label: '上下文', icon: 'layers' },
   ] as const;
+  if (!projectMatches)
+    return (
+      <main className="shell centered">
+        <h1>无法访问指定项目</h1>
+        <p className="muted">请核对项目链接或切换到有权访问的项目。</p>
+        <Button tag="button" onClick={() => navigate('requirements', '')}>
+          返回可访问项目
+        </Button>
+      </main>
+    );
   return (
     <main className={'shell workspace-shell' + (mobile ? ' rail-open' : '')}>
       <aside
@@ -198,6 +227,28 @@ export function ProjectWorkspace({
             <Icon name="folder" />
             <span>仓库与环境</span>
           </button>
+          {project.roles.includes('project_admin') && (
+            <button
+              aria-label="成员与权限"
+              disabled={protectedForm}
+              className={'nav-item' + (view === 'members' ? ' active' : '')}
+              onClick={() => navigate('members', '')}
+            >
+              <Icon name="layers" />
+              <span>成员与权限</span>
+            </button>
+          )}
+          {platformAdmin && (
+            <button
+              aria-label="平台设置"
+              disabled={protectedForm}
+              className="nav-item"
+              onClick={() => navigate('platform', '')}
+            >
+              <Icon name="grid" />
+              <span>平台设置</span>
+            </button>
+          )}
         </nav>
         <div className="project-card">
           <Icon name="folder" />
@@ -335,11 +386,13 @@ export function ProjectWorkspace({
               </span>
             </div>
             <div className="top-title">
-              {view === 'repos'
-                ? '仓库与环境'
-                : view === 'create'
-                  ? '新建需求'
-                  : (summary?.title ?? '需求管理')}
+              {view === 'members'
+                ? '成员与权限'
+                : view === 'repos'
+                  ? '仓库与环境'
+                  : view === 'create'
+                    ? '新建需求'
+                    : (summary?.title ?? '需求管理')}
             </div>
           </div>
           <span className="pill local-badge">
@@ -418,7 +471,13 @@ export function ProjectWorkspace({
                 </Button>
               </div>
             )}
-            {view === 'repos' ? (
+            {view === 'members' ? (
+              <MembersPage
+                key={project.id + userId}
+                projectId={project.id}
+                userId={userId}
+              />
+            ) : view === 'repos' ? (
               <RepositoriesPage key={project.id} projectId={project.id} />
             ) : view === 'create' ? (
               <RequirementForm
@@ -439,13 +498,30 @@ export function ProjectWorkspace({
                   setMobile(false);
                 }}
               />
-            ) : selected ? (
-              <RequirementPage
-                key={selected}
-                id={selected}
-                view={view}
-                onView={navigate}
-              />
+            ) : demandView ? (
+              showTabs ? (
+                <RequirementPage
+                  key={selected}
+                  id={selected}
+                  view={view}
+                  onView={navigate}
+                />
+              ) : requirements.isPending ? (
+                <Loading text="正在核对需求归属" />
+              ) : (
+                <div className="inline-feedback">
+                  <Alert
+                    theme="warning"
+                    message="无法在当前项目打开此需求，请核对项目与需求权限。"
+                  />
+                  <Button
+                    tag="button"
+                    onClick={() => navigate('requirements', '')}
+                  >
+                    返回需求列表
+                  </Button>
+                </div>
+              )
             ) : (
               <>
                 <div className="page-heading">

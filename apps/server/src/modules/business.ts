@@ -4,6 +4,7 @@ import { schema, type connectDatabase } from '@rdws/db';
 import type {
   RequirementInput,
   BusinessCommand,
+  ManagementCommand,
   TaskInput,
 } from '@rdws/contracts';
 type Database = ReturnType<typeof connectDatabase>['db'];
@@ -30,6 +31,16 @@ function canonical(value: unknown): string {
 }
 export const digestOf = (value: unknown) =>
   createHash('sha256').update(canonical(value)).digest('hex');
+export function normalizeManagement(input: ManagementCommand) {
+  return {
+    ...input,
+    ...('username' in input ? { username: input.username.toLowerCase() } : {}),
+    ...('name' in input ? { name: input.name.trim() } : {}),
+    ...(input.kind === 'project.roles'
+      ? { roles: [...input.roles].sort() }
+      : {}),
+  } as ManagementCommand;
+}
 export function createBusiness(db: Database) {
   async function transaction<T>(
     work: (tx: Transaction) => Promise<T>,
@@ -66,8 +77,8 @@ export function createBusiness(db: Database) {
           gt(schema.session.expiresAt, new Date()),
         ),
       );
-    if (!(await (lock ? sessions.for('share') : sessions)).length)
-      businessError(401, '登录已失效，请重新登录');
+    const [session] = await (lock ? sessions.for('share') : sessions);
+    if (!session) businessError(401, '登录已失效，请重新登录');
     const ids = [...new Set([who.userId, ...targets])].sort();
     const query = tx
       .select()
@@ -75,7 +86,8 @@ export function createBusiness(db: Database) {
       .where(inArray(schema.user.id, ids))
       .orderBy(asc(schema.user.id));
     const users = await (lock ? query.for('share') : query);
-    if (!users.find((u) => u.id === who.userId)?.active)
+    const actor = users.find((u) => u.id === who.userId);
+    if (!actor?.active || actor.authEpoch !== session.authEpoch)
       businessError(401, '账号已停用');
     if (users.length !== ids.length || users.some((u) => !u.active))
       businessError(400, '分派成员不存在或已停用');
@@ -124,7 +136,10 @@ export function createBusiness(db: Database) {
       );
     if (
       !roles.length ||
-      (!participants.some((p) => p.userId === who.userId) &&
+      (!participants.some(
+        (p) =>
+          p.userId === who.userId && roles.some((role) => role.role === p.role),
+      ) &&
         !roles.some((p) => p.role === 'project_admin'))
     )
       businessError(403, '无权访问当前需求');
@@ -647,6 +662,265 @@ export function createBusiness(db: Database) {
       return work(tx, state.item);
     });
   }
+  type ManagementReceipt = {
+    changed: boolean;
+    targetId?: string;
+    projectId?: string;
+    before: unknown;
+    after: unknown;
+  };
+  async function manage(
+    who: Actor,
+    input: ManagementCommand,
+    fence: (userId: string, projectId?: string) => void,
+  ) {
+    const normalized = normalizeManagement(input);
+    const projectId =
+      'projectId' in normalized ? normalized.projectId : undefined;
+    const key = projectId ? 'project:' + projectId : 'platform';
+    let fenced = false;
+    try {
+      return await db.transaction(async (tx) => {
+        await tx.execute(sql`set local lock_timeout='3s'`);
+        const [session] = await tx
+          .select()
+          .from(schema.session)
+          .where(
+            and(
+              eq(schema.session.id, who.authSessionId),
+              eq(schema.session.userId, who.userId),
+            ),
+          )
+          .for('share');
+        if (!session) businessError(401, '登录已失效');
+        const [target] =
+          'username' in normalized
+            ? await tx
+                .select({ id: schema.user.id })
+                .from(schema.user)
+                .where(eq(schema.user.username, normalized.username))
+            : [];
+        const users = await tx
+          .select()
+          .from(schema.user)
+          .where(
+            inArray(schema.user.id, [
+              ...new Set([who.userId, ...(target ? [target.id] : [])]),
+            ]),
+          )
+          .orderBy(asc(schema.user.id))
+          .for('update');
+        const actor = users.find((row) => row.id === who.userId);
+        if (
+          !actor?.active ||
+          actor.authEpoch !== session.authEpoch ||
+          session.expiresAt <= new Date()
+        )
+          businessError(401, '登录已失效');
+        if (normalized.kind !== 'project.roles' && !actor.platformAdmin)
+          businessError(403, '无权管理平台设置');
+        const members = projectId
+          ? await tx
+              .select()
+              .from(schema.projectMember)
+              .where(
+                and(
+                  eq(schema.projectMember.projectId, projectId),
+                  inArray(
+                    schema.projectMember.userId,
+                    users.map((row) => row.id),
+                  ),
+                ),
+              )
+              .orderBy(
+                asc(schema.projectMember.userId),
+                asc(schema.projectMember.role),
+              )
+              .for('update')
+          : [];
+        if (
+          normalized.kind === 'project.roles' &&
+          !members.some(
+            (row) => row.userId === who.userId && row.role === 'project_admin',
+          )
+        )
+          businessError(403, '无权管理当前项目成员');
+        const receipt = await reserve(
+          tx,
+          who,
+          key,
+          normalized.kind,
+          normalized.commandId,
+          normalized,
+        );
+        if ('result' in receipt)
+          return {
+            receipt: receipt.result as ManagementReceipt,
+            replayed: true,
+            fenced: false,
+          };
+
+        const person = users.find((row) => row.id === target?.id);
+        if (
+          'username' in normalized &&
+          (!person || person.username !== normalized.username)
+        )
+          businessError(404, '找不到该账号');
+        const result: ManagementReceipt = {
+          changed: false,
+          before: null,
+          after: null,
+        };
+        if (normalized.kind === 'account.active') {
+          if (person!.id === who.userId)
+            businessError(409, '不能切换当前账号的状态');
+          result.before = person!.active;
+          result.after = normalized.active;
+          result.targetId = person!.id;
+          result.changed = person!.active !== normalized.active;
+          if (result.changed)
+            await tx
+              .update(schema.user)
+              .set({
+                active: normalized.active,
+                authEpoch: person!.authEpoch + 1,
+                updatedAt: new Date(),
+              })
+              .where(eq(schema.user.id, person!.id));
+        } else if (normalized.kind === 'project.create') {
+          if (!person!.active)
+            businessError(409, '初始项目管理员须使用活动账号');
+          const [created] = await tx
+            .insert(schema.project)
+            .values({ id: normalized.projectId, name: normalized.name })
+            .onConflictDoNothing()
+            .returning();
+          if (!created) businessError(409, '项目标识已存在');
+          await tx.insert(schema.projectMember).values({
+            userId: person!.id,
+            projectId: created.id,
+            role: 'project_admin',
+          });
+          result.changed = true;
+          result.after = {
+            id: created.id,
+            name: created.name,
+            adminId: person!.id,
+          };
+        } else if (normalized.kind === 'project.rename') {
+          const [existing] = await tx
+            .select()
+            .from(schema.project)
+            .where(eq(schema.project.id, normalized.projectId))
+            .for('update');
+          if (!existing) businessError(404, '项目不存在');
+          result.before = existing.name;
+          result.after = normalized.name;
+          result.changed = existing.name !== normalized.name;
+          if (result.changed)
+            await tx
+              .update(schema.project)
+              .set({ name: normalized.name, updatedAt: new Date() })
+              .where(eq(schema.project.id, existing.id));
+        } else {
+          const [existing] = await tx
+            .select({ id: schema.project.id })
+            .from(schema.project)
+            .where(eq(schema.project.id, normalized.projectId));
+          if (!existing) businessError(404, '项目不存在');
+          const prior = members
+            .filter((r) => r.userId === person!.id)
+            .map((r) => r.role)
+            .sort();
+          const after =
+            normalized.kind === 'project.roles'
+              ? [
+                  ...prior.filter(
+                    (role) =>
+                      !['requirement_manager', 'developer', 'tester'].includes(
+                        role,
+                      ),
+                  ),
+                  ...normalized.roles,
+                ].sort()
+              : [
+                  ...prior.filter((role) => role !== 'project_admin'),
+                  ...(normalized.enabled ? ['project_admin'] : []),
+                ].sort();
+          const added = after.filter((r) => !prior.includes(r));
+          const removed = prior.filter((r) => !after.includes(r));
+          if (added.length && !person!.active) businessError(409, '账号已停用');
+          if (removed.length)
+            await tx
+              .delete(schema.projectMember)
+              .where(
+                and(
+                  eq(schema.projectMember.projectId, existing.id),
+                  eq(schema.projectMember.userId, person!.id),
+                  inArray(schema.projectMember.role, removed),
+                ),
+              );
+          if (added.length)
+            await tx.insert(schema.projectMember).values(
+              added.map((role) => ({
+                projectId: existing.id,
+                userId: person!.id,
+                role,
+              })),
+            );
+          Object.assign(result, {
+            changed: Boolean(added.length || removed.length),
+            targetId: person!.id,
+            projectId: existing.id,
+            before: prior,
+            after,
+          });
+        }
+        await finish(tx, receipt.value, result);
+        if (result.changed && result.targetId) {
+          fence(result.targetId, result.projectId);
+          fenced = true;
+        }
+        return { receipt: result, replayed: false, fenced };
+      });
+    } catch (error) {
+      if (!fenced) throw error;
+      const issue = error as {
+        code?: string;
+        severity?: string;
+        cause?: { code?: string; severity?: string };
+      };
+      const postgres = issue.cause ?? issue;
+      if (
+        postgres.severity === 'ERROR' &&
+        postgres.code &&
+        ['23502', '23503', '23505', '23514', '40001', '40P01'].includes(
+          postgres.code,
+        )
+      )
+        throw error;
+      const [saved] = await db
+        .select()
+        .from(schema.commandReceipt)
+        .where(
+          and(
+            eq(schema.commandReceipt.actorId, who.userId),
+            eq(schema.commandReceipt.scope, key),
+            eq(schema.commandReceipt.operation, normalized.kind),
+            eq(schema.commandReceipt.commandId, normalized.commandId),
+          ),
+        )
+        .catch(() => []);
+      if (!saved || saved.digest !== digestOf(normalized))
+        return { unknown: true as const };
+      return {
+        receipt: saved.result as ManagementReceipt,
+        replayed: false,
+        fenced,
+      };
+    }
+  }
+
   async function publishRepository(
     who: Actor,
     projectId: string,
@@ -670,5 +944,12 @@ export function createBusiness(db: Database) {
       await publish(confirm);
     });
   }
-  return { create, execute, read, sessionTransaction, publishRepository };
+  return {
+    create,
+    execute,
+    read,
+    sessionTransaction,
+    publishRepository,
+    manage,
+  };
 }

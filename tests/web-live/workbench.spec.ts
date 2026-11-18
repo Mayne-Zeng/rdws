@@ -1,3 +1,4 @@
+import { nativeReady } from '../helpers/native-ready.ts';
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -186,14 +187,7 @@ test('real native Web session and streaming', async ({ page }) => {
     .textContent();
   const root = join(runtimeHome, 'testing-web');
   const key = await readFile(join(root, 'secrets', 'dsh-bff-key'), 'utf8');
-  const overlay = JSON.parse(
-    await readFile(
-      join(root, 'runtime', 'instances', 'web.cordis.yml'),
-      'utf8',
-    ),
-  );
-  const port = overlay.find((item: { id?: string }) => item.id === 'webserver')
-    .config.port;
+  const { port, generation: hostGeneration } = await nativeReady(root);
   const actor = await page.evaluate(async () => {
     const response = await fetch('/api/auth/get-session');
     return response.json();
@@ -214,6 +208,7 @@ test('real native Web session and streaming', async ({ page }) => {
   }
   const token = signGrant(key, {
     aud: 'rdws:poc',
+    hostGeneration,
     purpose: 'browser',
     userId: actor.user.id,
     authSessionId: actor.session.id,

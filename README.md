@@ -2,7 +2,7 @@
 
 面向项目研发全过程的多租户工程工作站。
 
-> **当前状态：PoC 分阶段实现。** Web / API、Docker PostgreSQL、迁移与预置登录，以及需求分派、按钮式推进、动态上下文、五个只读会话的恢复／本人派生／被动回放已落地。详见[决策台账](docs/00-decision-ledger.html#implementation-20261117)和[当前执行证据](docs/02-directory-and-engineering-design.html#session-lifecycle-live-20261118)。Native 运行时只接入预置 PoC 项目；代码单写、GitLab 闭环和 Linux 最终验收仍待完成。`demo/` 是假数据原型。
+> **当前状态：PoC 分阶段实现。** Web / API、Docker PostgreSQL、迁移与预置登录，以及需求分派、按钮式推进、动态上下文、五个只读会话的恢复／本人派生／被动回放已落地。详见[决策台账](docs/00-decision-ledger.html#implementation-20261117)和[当前执行证据](docs/02-directory-and-engineering-design.html#session-lifecycle-live-20261118)。Native 运行时可按已登记项目分别启动；代码单写、GitLab 闭环和 Linux 最终验收仍待完成。`demo/` 是假数据原型。
 
 仓库：<https://github.com/Mayne-Zeng/rdws> · 维护身份：`Mayne-Zeng <rdws@mayne.cn>`
 
@@ -66,6 +66,18 @@ pnpm test:web-live
 ```
 
 前者验证基础浏览器旅程和会话结果未知时的重试；后者需要已有 GLM 原生配置，会产生真实模型调用，验证页面流、上下文刷新和失败阻断、授权轮换、non-owner 拒绝与撤权故障，以及五会话的派生、被动回放和中断恢复。live 使用运行根 `testing-web` / `testing-fault` / `testing-context-denied` / `testing-context-timeout` / `testing-sessions/<run-id>` 的独立数据目录，通过原生 patch / 凭据路径引用同一模型配置，不复制密钥。中断用例仅终止其自身创建且 PID 已核对的原生子进程，保留日志与数据库记录。测试产物在 `test-results/`，Demo 对照截图在 `.impeccable/review/`；两者均不进 Git。
+
+## 项目与成员管理（T03）
+
+平台管理员从「平台设置」登记固定项目 ID、更新名称和维护项目管理员席位，也可停用或恢复现有账号。登记项目需指定一个活动账号作为初始项目管理员。平台设置不会自动赋予项目业务访问权。项目管理员从「成员与权限」按现有登录名维护本项目的需求经理、开发和测试角色；同一账号的角色在当前项目内叠加。撤回角色后，历史分派仍可追溯，失效负责人恢复对应账号和角色前无法维护阶段和任务。
+
+非 `poc` 项目由运行维护者将已获准的 Native 配置放入 `$RDWS_HOME/config/projects/<id>/dsh/`。其中 `profiles/rdws/cordis.patch.yml` 登记模型。未指定默认模型时，实例选择本项目已登记的第一个 `rdws-glm` 模型。`.credentials.yaml` 是仅运行账户可读写的私有凭据文件。目录和文件须归运行账户所有，使用常规目录／普通文件，避免链接及别名。浏览器显示登记状态。首次访问会话时从需求归属选择独立实例，工作区位于 `projects/<id>/demands`，原生数据位于 `runtime/dsh/project-<id>`。既有 `poc` 保留原配置、工作区、回执和会话路径。T04 的 `repositories.json` 仍在同一项目配置目录，镜像按原来的验收边界推进。
+
+停用或恢复账号都会使旧登录长期失效。项目角色变动只停止该账号在该项目中的旧访问。原生通知不可达时，BFF 立即断开，原生连接在短租约到期后关闭。已获得准入的外部模型请求可能结束，失效连接不回传输出。
+
+已有本地库先执行 `pnpm db:migrate`。测试库执行 `RDWS_MODE=test pnpm db:migrate`。新增迁移给账号和登录加入内部代次，现有记录默认 0，保留项目数据和原生日志。已有代次变更的数据库不能直接运行 0005 之前的认证实现。旧服务不会核对代次，也不会为代次已变化的账号正确签发会话；回退需另行审批并制定兼容认证与会话处置方案。进程异常后，在确认 Host 和 Native 子进程均已停止后重启服务。锁状态无法确认时保留原锁，参照运行根 `runtime/instances/project-<id>.lock` 与同项目就绪记录核实。旧进程的短期票据不用于新进程。
+
+聚焦命令为 `pnpm test tests/integration/project-administration.test.ts`、`pnpm test:e2e tests/e2e/project-administration.spec.ts` 和 `pnpm test:web-live -g 'one login sends and reads'`。最后一项用两个隔离实例和一个账号验证实际 GLM 请求，使用测试库与独立运行根。详见[工程实施与验收](docs/02-directory-and-engineering-design.html#t03-plan-20261118)。
 
 ## 仓库与环境（T04）
 

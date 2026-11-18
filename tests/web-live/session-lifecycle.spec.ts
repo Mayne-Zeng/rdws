@@ -1,3 +1,4 @@
+import { nativeReady } from '../helpers/native-ready.ts';
 import { test, expect } from '@playwright/test';
 import { readFile, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -241,11 +242,7 @@ test('five real sessions support owned fork, passive replay and current context'
         expect(header.data.header.tools ?? []).toHaveLength(0);
     }
     const key = await readFile(join(root, 'secrets/dsh-bff-key'), 'utf8');
-    const overlay = JSON.parse(
-      await readFile(join(root, 'runtime/instances/web.cordis.yml'), 'utf8'),
-    );
-    const port = overlay.find((r: { id: string }) => r.id === 'webserver')
-      .config.port;
+    const { port, generation: hostGeneration } = await nativeReady(root);
     const actor = await (
       await page.request.get('/api/auth/get-session')
     ).json();
@@ -257,6 +254,7 @@ test('five real sessions support owned fork, passive replay and current context'
     ).rows[0].native_workspace_id;
     const cap = {
       aud: 'rdws:poc',
+      hostGeneration,
       purpose: 'fork' as const,
       userId: lead,
       authSessionId: actor.session.id,

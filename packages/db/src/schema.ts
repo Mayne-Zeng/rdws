@@ -26,6 +26,7 @@ export const user = pgTable('auth_user', {
   username: text('username').unique(),
   displayUsername: text('display_username'),
   active: boolean('active').default(true).notNull(),
+  authEpoch: integer('auth_epoch').default(0).notNull(),
   platformAdmin: boolean('platform_admin').default(false).notNull(),
   ...timestamps,
 });
@@ -35,6 +36,7 @@ export const session = pgTable(
     id: text('id').primaryKey(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     token: text('token').notNull().unique(),
+    authEpoch: integer('auth_epoch').default(0).notNull(),
     userId: text('user_id')
       .notNull()
       .references(() => user.id, { onDelete: 'cascade' }),

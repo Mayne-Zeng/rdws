@@ -110,10 +110,12 @@ test('the repository view reconciles a lost response with the same command and e
     page.getByText('模拟短时读取失败', { exact: true }),
   ).toBeVisible();
   await page.getByRole('button', { name: '核对原同步', exact: true }).click();
+  await expect.poll(() => received.length).toBe(2);
   await expect(
     page.getByRole('button', { name: '核对原同步', exact: true }),
   ).toBeEnabled();
   await page.getByRole('button', { name: '核对原同步', exact: true }).click();
+  await expect.poll(() => received.length).toBe(3);
   await expect(page.getByText('结果待核对', { exact: true })).toBeVisible();
   await expect(
     page.getByRole('button', { name: '发起新同步', exact: true }),

@@ -1,3 +1,4 @@
+import { nativeReady } from '../helpers/native-ready.ts';
 import { test, expect } from '@playwright/test';
 import { buildApp } from '@rdws/server';
 import { NativeWebHost } from '@rdws/dsh/web';
@@ -103,15 +104,7 @@ test('native notification outage stops BFF immediately and closes native at leas
       }),
     );
     await pending;
-    const overlay = JSON.parse(
-      await readFile(
-        join(root, 'runtime', 'instances', 'web.cordis.yml'),
-        'utf8',
-      ),
-    );
-    const port = overlay.find(
-      (item: { id?: string }) => item.id === 'webserver',
-    ).config.port;
+    const { port, generation: hostGeneration } = await nativeReady(root);
     const key = await readFile(join(root, 'secrets', 'dsh-bff-key'), 'utf8');
     const workspaceId = (
       await pool.query(
@@ -122,6 +115,7 @@ test('native notification outage stops BFF immediately and closes native at leas
     const issued = Date.now();
     const ticket = signGrant(key, {
       aud: 'rdws:poc',
+      hostGeneration,
       purpose: 'browser',
       userId: actor.user.id,
       authSessionId: actor.session.id,

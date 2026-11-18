@@ -250,3 +250,95 @@ export interface ProjectRepositories {
   canSync: boolean;
   repositories: RepositorySummary[];
 }
+
+const ManagementCommandId = Type.String({ format: 'uuid' });
+const ManagedProjectId = Type.String({ pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' });
+const ManagedName = Type.String({
+  minLength: 1,
+  maxLength: 80,
+  pattern: '\\S',
+});
+const ManagedUsername = Type.String({
+  minLength: 1,
+  maxLength: 64,
+  pattern: '^[A-Za-z0-9_.-]+$',
+});
+const MemberRole = Type.Union([
+  Type.Literal('requirement_manager'),
+  Type.Literal('developer'),
+  Type.Literal('tester'),
+]);
+export const ManagementCommand = Type.Union([
+  Type.Object(
+    {
+      kind: Type.Literal('project.create'),
+      commandId: ManagementCommandId,
+      projectId: ManagedProjectId,
+      name: ManagedName,
+      username: ManagedUsername,
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      kind: Type.Literal('project.rename'),
+      commandId: ManagementCommandId,
+      projectId: ManagedProjectId,
+      name: ManagedName,
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      kind: Type.Literal('project.roles'),
+      commandId: ManagementCommandId,
+      projectId: ManagedProjectId,
+      username: ManagedUsername,
+      roles: Type.Array(MemberRole, { maxItems: 3, uniqueItems: true }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      kind: Type.Literal('project.admin'),
+      commandId: ManagementCommandId,
+      projectId: ManagedProjectId,
+      username: ManagedUsername,
+      enabled: Type.Boolean(),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      kind: Type.Literal('account.active'),
+      commandId: ManagementCommandId,
+      username: ManagedUsername,
+      active: Type.Boolean(),
+    },
+    { additionalProperties: false },
+  ),
+]);
+export type ManagementCommand = Static<typeof ManagementCommand>;
+export interface ManagementAccount {
+  username: string;
+  name: string;
+  active: boolean;
+}
+export interface ProjectAdministration {
+  project: { id: string; name: string; nativeConfigured: boolean };
+  members: (ManagementAccount & { roles: string[] })[];
+}
+export interface PlatformAdministration {
+  projects: {
+    id: string;
+    name: string;
+    nativeConfigured: boolean;
+    admins: string[];
+  }[];
+  accounts: (ManagementAccount & { platformAdmin: boolean })[];
+}
+export interface ManagementResult {
+  changed: boolean;
+  replayed: boolean;
+  revocation: 'confirmed' | 'lease-expiry' | 'none' | 'previously-recorded';
+}

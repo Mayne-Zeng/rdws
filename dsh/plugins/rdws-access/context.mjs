@@ -22,7 +22,11 @@ export function installContext(ctx, config, key, route) {
     if (old && old.runId !== input.runId)
       throw new Error('Run binding conflict');
     if (!old)
-      authorized.set(id, { ...input, expiresAt: Date.now() + 30 * 60 * 1000 });
+      authorized.set(id, {
+        ...input,
+        admittedAt: Date.now(),
+        expiresAt: Date.now() + 30 * 60 * 1000,
+      });
     return { authorized: true };
   });
   route('run.cancel', (input) => {
@@ -221,7 +225,8 @@ export function installContext(ctx, config, key, route) {
           state.binding,
           signal,
         );
-        if (signal.aborted) return { kind: 'reject' };
+        if (signal.aborted || bindings.some((r) => !authorized.has(lookup(r))))
+          return { kind: 'reject' };
         const note = Object.freeze({
           id: randomUUID(),
           role: 'user',
@@ -326,4 +331,13 @@ export function installContext(ctx, config, key, route) {
     },
     { global: true },
   );
+  return (authSessionId, requirementId, cutoff) => {
+    for (const [id, run] of authorized)
+      if (
+        run.authSessionId === authSessionId &&
+        run.admittedAt <= cutoff &&
+        (!requirementId || run.requirementId === requirementId)
+      )
+        authorized.delete(id);
+  };
 }

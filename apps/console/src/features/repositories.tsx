@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Loading } from 'tdesign-react';
 import type {
@@ -43,6 +43,7 @@ function RepositoryCard({
   const client = useQueryClient();
   const command = useRef<string | undefined>(undefined);
   const active = useRef(false);
+  const [busy, setBusy] = useState(false);
   const uncertain = useRef(false);
   const sync = useMutation<RepositorySyncResult, Error, boolean>({
     mutationFn: (fresh = false) => {
@@ -77,6 +78,7 @@ function RepositoryCard({
         });
       } finally {
         active.current = false;
+        setBusy(false);
       }
     },
   });
@@ -92,6 +94,7 @@ function RepositoryCard({
   const launch = (fresh = false) => {
     if (active.current) return;
     active.current = true;
+    setBusy(true);
     sync.mutate(fresh);
   };
   const recovering = !!command.current && uncertain.current;
@@ -105,11 +108,11 @@ function RepositoryCard({
           <div className="form-actions">
             <Button
               tag="button"
-              loading={sync.isPending}
+              loading={busy}
               disabled={
-                recovering
-                  ? false
-                  : !!row.stateIssue || result?.status === 'running'
+                busy ||
+                (!recovering &&
+                  (!!row.stateIssue || result?.status === 'running'))
               }
               onClick={() => launch()}
             >
@@ -119,7 +122,7 @@ function RepositoryCard({
               <Button
                 tag="button"
                 variant="outline"
-                disabled={sync.isPending}
+                disabled={busy}
                 onClick={() => launch(true)}
               >
                 发起新同步

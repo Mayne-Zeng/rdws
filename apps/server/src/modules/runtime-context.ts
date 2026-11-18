@@ -103,7 +103,7 @@ export class ContextRuns {
       sessionId: string,
       relatedActors?: Actor[],
     ) => Promise<unknown>,
-    private closing: (authSessionId: string) => boolean,
+    private closing: (authSessionId: string, userId: string) => boolean,
   ) {}
   admit(
     who: Actor,
@@ -112,7 +112,11 @@ export class ContextRuns {
     requestId: string,
     peerNonce: string,
   ): RunBinding {
-    if (this.closing(who.authSessionId) || !requestId || requestId.length > 128)
+    if (
+      this.closing(who.authSessionId, who.userId) ||
+      !requestId ||
+      requestId.length > 128
+    )
       businessError(403, '当前运行身份无效');
     const now = Date.now();
     for (const [id, run] of this.runs)
@@ -154,9 +158,17 @@ export class ContextRuns {
       peerNonce: run.peerNonce,
     };
   }
-  revoke(authSessionId: string) {
+  revoke(authSessionId: string, requirementId?: string) {
     for (const [id, r] of this.runs)
-      if (r.who.authSessionId === authSessionId) this.runs.delete(id);
+      if (
+        r.who.authSessionId === authSessionId &&
+        (!requirementId || r.requirementId === requirementId)
+      )
+        this.runs.delete(id);
+  }
+  revokeUser(userId: string) {
+    for (const [id, r] of this.runs)
+      if (r.who.userId === userId) this.runs.delete(id);
   }
   clear() {
     this.runs.clear();
@@ -220,7 +232,7 @@ export class ContextRuns {
       if (
         !related ||
         related.expiresAt <= now ||
-        this.closing(related.who.authSessionId) ||
+        this.closing(related.who.authSessionId, related.who.userId) ||
         Object.entries(this.binding(related)).some(
           ([key, value]) => binding[key] !== value,
         ) ||
@@ -239,7 +251,7 @@ export class ContextRuns {
     if (
       !run ||
       run.expiresAt <= now ||
-      this.closing(run.who.authSessionId) ||
+      this.closing(run.who.authSessionId, run.who.userId) ||
       Object.entries(this.binding(run)).some(
         ([key, value]) => input[key] !== value,
       ) ||
@@ -270,7 +282,7 @@ export class ContextRuns {
       batch.some(
         (r) =>
           this.runs.get(r.runId) !== r ||
-          this.closing(r.who.authSessionId) ||
+          this.closing(r.who.authSessionId, r.who.userId) ||
           r.expiresAt <= Date.now(),
       )
     )

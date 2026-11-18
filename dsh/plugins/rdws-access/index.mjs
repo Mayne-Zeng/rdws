@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
+import { realpath } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import {
   verifyGrant,
+  signGrant,
   resourceRoles,
   bodyHash,
   LEASE_MS,
@@ -34,7 +36,7 @@ export function apply(ctx, config) {
     },
     { global: true },
   );
-  const key = readFileSync(config.keyFile, 'utf8');
+  const key = readFileSync(config.keyFile, 'utf8').trim();
   const peers = new Map();
   const revoked = new Map();
   const metrics = { accepted: 0, expired: 0, revoked: 0 };
@@ -56,7 +58,12 @@ export function apply(ctx, config) {
       request.headers['x-rdws-delegation'],
       config.audience,
     );
-    if (!cap || outdated(cap)) return;
+    if (
+      !cap ||
+      cap.hostGeneration !== config.contextGeneration ||
+      outdated(cap)
+    )
+      return;
     if (
       cap.purpose === 'fork' &&
       !ctx.workspaceRegistry
@@ -142,8 +149,35 @@ export function apply(ctx, config) {
       },
     });
   }
-  installContext(ctx, config, key, route);
-  route('health', () => ({ ready: true, metrics }));
+  const revokeContext = installContext(ctx, config, key, route);
+  route('health', () => ({
+    ready: true,
+    metrics,
+    proof: signGrant(key, {
+      aud: 'rdws:ready:' + config.contextGeneration,
+      purpose: 'service',
+      hostGeneration: config.contextGeneration,
+      bodyHash: bodyHash({ port: ctx.webServer.port }),
+    }),
+  }));
+  if (process.send) {
+    ctx.effect(() => {
+      const timer = setInterval(() => {
+        if (!ctx.webServer.port || !process.connected) return;
+        clearInterval(timer);
+        process.send(
+          {
+            type: 'rdws-ready',
+            generation: config.contextGeneration,
+            port: ctx.webServer.port,
+          },
+          () => {},
+        );
+      }, 25);
+      timer.unref();
+      return () => clearInterval(timer);
+    });
+  }
   route('session.inspect', async (input) => {
     const workspace = ctx.workspaceRegistry
       .list()
@@ -167,7 +201,8 @@ export function apply(ctx, config) {
     if (
       !path.startsWith(resolve(config.demandRoot) + sep) ||
       !/^[a-f0-9-]{36}$/.test(input.requirementId) ||
-      path !== resolve(config.demandRoot, input.requirementId)
+      path !== resolve(config.demandRoot, input.requirementId) ||
+      (await realpath(path)) !== path
     )
       throw new Error('Invalid workspace');
     const workspace = await ctx.workspaceRegistry.create(path, input.title);
@@ -183,6 +218,8 @@ export function apply(ctx, config) {
     const id = input.authSessionId + ':' + (input.requirementId ?? '*');
     const cutoff = Math.max(revoked.get(id) ?? 0, input.before);
     revoked.set(id, cutoff);
+    if (input.invalidateRuns !== false)
+      revokeContext(input.authSessionId, input.requirementId, cutoff);
     const timer = setTimeout(() => {
       if (revoked.get(id) === cutoff) revoked.delete(id);
     }, LEASE_MS + 2000);

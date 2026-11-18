@@ -41,7 +41,7 @@ async function fixture() {
   );
   await pool.query(
     'insert into requirement_participant(requirement_id,user_id,role) values($1,$2,$3)',
-    [id, manager, 'manager'],
+    [id, manager, 'requirement_manager'],
   );
   return id;
 }

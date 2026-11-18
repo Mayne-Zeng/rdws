@@ -1,3 +1,4 @@
+import { nativeReady } from '../helpers/native-ready.ts';
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -64,11 +65,13 @@ async function rpc(action: string, args: unknown, token: string) {
   const text = await response.text();
   return { status: response.status, body: text ? JSON.parse(text) : undefined };
 }
+let hostGeneration: string;
 function cap(purpose: 'browser' | 'create' = 'browser', lease = 20000) {
   return signGrant(
     key,
     {
       aud: 'rdws:poc',
+      hostGeneration,
       purpose,
       userId: managerId,
       authSessionId,
@@ -165,14 +168,9 @@ test.beforeAll(async ({ baseURL }) => {
   ).rows[0].native_workspace_id;
   const root = join(runtimeHome, 'testing-web');
   key = await readFile(join(root, 'secrets', 'dsh-bff-key'), 'utf8');
-  const overlay = JSON.parse(
-    await readFile(
-      join(root, 'runtime', 'instances', 'web.cordis.yml'),
-      'utf8',
-    ),
-  );
-  port = overlay.find((row: { id?: string }) => row.id === 'webserver').config
-    .port;
+  const ready = await nativeReady(root);
+  port = ready.port;
+  hostGeneration = ready.generation;
 });
 test.afterAll(async () => {
   await pool?.end();

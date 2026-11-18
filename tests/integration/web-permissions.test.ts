@@ -297,7 +297,7 @@ test('participation and platform administration cannot bypass project membership
     );
     await pool.query(
       'insert into requirement_participant(requirement_id,user_id,role) values($1,$2,$3)',
-      [id, managerId, 'manager'],
+      [id, managerId, 'requirement_manager'],
     );
     const cookie = await login('manager');
     expect(

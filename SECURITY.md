@@ -28,6 +28,10 @@ BFF 从已鉴权需求的 PostgreSQL 归属选取 Native 实例。项目具有�
 
 项目管理员通过项目作用域发起同步。syncer 在发布前核验可信 SSH 签名、配置快照及快进关系，短授权事务与停用、注销及撤权定序。T04 在具名授权 Gitee 仓库通过 HTTPS 读取与 SSH 提交验签。T09 的 GitLab 出站交付另行授权和验证。日常会话的物理执行隔离由 T06 验证，部署在受信运行账户及受管目录中。 [T04 真实验收证据](docs/02-directory-and-engineering-design.html#t04-gitee-live-20261118)
 
+## 需求工作树准备
+
+平台编排层从有同源成功回执的本地镜像读取冻结 SHA。Git 使用固定参数、私有 GitStore 与独立对象。目录领取、准备与就绪检查受平台路径和持久锁约束。计划需求通过就绪检查后才进入 Native。实际代码写权限、进程与路径隔离由 T06 和 T07 验收。 [T05 工程设计](docs/02-directory-and-engineering-design.html#t05-worktree-plan-20261118)
+
 ## 当前依赖审计（2026-11-18，未修复）
 
 本轮 `pnpm audit --prod --audit-level high` 返回 1：1 项 high、3 项 moderate。新增识别的高危为 `picomatch@4.0.7` 的重复 extglob ReDoS，[官方公告 GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf) 当前列出受影响版本 ≤4.0.7、无修复版本。没有隐藏通告、修改上游源码或以未经验证的版本覆盖依赖。

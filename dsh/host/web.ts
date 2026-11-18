@@ -533,10 +533,10 @@ export class NativeWebHost {
     if (!response.ok) throw new Error('Native control unavailable');
     return response.json();
   }
-  async workspace(id: string, title: string) {
+  async workspace(id: string, title: string, existingOnly = false) {
     await this.start();
     if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid requirement ID');
-    const cwd = await managedDirectory(this.demandRoot, [id], true);
+    const cwd = await managedDirectory(this.demandRoot, [id], !existingOnly);
     const result = await this.control('workspace', {
       requirementId: id,
       cwd,

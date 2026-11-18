@@ -381,7 +381,7 @@
     <tr data-source="D19" data-owner="T15" data-point="usage.quota"><td>D19 / 用量与配额</td><td><a href="05-development-backlog.md#主计划任务">T15</a></td><td>T13</td><td>维度／阈值／超限行为待本任务确认；帧计数不推导 token 或费用。</td></tr>
     <tr data-source="D20" data-owner="T19" data-point="interaction.platform-answer"><td>D20 / 通用 HITL 约束</td><td><a href="05-development-backlog.md#主计划任务">T19</a></td><td>T17 F02</td><td>仅显式声明的交互由平台 answer 和审计；I6 已撤阶段审批，不能据旧设计恢复设计／测试／部署逐阶段审批。</td></tr>
     <tr data-source="D21" data-owner="T14" data-point="preset.future-sessions"><td>D21 / 能力生成与变更</td><td><a href="05-development-backlog.md#主计划任务">T14</a></td><td>T12</td><td>白名单内生成需求 preset，修改只影响后建会话；无权调整旧会话执行能力。</td></tr>
-    <tr data-source="D22" data-owner="T05" data-point="git.frozen-base"><td>D22 / 冻结需求基线</td><td><a href="05-development-backlog.md#主计划任务">T05</a></td><td>T04</td><td>需求私有 bare／worktree 保存 baseCommit；当前尚未建立。</td></tr>
+    <tr data-source="D22" data-owner="T05" data-point="git.frozen-base"><td>D22 / 冻结需求基线</td><td><a href="05-development-backlog.md#主计划任务">T05</a></td><td>T04</td><td>创建事务冻结 baseCommit，供需求私有 bare 和共享工作树准备。<a href="#t05-worktree-delivery-20261118">T05 交付证据</a>。</td></tr>
     <tr data-source="D22" data-owner="T10" data-point="git.explicit-sync"><td>D22 / 显式同步与增量</td><td><a href="05-development-backlog.md#主计划任务">T10</a></td><td>T09</td><td>fetch＋merge、冲突显式处理、不 rebase／强推；未合入更新与已合入后增量分开。</td></tr>
     <tr data-source="D22 I3-DELIVERY" data-owner="T09" data-point="delivery.integration-sha"><td>D22 I3-DELIVERY / 集成提交与回写</td><td><a href="05-development-backlog.md#主计划任务">T09</a></td><td>T08</td><td>需求提交经集成 cherry-pick，分别记录 merge／squash，不伪造已合入事实。</td></tr>
     <tr data-source="D23" data-owner="T04" data-point="git.source-mirror"><td>D23 / 仓库事实源与镜像</td><td><a href="05-development-backlog.md#主计划任务">T04</a></td><td>T05 T09</td><td>sources 是只读 bare mirror，仅 syncer 更新。T04 使用具名授权 Gitee 仓库验收只读路径，T09 单独使用 GitLab 验收交付闭环。</td></tr>
@@ -768,6 +768,25 @@
   <p>定点测试 2 文件、10 项通过。真实 Native 会话在隔离根中刷盘，调用 Host 关闭后确认本轮原生子进程已退出。根据会话 ID 找到唯一压缩日志并核对 Zstandard 签名。公开命令输出的长度与 SHA-256 和直接读取原始字节的独立对照一致，核对前后原件字节相同。此验证使用静止原件的人工确认截止，持久锚点、自动提供可信截止及隔离校验主体仍按 T16 推进。</p>
   <p>独立交付复审 APPROVE。四项发现均已关闭。初检后的打开失败分流先由 ENOENT、ENOTDIR、ELOOP 用例复现再修正，普通读失败保持证据不可用。并发样本在两块读取间修改实际文件，同长改写保留全部后缀，原生样本明确验证刷盘与进程停止。</p>
   <p>首轮 <code>pnpm check</code> 与本机睡眠重合，既有仓库镜像及 Native 模型恢复用例各超时一项。两文件定点复跑 11 项通过。随后 <code>caffeinate -i pnpm check</code> 通过（19 文件、122 项测试，类型、lint、格式和构建通过），<code>pnpm validate:baseline</code> 通过（29 任务、62 个追溯点、16 个视图）。</p>
+
+  <h3 id="t05-worktree-plan-20261118">11.19 T05 需求工作树</h3>
+  <p>Change / R3，非批量，基线 <code>e14963e</code>。按 T05、D22、D23、I3-WRITE、I6-COMMAND 和 T04 已验镜像交付“需求创建冻结基线 → 平台准备需求内私有 bare 与工作树 → 在需求根注册 Native workspace”。保留 §3 方案 C 的布局、分支和归属，改用受控本地 Git 传输将冻结 SHA 的可达对象复制到私有仓，避免共享 inode 在随后写阶段影响 sources。真实 T04 镜像的离线验证已证明文件指纹原样、共享对象 inode 为 0、Git 移动及修复可用。当前继续零执行工具。只在隔离测试库执行迁移。</p>
+  <ol>
+    <li>创建先经当前项目创建权限查同键、同请求摘要的回执。已有回执返回原需求 ID，不重新验证历史分派对象或读取 sources。无回执时通过 syncer 的新只读内部入口从已发布目录逐仓核对登记来源指纹、物理分支 SHA 与同源同值的持久成功收据。最近失败时若原基线和历史成功收据仍匹配可冻结；不把 running／unknown 收据或未证实的 ref 当成功。每仓以本次确证时点为准，多仓不是全局锁快照。Git 读取在 PG 事务外关闭。冻结失败先重查当前授权下的原键，无法确定未提交时报可核对的 503 并保留同键。短事务按现有登录、账号和角色定序，最后一个可能阻塞的操作后同步检查锁住的会话截止和关闭栅栏。相同请求摘要只保留原表单，同键只留一个提交者。需求、分派、任务、回执以及只追加的 <code>requirement_worktree_plan</code> 同事务保存，计划以需求唯一外键归项目。计划包含每仓来源指纹、baseline ref、冻结 baseCommit、<code>rdws/&lt;requirement-id&gt;/&lt;repo&gt;</code> 分支与两个需求内相对路径。重复不会重冻。未配置项目和历史无计划需求继续原只读会话路径。</li>
+    <li><code>apps/orchestrator</code> 只接已提交的同项目计划，不接受浏览器路径、ref、命令或身份。对冻结值重读该来源的受管目录及匹配成功收据，确认原 SHA 仍可从可信 published ref 到达。允许实际 ref 快进后仍从同源精确读取原 SHA，原对象不可取得或绑定变化时报失败。复用既有子进程白名单环境，文件传输只限经过核验的 sources 仓，创建独立私有对象和工作树，全程禁止 hook、子模块与外部协议。不向 sources 登记 worktree。默认校验路径、格式及来源，Git 命令只使用服务端已定的工作空间参数。</li>
+    <li>同需求互斥用持久锁、owner 文件和现有 Git 进程组登记。以独占 <code>mkdir</code> 分配最终需求根并建立与 PG 计划匹配的私有准备标记，从不覆盖既有未标识路径，包括空目录。只在本应用锁内处理该根，平台需求准备目录在就绪前由本运行身份控制。先在固定根内的私有暂存目录完成全部仓与 <code>demand.yaml</code>，将本次计划和暂存身份持久记为待提升。在同锁控制的未就绪根内提升到确定位置，仅移动尚不存在的目标项。每次调用 repair 前先检查私有受管目录、固定 bare 配置、受管的 .git／gitdir／commondir，以及不存在外部对象或链接。只接受本次登记暂存或最终位置的路径对。修复从最终私有 bare 运行，再读回两个方向和冻结分支。最后原子写就绪标记。重试可按匹配的记录继续未完成提升／修复；没有可靠归属、目录冲突或未知进程状态时保留现场和锁，受控核对后继续。正常失败仅清理本次确认停止且尚未提升的暂存。就绪后不重检出、修复或重写已存在的代码及分支。新标记和 Git 路径的持久化顺序确保中断不会把半成品报成可用。</li>
+    <li>需求成功提交后始终可按返回的原 ID 读取；准备失败以独立 pending 状态呈现，创建表单进入同一需求，无第二需求。创建接续准备由已提交的授权动作派生，后续显式准备重试仅对同项目拥有创建权限且可访问该需求的账号开放。BFF 读回和送达时重新验证当前授权、到期及需求归属。拒绝后的浏览器请求继续保留原键及参数，包括提交已完成但送达被撤权挡住的 401／403。按账号及项目保存待核对原命令。工作区状态和实际相对路径使用正常需求入口展示。所有相关 Native 入口先经同一就绪检查，再允许获取项目运行时并注册计划需求，只允许使用已存在的规范需求根。会话 header cwd 和 <code>nativeWorkspaceId</code> 仍走同一需求根，T02 回放和历史无计划数据保持原语义。回退保留准入和迁移授权脚本，或先处置未准备的需求，保留所有历史、工作树和回执，不自动 reset 或归档。</li>
+    <li>0008 仅新增计划表，应用角色在同一授权事务撤 UPDATE／DELETE。DDL 前核对实际回环端点、隔离库和迁移登录。测试覆盖两仓冻结、最后收据失败仍使用可证旧值、无成功证据不冻结、快进与原命令、落库与工作树失败、双进程／同命令、既有空目录和异常恢复、Git 指向篡改、跨项目、最后锁等待到期以及提交后撤权时保留原键。具名镜像实证在独立测试库用相同原项目/仓/ref 元组和保留的成功收据，对只读拷贝做前后 refs、登记、文件指纹及 inode 检查，隔离真实 Native 验证两会话 cwd/同一 workspace。全量使用 <code>pnpm check</code>、<code>pnpm test:e2e</code>、<code>pnpm validate:baseline</code>，以当前测试配置核对真实路径与审批边界。</li>
+  </ol>
+
+  <h4 id="t05-worktree-delivery-20261118">11.19.1 需求创建与真实工作树证据</h4>
+  <p>增量 0008 增加只追加计划表。实际隔离库从 0007 升级，核对执行端点为回环、当前库 <code>rdws_test</code>、迁移主体 <code>rdws_test_migrator</code>，应用角色 INSERT 已授权，UPDATE 和 DELETE 已撤销。新代码确认表已存在后才写业务。开发与生产库未迁移。历史无计划需求继续使用原生需求根。</p>
+  <p>两个方案和交付面均已完成独立复审。已关闭重放时准备目录和丢失需求权限仍可查回执、就绪标记漏查实际分支、Git 元数据硬链接、锁顺序、进程组漏登记、缺迁移时先提交及表单核对状态的发现。回执返回过程按当期权限，已提交的创建结果和工作树准备状态各自读回。</p>
+  <p>聚焦测试走真实隔离 PostgreSQL、HTTPS Git 夹具、BFF 和 Native。覆盖双仓、只有物理 ref 而无成功收据、最近同步失败仍可用的成功基线、镜像快进后读取同一冻结 SHA、不会注册空工作区、部分提升与外部路径或硬链接拒绝、分支丢失及恢复。数据库实际等待项目角色锁时会话过期，事务回滚并保留零回执。提交后实际撤权阻止回执送达，恢复原权限后同键读回原需求。受控浏览器回归对实际已提交创建注入 401 后刷新，用相同请求体核对，再验证待准备、独立重试和相对路径呈现。</p>
+  <p>复制 T04 保存的具名 Gitee 镜像、项目登记与原成功收据复用原隔离项目标识。BFF 创建返回 HTTP 200，实际工作树使用 <code>ca2b445ebf2f9d1ad598ee69f9b59f178c1b524f</code>，分支和 GitStore 均位于需求目录。两条真实 Native 会话 header cwd 相同且等于需求根，workspace ID 与 PG 一致。对象共享 inode 为 0，sources 前后文件指纹一致，sources worktree 登记为 0。验证过程从本地镜像读取。隔离证据保留在运行根 <code>state/exports/t05-gitee-20261118-fgQI2M</code>，临时数据库项目和需求已清理。</p>
+  <p>第二次复用已验镜像的独立进程试验确认先行进程实际持久领取，另一进程被互斥挡住，先行者完成后由最终 Git 检查读为就绪。</p>
+  <p>独立空目录反例保持原目录 inode 与内容。整仓 <code>pnpm check</code> 通过（20 文件、124 项测试，类型、lint、格式与构建通过）。旧准入压力用例曾在 <code>e14963e</code> 独立副本复现 30 秒超时，后续对照和整仓复跑通过，仓库原断言与测试预算保留。计划随现有需求查询读取，避免额外的逐请求 SQL 往返。</p>
+  <p>浏览器全套 28 项通过（2.4m），包括窄屏两主题待准备／重试、原创建 401 回执恢复、确定性 400 后解锁及旧会话失败回归。本机前轮在项目读取或 Native 冷启动／重连时超出默认等待，复核使用临时 Playwright 配置（断言等待 35 秒、每例 90 秒、失败保留追踪），仓库默认配置保留。终版复验类型、lint、格式及基线追溯。</p>
 
   <h2 id="s0"><span class="num">0</span>评审结论</h2>
   <div class="verdict">

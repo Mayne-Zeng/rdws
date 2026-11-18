@@ -580,8 +580,9 @@ export function ProjectWorkspace({
               <RepositoriesPage key={project.id} projectId={project.id} />
             ) : view === 'create' ? (
               <RequirementForm
-                key={project.id}
+                key={project.id + ':' + userId}
                 project={project}
+                userId={userId}
                 onProtectedChange={setProtectedForm}
                 onClose={() => navigate('requirements', '')}
                 onCreated={async (id) => {

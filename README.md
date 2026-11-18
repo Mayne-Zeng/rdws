@@ -98,6 +98,14 @@ pnpm test:web-live
 
 独立验证命令为 `pnpm test tests/integration/repository-mirror.test.ts tests/integration/repository-access.test.ts` 和 `pnpm test:e2e tests/e2e/repositories.spec.ts`。隔离 HTTPS Git 夹具生成临时签名身份及远端，并通过实际 Git 读、验签和更新。T04 已在具名授权 Gitee 仓库通过 HTTPS 只读镜像和 SSH 提交验签，T05 前置已满足。T09 继续使用 GitLab 验收交付闭环。 [T04 真实验收证据](docs/02-directory-and-engineering-design.html#t04-gitee-live-20261118)
 
+## 需求工作树（T05）
+
+运行本版前先为目标库应用增量迁移 0008。配置了仓库的项目在新建需求时，会核对每个镜像的已发布基线并冻结 SHA。需求档案展示冻结基线、分支、工作树相对路径和就绪状态。
+
+平台从本地镜像读取冻结提交，在需求目录下创建 `.gitstore/<repo>.git` 和 `worktrees/<repo>`。两个 Git 路径都归该需求。Native 会话继续注册在需求根，并共享该需求已经准备好的工作树。
+
+若需求已创建但工作树尚未就绪，有权限的操作者可在需求档案重试准备。核对原创建命令只读回同一需求与当前状态。遇到遗留锁或无法核对的目录，运行维护者先确认该次 owner 和 Git 进程组的停止情况，再按计划记录保留现场并核对。 [工程与恢复边界](docs/02-directory-and-engineering-design.html#t05-worktree-plan-20261118)
+
 ## DSH 真实接入探针
 
 ```sh

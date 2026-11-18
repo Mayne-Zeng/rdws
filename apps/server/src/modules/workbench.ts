@@ -19,6 +19,7 @@ import {
   type ManagementResult,
   ProjectList,
   type ProjectRepositories,
+  type RequirementWorkspace,
 } from '@rdws/contracts';
 import {
   businessError,
@@ -32,11 +33,15 @@ import {
 } from '../../../syncer/src/mirror.ts';
 import { MirrorConfigError } from '../../../syncer/src/config.ts';
 import {
+  DemandWorktrees,
+  type DemandRepositories,
+} from '../../../orchestrator/src/demand-worktrees.ts';
+import {
   createProjectRuntimes,
   type ProjectRuntime,
 } from './native-projects.ts';
 import { type RunBinding } from './runtime-context.ts';
-import { eq, and, desc, asc, isNull } from 'drizzle-orm';
+import { eq, and, desc, asc, isNull, sql } from 'drizzle-orm';
 import { fromNodeHeaders } from 'better-auth/node';
 import { schema, type connectDatabase } from '@rdws/db';
 import { NativeWebHost } from '@rdws/dsh/web';
@@ -146,6 +151,15 @@ export async function registerWorkbench(
       : runtimeHome;
   const business = createBusiness(db);
   const mirrors = new RepositoryMirrors(repositoryHome ?? instanceRoot);
+  const worktrees = new DemandWorktrees(
+    nativeRuntimeRoot ?? instanceRoot,
+    mirrors,
+  );
+  const providedWorktrees = providedNative
+    ? new DemandWorktrees(providedNative.runtimeHome, mirrors)
+    : undefined;
+  const worktreesFor = (projectId: string) =>
+    providedNative?.projectId === projectId ? providedWorktrees! : worktrees;
   let authorizationEpoch = 0;
   let stopping = false;
   const closingSessions = new Set<string>();
@@ -286,11 +300,25 @@ export async function registerWorkbench(
   ): Promise<Access> {
     const epoch = authorizationEpoch;
     const who = await actor(headers);
-    const [item] = await db
-      .select()
+    const [row] = await db
+      .select({
+        item: schema.requirement,
+        plan: schema.requirementWorktreePlan.repositories,
+      })
       .from(schema.requirement)
-      .where(eq(schema.requirement.id, id));
-    if (!item) fail(404, '需求不存在');
+      .leftJoin(
+        schema.requirementWorktreePlan,
+        eq(schema.requirementWorktreePlan.requirementId, schema.requirement.id),
+      )
+      .where(eq(schema.requirement.id, id))
+      .catch((error) => {
+        const failure = error as { code?: string; cause?: { code?: string } };
+        if ((failure.cause?.code ?? failure.code) === '42P01')
+          businessError(503, '请先升级需求工作树数据库结构');
+        throw error;
+      });
+    if (!row) fail(404, '需求不存在');
+    const { item, plan } = row;
     const roles = await projectRoles(who.userId, item.projectId);
     if (!roles.length) fail(403, '无权访问当前需求');
     const participants = await db
@@ -317,7 +345,14 @@ export async function registerWorkbench(
       );
     if (epochFor(who.authSessionId, id, item.projectId) > epoch)
       fail(401, '授权已变化');
-    const scope = { who, item, roles, sessions, epoch };
+    const scope = {
+      who,
+      item,
+      roles,
+      sessions,
+      epoch,
+      plan: plan ?? undefined,
+    };
     if (blocked(who.userId, item.projectId)) throw new PendingAuthority();
     if (stale(scope)) fail(401, '授权已变化');
     return scope;
@@ -328,9 +363,70 @@ export async function registerWorkbench(
     roles: string[];
     sessions: (typeof schema.nativeSession.$inferSelect)[];
     epoch: number;
+    plan?: DemandRepositories;
   };
+  async function worktreeReady(scope: Access) {
+    const { plan } = scope;
+    if (
+      plan &&
+      !(await worktreesFor(scope.item.projectId).ready(
+        scope.item.projectId,
+        scope.item.id,
+        plan,
+      ))
+    )
+      businessError(503, '需求工作树尚未就绪，请从需求档案核对');
+    if (stale(scope)) fail(401, '授权已变化');
+    return !!plan;
+  }
+  const canPrepare = (scope: Access) =>
+    scope.roles.some((role) =>
+      ['project_admin', 'requirement_manager'].includes(role),
+    );
+  async function workspaceResult(
+    scope: Access,
+    plan: DemandRepositories | undefined,
+  ): Promise<RequirementWorkspace> {
+    return {
+      state: !plan
+        ? 'unconfigured'
+        : (await worktreesFor(scope.item.projectId).ready(
+              scope.item.projectId,
+              scope.item.id,
+              plan,
+            ))
+          ? 'ready'
+          : 'pending',
+      canPrepare: !!plan && canPrepare(scope),
+      repositories: (plan ?? []).map(
+        ({ repositoryId, baseCommit, branch, worktreePath, gitStorePath }) => ({
+          repositoryId,
+          baseCommit,
+          branch,
+          worktreePath,
+          gitStorePath,
+        }),
+      ),
+    };
+  }
+  async function prepareWorktrees(
+    projectId: string,
+    id: string,
+    plan: DemandRepositories,
+  ) {
+    const driver = worktreesFor(projectId);
+    try {
+      await driver.prepare(projectId, id, plan);
+      return 'ready' as const;
+    } catch {
+      return (await driver.ready(projectId, id, plan))
+        ? ('ready' as const)
+        : ('pending' as const);
+    }
+  }
   async function prepared(scope: Access) {
     if (stale(scope)) fail(401, '授权已变化');
+    const existingOnly = await worktreeReady(scope);
     const runtime = await projects.get(scope.item.projectId);
     const address = app.server.address();
     if (address && typeof address !== 'string')
@@ -342,6 +438,7 @@ export async function registerWorkbench(
     const value = await runtime.native.workspace(
       scope.item.id,
       scope.item.title,
+      existingOnly,
     );
     if (stale(scope)) fail(401, '授权已变化');
     if (!scope.item.nativeWorkspaceId) {
@@ -1172,11 +1269,91 @@ export async function registerWorkbench(
     '/api/projects/:projectId/requirements',
     { schema: { body: RequirementInput } },
     async (request) => {
-      return business.create(
-        await actor(request.headers),
-        (request.params as { projectId: string }).projectId,
-        request.body as RequirementInput,
+      const epoch = authorizationEpoch;
+      const who = await actor(request.headers);
+      const { projectId } = request.params as { projectId: string };
+      const input = request.body as RequirementInput;
+      const confirm = () => assertResponse({ ...who, projectId, epoch });
+      let created = await business.findCreatedRequirement(
+        who,
+        projectId,
+        input,
       );
+      let baselines: Awaited<ReturnType<typeof mirrors.captureBaselines>> = [];
+      if (!created) {
+        try {
+          baselines = await mirrors.captureBaselines(projectId);
+        } catch {
+          created = await business.findCreatedRequirement(
+            who,
+            projectId,
+            input,
+          );
+          if (!created)
+            businessError(503, '暂未取得已验基线，请核对原创建操作');
+        }
+      }
+      confirm();
+      const { rows } = await db.execute(
+        sql`select to_regclass('public.requirement_worktree_plan') is not null as ready`,
+      );
+      if (!rows[0]?.ready) businessError(503, '请先升级需求工作树数据库结构');
+      const record = created
+        ? { ...created, first: false }
+        : await business.create(who, projectId, input, baselines, confirm);
+      const { plan } = await access(request.headers, record.id);
+      const state = plan
+        ? record.first
+          ? await prepareWorktrees(projectId, record.id, plan)
+          : (await worktreesFor(projectId).ready(projectId, record.id, plan))
+            ? 'ready'
+            : 'pending'
+        : undefined;
+      await business.findCreatedRequirement(who, projectId, input);
+      await access(request.headers, record.id);
+      confirm();
+      return state
+        ? { id: record.id, workspaceState: state }
+        : { id: record.id };
+    },
+  );
+  app.get<{ Params: { id: string } }>(
+    '/api/requirements/:id/worktrees',
+    async (request, reply) => {
+      reply.header('cache-control', 'no-store');
+      const scope = await access(request.headers, request.params.id);
+      const { plan } = scope;
+      const data = await workspaceResult(scope, plan);
+      const fresh = await access(request.headers, scope.item.id);
+      if (stale(scope)) fail(401, '授权已变化');
+      return { ...data, canPrepare: !!plan && canPrepare(fresh) };
+    },
+  );
+  app.post<{ Params: { id: string } }>(
+    '/api/requirements/:id/worktrees',
+    async (request, reply) => {
+      reply.header('cache-control', 'no-store');
+      if (
+        request.body !== undefined &&
+        (!isRecord(request.body) || Object.keys(request.body).length)
+      )
+        businessError(400, '工作树准备不接受外部参数');
+      const scope = await access(request.headers, request.params.id);
+      if (!canPrepare(scope)) businessError(403, '无权准备需求工作树');
+      const { plan } = scope;
+      if (!plan) businessError(409, '需求未登记冻结基线');
+      const admission = await access(request.headers, scope.item.id);
+      if (!canPrepare(admission) || stale(scope))
+        businessError(403, '需求工作树准备权限已变化');
+      const state = await prepareWorktrees(
+        scope.item.projectId,
+        scope.item.id,
+        plan,
+      );
+      const fresh = await access(request.headers, scope.item.id);
+      if (!canPrepare(fresh) || stale(scope))
+        businessError(403, '需求工作树准备权限已变化');
+      return { state };
     },
   );
   app.get('/api/requirements/:id', async (request) =>
@@ -1219,6 +1396,7 @@ export async function registerWorkbench(
     const assertOpen = () => {
       if (stale(scope)) fail(401, '授权已变化');
     };
+    await worktreeReady(scope);
     const runtime = await projects.get(scope.item.projectId);
     return runtime.sessions.execute(
       scope.who,
@@ -1767,6 +1945,8 @@ export async function registerWorkbench(
     for (const transfer of transfers) transfer.controller.abort();
     const statuses = await Promise.allSettled([
       mirrors.close(),
+      worktrees.close(),
+      providedWorktrees?.close(),
       projects.close(),
     ]);
     if (statuses.some((status) => status.status === 'rejected'))

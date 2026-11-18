@@ -23,6 +23,13 @@ export async function grantApplication(
     await client.query(
       `revoke update, delete on capability_template_revision from ${application}`,
     );
+    const hasPlan = await client.query(
+      "select to_regclass('public.requirement_worktree_plan') is not null as present",
+    );
+    if (hasPlan.rows[0]?.present)
+      await client.query(
+        `revoke update, delete on requirement_worktree_plan from ${application}`,
+      );
     await client.query('commit');
   } catch (error) {
     await client.query('rollback');

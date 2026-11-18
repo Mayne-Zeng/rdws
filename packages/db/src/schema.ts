@@ -132,6 +132,33 @@ export const requirementParticipant = pgTable(
   },
   (t) => [primaryKey({ columns: [t.requirementId, t.userId, t.role] })],
 );
+export const requirementWorktreePlan = pgTable(
+  'requirement_worktree_plan',
+  {
+    requirementId: text('requirement_id')
+      .primaryKey()
+      .references(() => requirement.id),
+    repositories: jsonb('repositories')
+      .$type<
+        {
+          repositoryId: string;
+          baseCommit: string;
+          baselineRef: string;
+          sourceBinding: string;
+          branch: string;
+          worktreePath: string;
+          gitStorePath: string;
+        }[]
+      >()
+      .notNull(),
+  },
+  (t) => [
+    check(
+      'requirement_worktree_plan_repositories',
+      sql`jsonb_typeof(${t.repositories}) = 'array' and jsonb_array_length(${t.repositories}) between 1 and 16`,
+    ),
+  ],
+);
 export const nativeSession = pgTable('native_session', {
   id: text('id').primaryKey(),
   requirementId: text('requirement_id')

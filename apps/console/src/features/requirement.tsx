@@ -12,6 +12,7 @@ import {
 } from '@rdws/contracts';
 import { Icon, api, roleLabels } from '../lib/ui.tsx';
 import { Conversation } from './conversation.tsx';
+import { RequirementWorktrees } from './requirement-worktrees.tsx';
 import type { View } from './project.tsx';
 const stages = Object.keys(stageLabels) as Stage[];
 export function RequirementPage({ id, view }: { id: string; view: View }) {
@@ -269,6 +270,7 @@ export function RequirementPage({ id, view }: { id: string; view: View }) {
         </section>
       ) : (
         <>
+          <RequirementWorktrees id={id} />
           <section className="flow-panel">
             <div className="panel-heading">
               <h2>主线流程</h2>

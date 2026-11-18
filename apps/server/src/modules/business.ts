@@ -9,6 +9,7 @@ import type {
   TaskInput,
 } from '@rdws/contracts';
 import { capabilityKey } from '@rdws/contracts';
+import type { PublishedBaseline } from '../../../syncer/src/mirror.ts';
 type Database = ReturnType<typeof connectDatabase>['db'];
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 export type Actor = { userId: string; authSessionId: string };
@@ -80,6 +81,7 @@ export function createBusiness(db: Database) {
     projectId: string,
     targets: string[] = [],
     lock = false,
+    deferTargetValidation = false,
   ) {
     const sessions = tx
       .select()
@@ -103,7 +105,9 @@ export function createBusiness(db: Database) {
     const actor = users.find((u) => u.id === who.userId);
     if (!actor?.active || actor.authEpoch !== session.authEpoch)
       businessError(401, '账号已停用');
-    if (users.length !== ids.length || users.some((u) => !u.active))
+    const validTargets =
+      users.length === ids.length && users.every((u) => u.active);
+    if (!validTargets && !deferTargetValidation)
       businessError(400, '分派成员不存在或已停用');
     const roleQuery = tx
       .select()
@@ -121,7 +125,7 @@ export function createBusiness(db: Database) {
     const roles = await (lock ? roleQuery.for('share') : roleQuery);
     if (!roles.some((r) => r.userId === who.userId))
       businessError(403, '无权访问当前项目');
-    return { users, roles };
+    return { users, roles, session, validTargets };
   }
   async function scope(tx: Transaction, who: Actor, id: string, lock = false) {
     const query = tx
@@ -296,10 +300,58 @@ export function createBusiness(db: Database) {
     );
     return task!;
   }
+  const mayCreate = (roles: { userId: string; role: string }[], who: Actor) =>
+    roles.some(
+      (item) =>
+        item.userId === who.userId &&
+        ['project_admin', 'requirement_manager'].includes(item.role),
+    );
+
+  function createdRequirement(value: unknown) {
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      !('id' in value) ||
+      typeof value.id !== 'string' ||
+      !/^[a-f0-9-]{36}$/.test(value.id)
+    )
+      businessError(409, '原需求创建结果无法核实');
+    return { id: value.id };
+  }
+
+  async function findCreatedRequirement(
+    who: Actor,
+    projectId: string,
+    input: RequirementInput,
+  ) {
+    return db.transaction(async (tx) => {
+      const { roles, session } = await identity(tx, who, projectId);
+      if (!mayCreate(roles, who)) businessError(403, '无权创建需求');
+      const [receipt] = await tx
+        .select()
+        .from(schema.commandReceipt)
+        .where(
+          and(
+            eq(schema.commandReceipt.actorId, who.userId),
+            eq(schema.commandReceipt.scope, 'project:' + projectId),
+            eq(schema.commandReceipt.operation, 'requirement.create'),
+            eq(schema.commandReceipt.commandId, input.commandId),
+          ),
+        );
+      if (session.expiresAt <= new Date()) businessError(401, '登录已失效');
+      if (!receipt) return undefined;
+      if (receipt.digest !== digestOf(input))
+        businessError(409, '操作标识已用于不同内容，请重新发起');
+      return createdRequirement(receipt.result);
+    });
+  }
+
   async function create(
     who: Actor,
     projectId: string,
     input: RequirementInput,
+    baselines: PublishedBaseline[] = [],
+    confirm = () => {},
   ) {
     return transaction(async (tx) => {
       const targetIds = [
@@ -310,14 +362,20 @@ export function createBusiness(db: Database) {
           t.assigneeId ? [t.assigneeId] : [],
         ),
       ];
-      const { roles } = await identity(tx, who, projectId, targetIds, true);
-      const own = roles
-        .filter((r) => r.userId === who.userId)
-        .map((r) => r.role);
-      if (
-        !own.some((r) => r === 'project_admin' || r === 'requirement_manager')
-      )
-        businessError(403, '无权创建需求');
+      const admission = await identity(
+        tx,
+        who,
+        projectId,
+        targetIds,
+        true,
+        true,
+      );
+      if (!mayCreate(admission.roles, who)) businessError(403, '无权创建需求');
+      const current = () => {
+        if (admission.session.expiresAt <= new Date())
+          businessError(401, '登录已失效');
+        confirm();
+      };
       const receipt = await reserve(
         tx,
         who,
@@ -326,7 +384,18 @@ export function createBusiness(db: Database) {
         input.commandId,
         input,
       );
-      if ('result' in receipt) return receipt.result;
+      current();
+      if ('result' in receipt)
+        return { ...createdRequirement(receipt.result), first: false };
+      if (!admission.validTargets) businessError(400, '分派成员不存在或已停用');
+      const { roles } = admission;
+      const own = roles
+        .filter((r) => r.userId === who.userId)
+        .map((r) => r.role);
+      if (
+        !own.some((r) => r === 'project_admin' || r === 'requirement_manager')
+      )
+        businessError(403, '无权创建需求');
       const participants: { userId: string; role: string }[] = [];
       const add = (userId: string, role: string) => {
         if (!participants.some((p) => p.userId === userId && p.role === role))
@@ -365,6 +434,16 @@ export function createBusiness(db: Database) {
         leadId: input.leadId,
         createdBy: who.userId,
       });
+      if (baselines.length)
+        await tx.insert(schema.requirementWorktreePlan).values({
+          requirementId: id,
+          repositories: baselines.map((entry) => ({
+            ...entry,
+            branch: 'rdws/' + id + '/' + entry.repositoryId,
+            worktreePath: 'worktrees/' + entry.repositoryId,
+            gitStorePath: '.gitstore/' + entry.repositoryId + '.git',
+          })),
+        });
       await tx
         .insert(schema.requirementParticipant)
         .values(participants.map((p) => ({ ...p, requirementId: id })));
@@ -390,7 +469,9 @@ export function createBusiness(db: Database) {
           participants,
           roles,
         );
-      return finish(tx, receipt.value, { id });
+      await finish(tx, receipt.value, { id });
+      current();
+      return { id, first: true };
     });
   }
   async function execute(who: Actor, id: string, input: BusinessCommand) {
@@ -1114,6 +1195,7 @@ export function createBusiness(db: Database) {
   }
   return {
     create,
+    findCreatedRequirement,
     execute,
     read,
     sessionTransaction,

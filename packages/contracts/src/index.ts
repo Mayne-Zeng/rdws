@@ -47,6 +47,18 @@ export interface SessionHistoryPage {
     outcome?: string;
   }[];
 }
+export interface RequirementWorktree {
+  repositoryId: string;
+  baseCommit: string;
+  branch: string;
+  worktreePath: string;
+  gitStorePath: string;
+}
+export interface RequirementWorkspace {
+  state: 'unconfigured' | 'pending' | 'ready';
+  canPrepare: boolean;
+  repositories: RequirementWorktree[];
+}
 export const stageLabels = {
   intake: '录入',
   assignment: '指派',

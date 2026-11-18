@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   open,
+  opendir,
   readdir,
   rename,
   rm,
@@ -34,6 +35,12 @@ import {
 import { mirrorGit, MirrorGitError } from './git.ts';
 
 const oid = /^[0-9a-f]{40}$/;
+export type PublishedBaseline = {
+  repositoryId: string;
+  baselineRef: string;
+  baseCommit: string;
+  sourceBinding: string;
+};
 const digest = (value: string | Buffer) =>
   createHash('sha256').update(value).digest('hex');
 const bareConfig =
@@ -103,7 +110,11 @@ async function published(
   sources: string,
   project: string,
   row: RegisteredRepository,
-  options: { groupLog?: string; signal?: AbortSignal } = {},
+  options: {
+    groupLog?: string;
+    signal?: AbortSignal;
+    inspectObjects?: boolean;
+  } = {},
 ) {
   const name = row.id + '.git',
     path = join(sources, name);
@@ -144,7 +155,7 @@ async function published(
       if (entry === 'info' || entry === 'pack') continue;
       if (!/^[0-9a-f]{2}$/.test(entry)) throw new MirrorRequestError('blocked');
       const fanout = await safeDirectory(objects, [entry]);
-      if (options.groupLog) {
+      if (options.groupLog || options.inspectObjects) {
         for (const object of await readdir(fanout)) {
           const stat = await lstat(join(fanout, object));
           if (!stat.isFile() || !/^[0-9a-f]{38}$/.test(object))
@@ -218,6 +229,107 @@ export class RepositoryMirrors {
   private readonly running = new Set<string>();
 
   constructor(private readonly root: string) {}
+
+  async captureBaselines(project: string): Promise<PublishedBaseline[]> {
+    const { entries } = await repositories(this.root, project);
+    if (!entries.length) return [];
+    const sources = await this.sourceDirectory(project);
+    const baselines = [];
+    for (const row of entries) {
+      const baseCommit = await this.verifiedTip(sources, project, row);
+      baselines.push({
+        repositoryId: row.id,
+        baselineRef: row.baselineRef,
+        baseCommit,
+        sourceBinding: boundTo(project, row),
+      });
+    }
+    return baselines;
+  }
+
+  async frozenSource(
+    project: string,
+    baseline: PublishedBaseline,
+    options: { signal?: AbortSignal; groupLog?: string } = {},
+  ) {
+    const { entries } = await repositories(this.root, project);
+    const row = entries.find((entry) => entry.id === baseline.repositoryId);
+    if (
+      !row ||
+      row.baselineRef !== baseline.baselineRef ||
+      boundTo(project, row) !== baseline.sourceBinding ||
+      !oid.test(baseline.baseCommit)
+    )
+      throw new MirrorRequestError('blocked');
+    const sources = await this.sourceDirectory(project);
+    const tip = await this.verifiedTip(sources, project, row, options);
+    const path = join(sources, row.id + '.git');
+    if (tip !== baseline.baseCommit) {
+      await this.requirePublication(
+        sources,
+        row,
+        baseline.sourceBinding,
+        baseline.baseCommit,
+      );
+      await mirrorGit(
+        path,
+        ['merge-base', '--is-ancestor', baseline.baseCommit, tip],
+        { ...options, timeout: 5000 },
+      );
+    }
+    return path;
+  }
+
+  private sourceDirectory(project: string) {
+    return safeDirectory(this.root, ['projects', project, 'sources']);
+  }
+
+  private async requirePublication(
+    sources: string,
+    row: RegisteredRepository,
+    binding: string,
+    commit: string,
+  ) {
+    const dir = await safeDirectory(sources, ['.' + row.id + '.state']);
+    for await (const file of await opendir(dir)) {
+      if (!file.isFile() || !/^[0-9a-f]{64}\.json$/.test(file.name)) continue;
+      const saved = await receipt(join(dir, file.name));
+      if (
+        saved?.binding === binding &&
+        saved.result?.status === 'succeeded' &&
+        saved.result.candidateCommit === commit &&
+        /^SHA256:[A-Za-z0-9+/]+={0,2}$/.test(
+          saved.result.signerFingerprint ?? '',
+        )
+      )
+        return;
+    }
+    throw new MirrorRequestError('blocked');
+  }
+
+  private async verifiedTip(
+    sources: string,
+    project: string,
+    row: RegisteredRepository,
+    options: { signal?: AbortSignal; groupLog?: string } = {},
+  ) {
+    const lock = join(sources, '.' + row.id + '.lock');
+    if (await exists(lock)) throw new MirrorRequestError('busy');
+    const first = await published(sources, project, row, {
+      ...options,
+      signal: options.signal ?? this.stop.signal,
+      inspectObjects: true,
+    });
+    if (!first) throw new MirrorRequestError('missing');
+    await this.requirePublication(sources, row, boundTo(project, row), first);
+    const confirmed = await readOwned(
+      join(sources, row.id + '.git', row.baselineRef),
+      64,
+    );
+    if (confirmed.toString().trim() !== first || (await exists(lock)))
+      throw new MirrorRequestError('busy');
+    return first;
+  }
 
   async list(project: string): Promise<RepositorySummary[]> {
     const { entries } = await repositories(this.root, project);

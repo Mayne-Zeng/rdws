@@ -203,6 +203,114 @@ test('a first definite create rejection allows corrected content and a new comma
   expect(bodies[0]!.commandId).not.toBe(bodies[1]!.commandId);
 });
 
+test('a definite validation failure resolves a pending create', async ({
+  page,
+}) => {
+  await page.goto('/?project=poc&view=create');
+  const title = page.getByLabel('需求标题', { exact: true });
+  await title.fill('Pending local fixture');
+  await page
+    .getByLabel('开发负责人', { exact: true })
+    .selectOption({ label: 'lead' });
+  let attempts = 0;
+  await page.route('**/api/projects/poc/requirements', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    attempts++;
+    await route.fulfill({
+      status: attempts === 1 ? 503 : 400,
+      json: { error: attempts === 1 ? '暂不能核对' : '分派成员已停用' },
+    });
+  });
+  await page.getByRole('button', { name: '创建需求', exact: true }).click();
+  const retry = page.getByRole('button', { name: '重试原操作', exact: true });
+  await expect(retry).toBeVisible();
+  await retry.click();
+  await expect(page.getByText('分派成员已停用')).toBeVisible();
+  await expect(title).toBeEnabled();
+});
+
+test('a lost create acknowledgement survives reload and worktree preparation is retriable', async ({
+  page,
+}) => {
+  await page.goto('/?project=poc&view=create');
+  const title = 'Worktree recovery ' + randomUUID();
+  await page.getByLabel('需求标题', { exact: true }).fill(title);
+  await page
+    .getByLabel('开发负责人', { exact: true })
+    .selectOption({ label: 'lead' });
+  const bodies: string[] = [];
+  let id = '';
+  let prepared = false;
+  await page.route('**/api/projects/poc/requirements', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    bodies.push(route.request().postData()!);
+    if (bodies.length > 1) return route.continue();
+    const response = await route.fetch();
+    expect(response.status()).toBe(200);
+    id = (await response.json()).id;
+    await route.fulfill({ status: 401, json: { error: '创建回执暂不可读' } });
+  });
+  await page.route('**/api/requirements/*/worktrees', async (route) => {
+    if (
+      id &&
+      new URL(route.request().url()).pathname ===
+        '/api/requirements/' + id + '/worktrees'
+    ) {
+      if (route.request().method() === 'POST') {
+        prepared = true;
+        return route.fulfill({ json: { state: 'ready' } });
+      }
+      return route.fulfill({
+        json: {
+          state: prepared ? 'ready' : 'pending',
+          canPrepare: true,
+          repositories: [
+            {
+              repositoryId: 'fixture',
+              baseCommit: 'a'.repeat(40),
+              branch: 'rdws/' + id + '/fixture',
+              worktreePath: 'worktrees/fixture',
+              gitStorePath: '.gitstore/fixture.git',
+            },
+          ],
+        },
+      });
+    }
+    return route.continue();
+  });
+  await page.getByRole('button', { name: '创建需求', exact: true }).click();
+  const retry = page.getByRole('button', { name: '重试原操作', exact: true });
+  await expect(retry).toBeVisible();
+  await page.reload();
+  await expect(page.getByText('有一条需求创建命令待核对。')).toBeVisible();
+  await retry.click();
+  await expect(
+    page.getByRole('heading', { name: title, exact: true }),
+  ).toBeVisible();
+  expect(bodies).toHaveLength(2);
+  expect(bodies[0]).toBe(bodies[1]);
+  expect(new URL(page.url()).searchParams.get('requirement')).toBe(id);
+  const workspace = page.getByRole('region', { name: '需求工作树' });
+  await expect(workspace.getByText('待准备', { exact: true })).toBeVisible();
+  await workspace.getByRole('button', { name: '重试准备工作树' }).click();
+  await expect(workspace.getByText('已就绪', { exact: true })).toBeVisible();
+  await expect(workspace.getByText('worktrees/fixture')).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 900 });
+  for (const colorScheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme });
+    await expect(page.locator('html')).toHaveAttribute(
+      'theme-mode',
+      colorScheme,
+    );
+    await expect(workspace.getByText('worktrees/fixture')).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+  }
+});
+
 test('mobile navigation contains keyboard focus and tabs support arrows', async ({
   page,
   baseURL,

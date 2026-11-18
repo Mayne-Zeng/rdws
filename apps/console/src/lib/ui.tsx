@@ -67,6 +67,7 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
   if (!response.ok)
     throw Object.assign(new Error(value.error ?? '服务暂时不可用，请重试'), {
       resultUnknown: response.status >= 500,
+      status: response.status,
     });
   return value as T;
 }

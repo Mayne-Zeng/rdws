@@ -5,15 +5,25 @@ import { Icon, api, roleLabels } from '../lib/ui.tsx';
 import type { Project } from './project.tsx';
 export function RequirementForm({
   project,
+  userId,
   onProtectedChange,
   onClose,
   onCreated,
 }: {
   project: Project;
+  userId: string;
   onProtectedChange: (value: boolean) => void;
   onClose: () => void;
   onCreated: (id: string) => Promise<void>;
 }) {
+  const storageKey = 'rdws:requirement-create:' + userId + ':' + project.id;
+  const [initial] = useState(() => {
+    try {
+      return sessionStorage.getItem(storageKey) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  });
   const [title, setTitle] = useState(''),
     [description, setDescription] = useState(''),
     [acceptance, setAcceptance] = useState(''),
@@ -26,11 +36,11 @@ export function RequirementForm({
     >([]),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false),
-    [uncertain, setUncertain] = useState(false);
+    [uncertain, setUncertain] = useState(!!initial);
   const running = useRef(false),
     live = useRef(true),
     commandId = useRef(crypto.randomUUID()),
-    payload = useRef<string | undefined>(undefined);
+    payload = useRef<string | undefined>(initial);
   useEffect(() => {
     onProtectedChange(busy || uncertain);
   }, [busy, uncertain, onProtectedChange]);
@@ -71,15 +81,27 @@ export function RequirementForm({
         ...(t.assigneeId ? { assigneeId: t.assigneeId } : {}),
       })),
     });
+    const submitted = payload.current;
+    function persist(value?: string) {
+      try {
+        if (value) sessionStorage.setItem(storageKey, value);
+        else if (sessionStorage.getItem(storageKey) === submitted)
+          sessionStorage.removeItem(storageKey);
+      } catch {
+        return;
+      }
+    }
+    persist(submitted);
     try {
       const result = await api<{ id: string }>(
         `/api/projects/${project.id}/requirements`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: payload.current,
+          body: submitted,
         },
       );
+      persist();
       if (live.current) {
         setUncertain(false);
         await onCreated(result.id);
@@ -87,10 +109,15 @@ export function RequirementForm({
     } catch (e) {
       if (live.current) {
         setError((e as Error).message);
+        const issue = e as { resultUnknown?: boolean; status?: number };
         const unknown =
-          (e as { resultUnknown?: boolean }).resultUnknown === true;
-        setUncertain((current) => current || unknown);
-        if (!uncertain && !unknown) {
+          issue.resultUnknown === true ||
+          issue.status === 401 ||
+          issue.status === 403;
+        const keep = unknown || (uncertain && issue.status !== 400);
+        setUncertain(keep);
+        if (!keep) {
+          persist();
           payload.current = undefined;
           commandId.current = crypto.randomUUID();
         }
@@ -119,6 +146,11 @@ export function RequirementForm({
         </div>
       </div>
       <form onSubmit={submit} className="business-form">
+        {initial && uncertain && (
+          <p className="muted" role="status">
+            有一条需求创建命令待核对。
+          </p>
+        )}
         <fieldset className="form-fields" disabled={busy || uncertain}>
           <div className="form-section">
             <h2>需求信息</h2>
@@ -277,7 +309,7 @@ export function RequirementForm({
         )}
         {uncertain && (
           <p className="muted" role="status">
-            创建结果尚未确认，已保留本次内容。请重试原操作核对结果；刷新或离开页面会丢失本地核对信息。
+            创建结果尚未确认，请重试原操作。保存在当前浏览器标签页的命令可在刷新后用同一账号和项目核对。
           </p>
         )}
         {error && <Alert theme="error" message={error} />}

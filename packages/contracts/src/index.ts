@@ -141,6 +141,70 @@ export interface RequirementDetailsReceipt {
   changed: boolean;
   contextVersion: number;
 }
+export const personnelRoles = [
+  'requirement_manager',
+  'developer',
+  'tester',
+] as const;
+export type PersonnelRole = (typeof personnelRoles)[number];
+const PersonId = Type.String({
+  minLength: 1,
+  maxLength: 128,
+  pattern: '^[A-Za-z0-9_-]+$',
+});
+const PersonnelRoleChange = Type.Object(
+  {
+    userId: PersonId,
+    role: Type.Unsafe<PersonnelRole>(
+      Type.Union(personnelRoles.map((role) => Type.Literal(role))),
+    ),
+  },
+  { additionalProperties: false },
+);
+export const RequirementPersonnelInput = Type.Object(
+  {
+    commandId: Type.String({ format: 'uuid' }),
+    previewLeadId: PersonId,
+    leadId: PersonId,
+    add: Type.Array(PersonnelRoleChange, { maxItems: 50 }),
+    remove: Type.Array(PersonnelRoleChange, { maxItems: 50 }),
+    taskDigest: Type.String({ pattern: '^[a-f0-9]{64}$' }),
+    handoffs: Type.Array(
+      Type.Object(
+        { fromId: PersonId, toId: PersonId },
+        { additionalProperties: false },
+      ),
+      { maxItems: 51 },
+    ),
+    overrides: Type.Array(
+      Type.Object(
+        { taskId: Type.String({ format: 'uuid' }), toId: PersonId },
+        { additionalProperties: false },
+      ),
+      { maxItems: 80 },
+    ),
+  },
+  { additionalProperties: false },
+);
+export type RequirementPersonnelInput = Static<
+  typeof RequirementPersonnelInput
+>;
+export interface RequirementPersonnelReceipt {
+  commandId: string;
+  status: 'saved' | 'unchanged' | 'stale' | 'invalid';
+  contextVersion: number;
+  revocation: 'none' | 'confirmed' | 'lease-expiry' | 'previously-recorded';
+}
+export interface RequirementPersonnelCandidates {
+  members: { id: string; name: string; role: PersonnelRole }[];
+}
+export function taskAssignmentMaterial(
+  tasks: readonly { id: string; assigneeId: string }[],
+) {
+  return JSON.stringify(
+    tasks.map(({ id, assigneeId }) => [id, assigneeId]).sort(),
+  );
+}
 export const BusinessCommand = Type.Union([
   Type.Object(
     {
@@ -215,6 +279,7 @@ export interface RequirementDetail {
   reachedStages: string[];
   requirement: RequirementSummary;
   tasks: TaskRecord[];
+  assignmentNames?: Record<string, string>;
   participants: {
     id: string;
     name: string;

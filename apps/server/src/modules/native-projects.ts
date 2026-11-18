@@ -17,7 +17,12 @@ export function createProjectRuntimes(
   provided: NativeWebHost | undefined,
   db: Database,
   business: Business,
-  closingLogin: (id: string, userId: string, projectId: string) => boolean,
+  closingLogin: (
+    id: string,
+    userId: string,
+    projectId: string,
+    requirementId: string,
+  ) => boolean,
   nativeProfiles?: ReadonlyMap<string, string>,
 ) {
   const pending = new Map<string, Promise<ProjectRuntime>>();
@@ -37,7 +42,8 @@ export function createProjectRuntimes(
             businessError(403, '运行归属与项目不匹配');
           return contextSnapshot(data);
         },
-        (id, userId) => closingLogin(id, userId, project),
+        (id, userId, requirementId) =>
+          closingLogin(id, userId, project, requirementId),
       ),
       acceptedPrompts: new Map<string, number>(),
       abandonedRuns: new Set<string>(),

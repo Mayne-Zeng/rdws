@@ -109,7 +109,11 @@ export class ContextRuns {
       sessionId: string,
       relatedActors?: Actor[],
     ) => Promise<unknown>,
-    private closing: (authSessionId: string, userId: string) => boolean,
+    private closing: (
+      authSessionId: string,
+      userId: string,
+      requirementId: string,
+    ) => boolean,
   ) {}
   admit(
     who: Actor,
@@ -119,7 +123,7 @@ export class ContextRuns {
     peerNonce: string,
   ): RunBinding {
     if (
-      this.closing(who.authSessionId, who.userId) ||
+      this.closing(who.authSessionId, who.userId, requirementId) ||
       !requestId ||
       requestId.length > 128
     )
@@ -172,9 +176,13 @@ export class ContextRuns {
       )
         this.runs.delete(id);
   }
-  revokeUser(userId: string) {
+  revokeUser(userId: string, requirementId?: string) {
     for (const [id, r] of this.runs)
-      if (r.who.userId === userId) this.runs.delete(id);
+      if (
+        r.who.userId === userId &&
+        (!requirementId || r.requirementId === requirementId)
+      )
+        this.runs.delete(id);
   }
   clear() {
     this.runs.clear();
@@ -238,7 +246,11 @@ export class ContextRuns {
       if (
         !related ||
         related.expiresAt <= now ||
-        this.closing(related.who.authSessionId, related.who.userId) ||
+        this.closing(
+          related.who.authSessionId,
+          related.who.userId,
+          related.requirementId,
+        ) ||
         Object.entries(this.binding(related)).some(
           ([key, value]) => binding[key] !== value,
         ) ||
@@ -257,7 +269,7 @@ export class ContextRuns {
     if (
       !run ||
       run.expiresAt <= now ||
-      this.closing(run.who.authSessionId, run.who.userId) ||
+      this.closing(run.who.authSessionId, run.who.userId, run.requirementId) ||
       Object.entries(this.binding(run)).some(
         ([key, value]) => input[key] !== value,
       ) ||
@@ -288,7 +300,7 @@ export class ContextRuns {
       batch.some(
         (r) =>
           this.runs.get(r.runId) !== r ||
-          this.closing(r.who.authSessionId, r.who.userId) ||
+          this.closing(r.who.authSessionId, r.who.userId, r.requirementId) ||
           r.expiresAt <= Date.now(),
       )
     )

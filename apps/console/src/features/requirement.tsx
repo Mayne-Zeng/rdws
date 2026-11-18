@@ -14,12 +14,18 @@ import { Icon, api, roleLabels } from '../lib/ui.tsx';
 import { Conversation } from './conversation.tsx';
 import { RequirementWorktrees } from './requirement-worktrees.tsx';
 import { RequirementTemplate } from './requirement-template.tsx';
+import { RequirementPersonnel } from './requirement-personnel.tsx';
 import {
   RequirementDetailsEditor,
   detailFieldLabels,
 } from './requirement-details-editor.tsx';
 import type { View } from './project.tsx';
 const stages = Object.keys(stageLabels) as Stage[];
+function assignmentOf(value: unknown) {
+  if (!value || typeof value !== 'object' || !('assigneeId' in value))
+    return undefined;
+  return typeof value.assigneeId === 'string' ? value.assigneeId : undefined;
+}
 export function RequirementPage({
   id,
   view,
@@ -49,6 +55,11 @@ export function RequirementPage({
     scope: string;
     changed: boolean;
   }>();
+  const [personnelReceipt, setPersonnelReceipt] = useState<{
+    scope: string;
+    text: string;
+    saved?: boolean;
+  }>();
   const status = (detail.error as { status?: number } | null)?.status;
   const editAuthorityLost =
     status === 401 ||
@@ -59,7 +70,10 @@ export function RequirementPage({
       (!detail.data.permissions.canEditDetails ||
         detail.data.permissions.userId !== userId));
   useEffect(() => {
-    if (editAuthorityLost || view !== 'overview') setDetailsReceipt(undefined);
+    if (editAuthorityLost || view !== 'overview') {
+      setDetailsReceipt(undefined);
+      setPersonnelReceipt(undefined);
+    }
   }, [editAuthorityLost, view]);
   const receiptNotice = view === 'overview' &&
     !editAuthorityLost &&
@@ -70,7 +84,18 @@ export function RequirementPage({
           : '原保存已确认，资料未发生变化。'}
       </p>
     );
+  const personnelNotice = view === 'overview' &&
+    !editAuthorityLost &&
+    personnelReceipt?.scope === detailsScope && (
+      <p
+        className={personnelReceipt.saved ? 'save-notice' : 'muted'}
+        role="status"
+      >
+        {personnelReceipt.text}
+      </p>
+    );
   const [editing, setEditing] = useState<TaskRecord | 'new'>(),
+    [openingStatus, setOpeningStatus] = useState<TaskStatus>(),
     [error, setError] = useState(''),
     [notice, setNotice] = useState(''),
     [busy, setBusy] = useState(false),
@@ -104,6 +129,7 @@ export function RequirementPage({
       retry.current = undefined;
       setUncertain(false);
       setEditing(undefined);
+      setOpeningStatus(undefined);
       setNotice(
         r.changed
           ? '已保存，需求会话将在下一步使用最新信息。'
@@ -126,6 +152,7 @@ export function RequirementPage({
     return (
       <>
         {receiptNotice}
+        {personnelNotice}
         <div className="inline-feedback" role="alert">
           <Alert theme="error" message={detail.error.message} />
           <Button
@@ -141,8 +168,27 @@ export function RequirementPage({
     );
   const data = detail.data,
     r = data.requirement,
-    names = new Map(data.participants.map((p) => [p.id, p.name])),
+    names = new Map([
+      ...Object.entries(data.assignmentNames ?? {}),
+      ...data.participants.map((p): [string, string] => [p.id, p.name]),
+    ]),
     next = stages[stages.indexOf(r.stage) + 1];
+  const canEdit =
+    detail.isFetchedAfterMount &&
+    data.permissions.userId === userId &&
+    data.permissions.canEditDetails;
+  function taskActivity(before: unknown, after: unknown) {
+    const previous = assignmentOf(before),
+      current = assignmentOf(after);
+    return previous && current && previous !== current
+      ? ` 将子任务从「${names.get(previous) ?? '原负责人'}」改派给「${names.get(current) ?? '接手人'}」`
+      : ' 更新了子任务与分派';
+  }
+  const refreshDetails = () =>
+    Promise.all([
+      detail.refetch(),
+      client.invalidateQueries({ queryKey: ['requirements'] }),
+    ]);
   const reached = new Set(data.reachedStages);
   const stage = (value: Stage) =>
     void mutate({
@@ -150,7 +196,11 @@ export function RequirementPage({
       type: 'requirement.stage',
       stage: value,
     });
-  if (editing)
+  function openTaskEditor(task: TaskRecord | 'new', status?: TaskStatus) {
+    setEditing(task);
+    setOpeningStatus(status);
+  }
+  if (editing && data.permissions.canManageTasks)
     return (
       <TaskForm
         key={editing === 'new' ? 'new' : editing.id}
@@ -159,6 +209,7 @@ export function RequirementPage({
         busy={busy}
         error={error}
         uncertain={uncertain}
+        openingStatus={openingStatus}
         onRetry={() => retry.current && void mutate(retry.current)}
         onClose={() => setEditing(undefined)}
         onSave={(patch, commandId) => {
@@ -400,6 +451,7 @@ export function RequirementPage({
                 </dd>
               </dl>
               {receiptNotice}
+              {personnelNotice}
               <RequirementDetailsEditor
                 key={detailsScope}
                 requirement={r}
@@ -412,16 +464,21 @@ export function RequirementPage({
                       : undefined,
                   )
                 }
-                canEdit={
-                  detail.isFetchedAfterMount &&
-                  data.permissions.userId === userId &&
-                  data.permissions.canEditDetails
-                }
-                refresh={() =>
-                  Promise.all([
-                    detail.refetch(),
-                    client.invalidateQueries({ queryKey: ['requirements'] }),
-                  ])
+                canEdit={canEdit}
+                refresh={refreshDetails}
+              />
+              <RequirementPersonnel
+                key={'personnel:' + detailsScope}
+                data={data}
+                userId={userId}
+                sessionId={sessionId}
+                projectId={projectId}
+                canEdit={canEdit}
+                refresh={refreshDetails}
+                onReceipt={(text, saved) =>
+                  setPersonnelReceipt(
+                    text ? { scope: detailsScope, text, saved } : undefined,
+                  )
                 }
               />
             </div>
@@ -438,7 +495,7 @@ export function RequirementPage({
                 <Button
                   tag="button"
                   variant="outline"
-                  onClick={() => setEditing('new')}
+                  onClick={() => openTaskEditor('new')}
                   disabled={busy}
                 >
                   <Icon name="plus" />
@@ -471,14 +528,30 @@ export function RequirementPage({
                       aria-label={t.title + ' 状态'}
                       value={t.status}
                       disabled={busy}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        const status = e.target.value as TaskStatus;
+                        const reopening =
+                          (t.status === 'done' || t.status === 'cancelled') &&
+                          (status === 'todo' || status === 'in_progress');
+                        if (
+                          reopening &&
+                          data.permissions.canManageTasks &&
+                          !data.participants.some(
+                            (person) =>
+                              person.id === t.assigneeId &&
+                              person.eligibleDeveloper,
+                          )
+                        ) {
+                          openTaskEditor(t, status);
+                          return;
+                        }
                         void mutate({
                           commandId: crypto.randomUUID(),
                           type: 'task.update',
                           taskId: t.id,
-                          patch: { status: e.target.value as TaskStatus },
-                        })
-                      }
+                          patch: { status },
+                        });
+                      }}
                     >
                       {Object.entries(taskStatusLabels).map(([v, l]) => (
                         <option key={v} value={v}>
@@ -494,7 +567,7 @@ export function RequirementPage({
                       tag="button"
                       variant="text"
                       aria-label={'编辑子任务 ' + t.title}
-                      onClick={() => setEditing(t)}
+                      onClick={() => openTaskEditor(t)}
                       disabled={busy}
                     >
                       编辑
@@ -529,13 +602,15 @@ export function RequirementPage({
                         ? ` 将阶段从「${stageLabels[e.before as Stage] ?? String(e.before)}」调整至「${stageLabels[e.after as Stage] ?? String(e.after)}」`
                         : e.kind === 'requirement.details'
                           ? ` 更新了需求资料${e.changedFields?.length ? ` · ${e.changedFields.map((field) => detailFieldLabels[field]).join('、')}` : ''}`
-                          : e.kind === 'task.created'
-                            ? ' 创建了子任务'
-                            : e.kind === 'task.updated'
-                              ? ' 更新了子任务与分派'
-                              : e.kind === 'requirement.created'
-                                ? ' 创建了需求与初始分工'
-                                : ' 初始化需求阶段'}
+                          : e.kind === 'requirement.personnel'
+                            ? ' 变更了需求人员与分工'
+                            : e.kind === 'task.created'
+                              ? ' 创建了子任务'
+                              : e.kind === 'task.updated'
+                                ? taskActivity(e.before, e.after)
+                                : e.kind === 'requirement.created'
+                                  ? ' 创建了需求与初始分工'
+                                  : ' 初始化需求阶段'}
                     </span>
                   </div>
                   <time>
@@ -564,6 +639,7 @@ function TaskForm({
   onRetry,
   onClose,
   onSave,
+  openingStatus,
 }: {
   value?: TaskRecord;
   data: RequirementDetail;
@@ -572,12 +648,14 @@ function TaskForm({
   uncertain: boolean;
   onRetry: () => void;
   onClose: () => void;
+  openingStatus?: TaskStatus;
   onSave: (
     patch: {
       title?: string;
       description?: string;
       acceptance?: string;
       assigneeId?: string;
+      status?: TaskStatus;
     },
     commandId: string,
   ) => void;
@@ -589,9 +667,24 @@ function TaskForm({
       value?.assigneeId ?? data.requirement.leadId,
     );
   const intentId = useRef(crypto.randomUUID());
+  const developers = data.participants.filter(
+    (person) => person.eligibleDeveloper,
+  );
+  const historical =
+    value && !developers.some((person) => person.id === value.assigneeId);
+  const eligible = developers.some((person) => person.id === assigneeId);
+  const eligibleSelection =
+    eligible || (!openingStatus && assigneeId === value?.assigneeId);
   function submit(e: FormEvent) {
     e.preventDefault();
-    const all = { title, description, acceptance, assigneeId };
+    if (!eligibleSelection) return;
+    const all = {
+      title,
+      description,
+      acceptance,
+      assigneeId,
+      ...(openingStatus ? { status: openingStatus } : {}),
+    };
     const patch = value
       ? Object.fromEntries(
           Object.entries(all).filter(
@@ -640,18 +733,32 @@ function TaskForm({
             rows={3}
           />
           <label htmlFor="task-owner">任务负责人</label>
+          {openingStatus && (
+            <p className="muted">
+              选择有效接手人后，将任务状态改为{taskStatusLabels[openingStatus]}
+              。
+            </p>
+          )}
           <select
             id="task-owner"
-            value={assigneeId}
+            value={
+              eligible || assigneeId === value?.assigneeId ? assigneeId : ''
+            }
             onChange={(e) => setAssigneeId(e.target.value)}
           >
-            {data.participants
-              .filter((p) => p.eligibleDeveloper)
-              .map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
+            <option value="" disabled>
+              选择有效负责人
+            </option>
+            {historical && (
+              <option value={value.assigneeId} disabled>
+                原负责人已失效
+              </option>
+            )}
+            {developers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
           </select>
         </fieldset>
         {error && (
@@ -672,7 +779,7 @@ function TaskForm({
             tag="button"
             type="submit"
             loading={busy}
-            disabled={!title.trim() || !assigneeId || uncertain}
+            disabled={!title.trim() || !eligibleSelection || uncertain}
           >
             保存子任务
           </Button>

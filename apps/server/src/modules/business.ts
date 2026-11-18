@@ -13,13 +13,37 @@ import type {
   CapabilityVersion,
   RequirementDetailsInput,
   RequirementDetailsReceipt,
+  RequirementPersonnelInput,
+  RequirementPersonnelReceipt,
 } from '@rdws/contracts';
-import { capabilityKey } from '@rdws/contracts';
+import { capabilityKey, taskAssignmentMaterial } from '@rdws/contracts';
 import type { PublishedBaseline } from '../../../syncer/src/mirror.ts';
 type Database = ReturnType<typeof connectDatabase>['db'];
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 export type Actor = { userId: string; authSessionId: string };
 export type RequirementAuthority = 'reader' | 'editor' | 'project-admin';
+type PersonnelResult = Omit<RequirementPersonnelReceipt, 'revocation'> & {
+  removedUserIds: string[];
+};
+const participantKey = ({ userId, role }: { userId: string; role: string }) =>
+  `${userId}:${role}`;
+export function normalizePersonnel(input: RequirementPersonnelInput) {
+  return {
+    ...input,
+    add: [...input.add].sort((a, b) =>
+      participantKey(a).localeCompare(participantKey(b)),
+    ),
+    remove: [...input.remove].sort((a, b) =>
+      participantKey(a).localeCompare(participantKey(b)),
+    ),
+    handoffs: [...input.handoffs].sort((a, b) =>
+      a.fromId.localeCompare(b.fromId),
+    ),
+    overrides: [...input.overrides].sort((a, b) =>
+      a.taskId.localeCompare(b.taskId),
+    ),
+  };
+}
 export function businessError(
   statusCode: number,
   publicMessage: string,
@@ -517,18 +541,34 @@ export function createBusiness(db: Database) {
       .where(eq(schema.requirement.id, id));
     if (!existing) businessError(404, '需求不存在');
     return transaction(async (tx) => {
+      const reopening =
+        input.type === 'task.update' &&
+        (input.patch.status === 'todo' || input.patch.status === 'in_progress');
+      const [preview] =
+        reopening && !input.patch.assigneeId
+          ? await tx
+              .select({ assigneeId: schema.task.assigneeId })
+              .from(schema.task)
+              .where(
+                and(
+                  eq(schema.task.id, input.taskId),
+                  eq(schema.task.requirementId, id),
+                ),
+              )
+          : [];
       const target =
         input.type === 'task.create'
           ? input.task.assigneeId
           : input.type === 'task.update'
-            ? input.patch.assigneeId
+            ? (input.patch.assigneeId ?? preview?.assigneeId)
             : undefined;
-      const { roles } = await identity(
+      const { roles, validTargets } = await identity(
         tx,
         who,
         existing.projectId,
         target ? [target] : [],
         true,
+        !!preview,
       );
       const state = await scope(tx, who, id, true);
       state.developer =
@@ -605,6 +645,23 @@ export function createBusiness(db: Database) {
           businessError(403, '只能更新本人子任务的状态');
         if (input.patch.assigneeId)
           validAssignee(input.patch.assigneeId, state.participants, roles);
+        if (
+          reopening &&
+          (task.status === 'done' || task.status === 'cancelled')
+        ) {
+          if (
+            !input.patch.assigneeId &&
+            task.assigneeId !== preview?.assigneeId
+          )
+            businessError(409, '子任务分派已变化，请重新读取');
+          if (!validTargets)
+            businessError(400, '原负责人已失效，请明确改派后再开启');
+          validAssignee(
+            input.patch.assigneeId ?? task.assigneeId,
+            state.participants,
+            roles,
+          );
+        }
         const patch = {
           ...input.patch,
           ...(input.patch.title ? { title: input.patch.title.trim() } : {}),
@@ -726,6 +783,258 @@ export function createBusiness(db: Database) {
       return receipt;
     });
   }
+  async function editPersonnel(
+    who: Actor,
+    projectId: string,
+    id: string,
+    input: RequirementPersonnelInput,
+    confirmAuthority: () => void,
+    fence: (removed: string[]) => void,
+  ): Promise<PersonnelResult | 'conflict'> {
+    const normalized = normalizePersonnel(input);
+    const {
+      commandId,
+      previewLeadId,
+      leadId,
+      add,
+      remove,
+      handoffs,
+      overrides,
+      taskDigest,
+    } = normalized;
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`set local lock_timeout='3s'`);
+      const targets = [
+        previewLeadId,
+        leadId,
+        ...add.map((p) => p.userId),
+        ...remove.map((p) => p.userId),
+        ...handoffs.flatMap((p) => [p.fromId, p.toId]),
+        ...overrides.map((p) => p.toId),
+      ];
+      const authority = await identity(tx, who, projectId, targets, true, true);
+      const state = await scope(tx, who, id, true, projectId);
+      if (!mayEditDetails(authority.roles, state.participants, who))
+        businessError(403, '无权维护当前需求人员');
+      const confirm = () => {
+        if (authority.session.expiresAt <= new Date())
+          businessError(401, '登录已失效，请重新登录');
+        confirmAuthority();
+      };
+      confirm();
+      const reservation = await reserve(
+        tx,
+        who,
+        'requirement:' + id,
+        'requirement.personnel',
+        commandId,
+        normalized,
+      ).catch((error: unknown) => {
+        if ((error as { statusCode?: number }).statusCode === 409)
+          return 'conflict' as const;
+        throw error;
+      });
+      confirm();
+      if (reservation === 'conflict') return reservation;
+      if ('result' in reservation) return reservation.result as PersonnelResult;
+
+      const complete = async (
+        status: PersonnelResult['status'],
+        version = state.item.contextVersion,
+        removedUserIds: string[] = [],
+      ) => {
+        const receipt = {
+          commandId,
+          status,
+          contextVersion: version,
+          removedUserIds,
+        };
+        await finish(tx, reservation.value, receipt);
+        confirm();
+        if (removedUserIds.length) fence(removedUserIds);
+        return receipt;
+      };
+      if (state.item.leadId !== previewLeadId) return complete('stale');
+      const active = new Set(
+        authority.users.filter((user) => user.active).map((user) => user.id),
+      );
+      const projectRoles = new Set(authority.roles.map(participantKey));
+      const current = new Set(state.participants.map(participantKey));
+      const added = add.filter(
+        (person) => !current.has(participantKey(person)),
+      );
+      const removed = remove.filter((person) =>
+        current.has(participantKey(person)),
+      );
+      for (const person of removed) current.delete(participantKey(person));
+      for (const person of added) current.add(participantKey(person));
+      const eligible = (userId: string) =>
+        active.has(userId) &&
+        projectRoles.has(`${userId}:developer`) &&
+        current.has(`${userId}:developer`);
+      if (
+        !eligible(leadId) ||
+        add.some(
+          (person) =>
+            !active.has(person.userId) ||
+            !projectRoles.has(participantKey(person)),
+        ) ||
+        [...handoffs, ...overrides].some(({ toId }) => !eligible(toId))
+      )
+        return complete('invalid');
+
+      const formerAssignees = new Set(
+        removed
+          .filter((person) => person.role === 'developer')
+          .map((person) => person.userId),
+      );
+      if (leadId !== previewLeadId) formerAssignees.add(previewLeadId);
+      const affected = formerAssignees.size
+        ? await tx
+            .select({ id: schema.task.id, assigneeId: schema.task.assigneeId })
+            .from(schema.task)
+            .where(
+              and(
+                eq(schema.task.requirementId, id),
+                inArray(schema.task.status, ['todo', 'in_progress']),
+                inArray(schema.task.assigneeId, [...formerAssignees]),
+              ),
+            )
+            .orderBy(asc(schema.task.id))
+            .for('update')
+        : [];
+      const currentDigest = createHash('sha256')
+        .update(taskAssignmentMaterial(affected))
+        .digest('hex');
+      if (taskDigest !== currentDigest) return complete('stale');
+      const taskIds = new Set(affected.map((task) => task.id));
+      const currentAssignees = new Set(affected.map((task) => task.assigneeId));
+      if (
+        handoffs.some(
+          ({ fromId, toId }) =>
+            !currentAssignees.has(fromId) || fromId === toId,
+        ) ||
+        overrides.some(({ taskId }) => !taskIds.has(taskId))
+      )
+        return complete('invalid');
+      const byPerson = new Map(
+        handoffs.map(({ fromId, toId }) => [fromId, toId]),
+      );
+      const byTask = new Map(
+        overrides.map(({ taskId, toId }) => [taskId, toId]),
+      );
+      const transfers = affected.map((task) => ({
+        ...task,
+        toId: byTask.get(task.id) ?? byPerson.get(task.assigneeId),
+      }));
+      if (
+        transfers.some(({ assigneeId, toId }) => !toId || toId === assigneeId)
+      )
+        return complete('invalid');
+      if (!added.length && !removed.length && previewLeadId === leadId)
+        return complete('unchanged');
+      confirm();
+
+      for (const person of removed)
+        await tx
+          .delete(schema.requirementParticipant)
+          .where(
+            and(
+              eq(schema.requirementParticipant.requirementId, id),
+              eq(schema.requirementParticipant.userId, person.userId),
+              eq(schema.requirementParticipant.role, person.role),
+            ),
+          );
+      if (added.length)
+        await tx
+          .insert(schema.requirementParticipant)
+          .values(added.map((person) => ({ ...person, requirementId: id })));
+      const version = state.item.contextVersion + 1;
+      for (const task of transfers) {
+        await tx
+          .update(schema.task)
+          .set({ assigneeId: task.toId!, updatedAt: new Date() })
+          .where(
+            and(eq(schema.task.id, task.id), eq(schema.task.requirementId, id)),
+          );
+        await event(
+          tx,
+          id,
+          who,
+          commandId,
+          version,
+          'task.updated',
+          { assigneeId: task.assigneeId },
+          { assigneeId: task.toId },
+          task.id,
+        );
+      }
+      await tx
+        .update(schema.requirement)
+        .set({ leadId, contextVersion: version, updatedAt: new Date() })
+        .where(
+          and(
+            eq(schema.requirement.id, id),
+            eq(schema.requirement.projectId, projectId),
+          ),
+        );
+      await event(
+        tx,
+        id,
+        who,
+        commandId,
+        version,
+        'requirement.personnel',
+        { leadId: previewLeadId, participants: removed },
+        { leadId, participants: added },
+      );
+      return complete('saved', version, [
+        ...new Set(removed.map((person) => person.userId)),
+      ]);
+    });
+  }
+  async function recoverPersonnelCommit(
+    actorId: string,
+    projectId: string,
+    id: string,
+    commandId: string,
+    digest: string,
+  ) {
+    return db.transaction(
+      async (tx) => {
+        await tx.execute(sql`set local lock_timeout='3s'`);
+        const [demand] = await tx
+          .select({ id: schema.requirement.id })
+          .from(schema.requirement)
+          .where(
+            and(
+              eq(schema.requirement.id, id),
+              eq(schema.requirement.projectId, projectId),
+            ),
+          )
+          .for('update');
+        if (!demand) return undefined;
+        const table = schema.commandReceipt;
+        const [receipt] = await tx
+          .select({ digest: table.digest, result: table.result })
+          .from(table)
+          .where(
+            and(
+              eq(table.actorId, actorId),
+              eq(table.scope, 'requirement:' + id),
+              eq(table.operation, 'requirement.personnel'),
+              eq(table.commandId, commandId),
+            ),
+          );
+        if (!receipt) return false;
+        return receipt.digest === digest &&
+          (receipt.result as PersonnelResult | null)?.status === 'saved'
+          ? true
+          : undefined;
+      },
+      { isolationLevel: 'read committed' },
+    );
+  }
   async function read(
     who: Actor,
     id: string,
@@ -770,6 +1079,9 @@ export function createBusiness(db: Database) {
           .where(eq(schema.requirementEvent.requirementId, id))
           .orderBy(
             desc(schema.requirementEvent.version),
+            desc(
+              sql`case when ${schema.requirementEvent.kind} = 'requirement.personnel' then 1 else 0 end`,
+            ),
             desc(schema.requirementEvent.createdAt),
             desc(schema.requirementEvent.id),
           )
@@ -786,6 +1098,27 @@ export function createBusiness(db: Database) {
               eq(schema.requirementEvent.kind, 'requirement.stage'),
             ),
           );
+        const participantIds = new Set(
+          state.participants.map((member) => member.userId),
+        );
+        const assignmentIds = new Set(tasks.map((task) => task.assigneeId));
+        for (const { record } of events) {
+          if (
+            !['task.created', 'task.updated', 'requirement.personnel'].includes(
+              record.kind,
+            )
+          )
+            continue;
+          for (const value of [record.before, record.after]) {
+            if (!value || typeof value !== 'object') continue;
+            const assignment = value as {
+              assigneeId?: unknown;
+              leadId?: unknown;
+            };
+            const id = assignment.assigneeId ?? assignment.leadId;
+            if (typeof id === 'string') assignmentIds.add(id);
+          }
+        }
         const people = await tx
           .select({
             id: schema.user.id,
@@ -795,7 +1128,7 @@ export function createBusiness(db: Database) {
           .from(schema.user)
           .where(
             inArray(schema.user.id, [
-              ...new Set(state.participants.map((p) => p.userId)),
+              ...new Set([...participantIds, ...assignmentIds]),
             ]),
           );
         const developers = await tx
@@ -810,6 +1143,11 @@ export function createBusiness(db: Database) {
         return {
           requirement: state.item,
           tasks,
+          assignmentNames: Object.fromEntries(
+            people
+              .filter((person) => assignmentIds.has(person.id))
+              .map((person) => [person.id, person.name]),
+          ),
           events: events.map(({ record, actorName }) =>
             record.kind === 'requirement.details'
               ? {
@@ -838,18 +1176,20 @@ export function createBusiness(db: Database) {
                 .filter((v): v is string => typeof v === 'string'),
             ]),
           ],
-          participants: people.map((p) => ({
-            ...p,
-            eligibleDeveloper:
-              p.active &&
-              developers.some((d) => d.userId === p.id) &&
-              state.participants.some(
-                (r) => r.userId === p.id && r.role === 'developer',
-              ),
-            roles: state.participants
-              .filter((r) => r.userId === p.id)
-              .map((r) => r.role),
-          })),
+          participants: people
+            .filter((p) => participantIds.has(p.id))
+            .map((p) => ({
+              ...p,
+              eligibleDeveloper:
+                p.active &&
+                developers.some((d) => d.userId === p.id) &&
+                state.participants.some(
+                  (r) => r.userId === p.id && r.role === 'developer',
+                ),
+              roles: state.participants
+                .filter((r) => r.userId === p.id)
+                .map((r) => r.role),
+            })),
           permissions: {
             canManageTasks: state.lead,
             canChangeStage: state.lead,
@@ -1586,6 +1926,8 @@ export function createBusiness(db: Database) {
     sessionTransaction,
     authorizeRequirement,
     editDetails,
+    editPersonnel,
+    recoverPersonnelCommit,
     readTemplateBinding,
     bindTemplate,
     publishRepository,

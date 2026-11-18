@@ -7,6 +7,9 @@ import {
   RequirementInput,
   BusinessCommand,
   RequirementDetailsInput,
+  RequirementPersonnelInput,
+  personnelRoles,
+  type RequirementPersonnelReceipt,
   TemplateBindingInput,
   SessionCreate,
   SessionFork,
@@ -28,6 +31,7 @@ import {
   createBusiness,
   digestOf,
   normalizeManagement,
+  normalizePersonnel,
   type RequirementAuthority,
 } from './business.ts';
 import {
@@ -44,7 +48,7 @@ import {
   type ProjectRuntime,
 } from './native-projects.ts';
 import { type RunBinding } from './runtime-context.ts';
-import { eq, and, desc, asc, isNull, sql } from 'drizzle-orm';
+import { eq, and, desc, asc, isNull, sql, inArray } from 'drizzle-orm';
 import { fromNodeHeaders } from 'better-auth/node';
 import { schema, type connectDatabase } from '@rdws/db';
 import { NativeWebHost } from '@rdws/dsh/web';
@@ -66,6 +70,7 @@ import { runtimeHome } from '../../../../scripts/env.mjs';
 type Database = ReturnType<typeof connectDatabase>['db'];
 type Auth = ReturnType<typeof createAuth>;
 const templateBindingPath = '/api/requirements/:id/capability-template';
+const personnelPath = '/api/requirements/:id/personnel';
 const isTemplateBindingRequest = (request: FastifyRequest) =>
   request.routeOptions.url === templateBindingPath &&
   (request.method === 'GET' || request.method === 'POST');
@@ -176,10 +181,29 @@ export async function registerWorkbench(
     string,
     { userId: string; projectId?: string; digest: string }
   >();
+  type PersonnelFence = {
+    key: string;
+    projectId: string;
+    requirementId: string;
+    actorId: string;
+    commandId: string;
+    digest: string;
+    userIds: string[];
+    cutoff: number;
+    uncertain?: boolean;
+    recovery?: Promise<void>;
+  };
+  const personnelFences = new Map<string, PersonnelFence>();
   const scopeKey = (userId: string, project?: string) =>
     userId + ':' + (project ?? '*');
-  function blocked(userId: string, project?: string, ignore?: string) {
-    return [...fences.entries()].some(
+  function blocked(
+    userId: string,
+    project?: string,
+    ignore?: string,
+    requirementId?: string,
+    list = false,
+  ) {
+    const projectBlocked = [...fences.entries()].some(
       ([key, scope]) =>
         key !== ignore &&
         scope.userId === userId &&
@@ -187,10 +211,41 @@ export async function registerWorkbench(
           project === scope.projectId ||
           project === ':project-list'),
     );
+    return (
+      projectBlocked ||
+      !!(
+        (requirementId || list) &&
+        [...personnelFences.values()].some(
+          (entry) =>
+            entry.projectId === project &&
+            (list || entry.requirementId === requirementId) &&
+            entry.userIds.includes(userId),
+        )
+      )
+    );
   }
-  function changed(userId: string, project: string | undefined, epoch: number) {
+  function changed(
+    userId: string,
+    project: string | undefined,
+    epoch: number,
+    requirementId?: string,
+    list = false,
+  ) {
     const own = scopeEpochs.get(scopeKey(userId, project)) ?? 0;
-    return own > epoch || (scopeEpochs.get(scopeKey(userId)) ?? 0) > epoch;
+    const demandEpoch = requirementId
+      ? (scopeEpochs.get(scopeKey(userId, 'demand:' + requirementId)) ?? 0)
+      : 0;
+    const listEpoch = list
+      ? (scopeEpochs.get(scopeKey(userId, 'demands:' + project)) ?? 0)
+      : 0;
+    return (
+      Math.max(
+        own,
+        demandEpoch,
+        listEpoch,
+        scopeEpochs.get(scopeKey(userId)) ?? 0,
+      ) > epoch
+    );
   }
   const projects = createProjectRuntimes(
     nativeRuntimeRoot ?? instanceRoot,
@@ -200,8 +255,10 @@ export async function registerWorkbench(
     providedNative,
     db,
     business,
-    (id, userId, projectId) =>
-      closingSessions.has(id) || stopping || blocked(userId, projectId),
+    (id, userId, projectId, requirementId) =>
+      closingSessions.has(id) ||
+      stopping ||
+      blocked(userId, projectId, undefined, requirementId),
     nativeProfiles,
   );
   const context = (request: FastifyRequest, projectId: string) => {
@@ -240,8 +297,13 @@ export async function registerWorkbench(
     );
   const stale = (scope: Access) =>
     stopping ||
-    blocked(scope.who.userId, scope.item.projectId) ||
-    changed(scope.who.userId, scope.item.projectId, scope.epoch) ||
+    blocked(scope.who.userId, scope.item.projectId, undefined, scope.item.id) ||
+    changed(
+      scope.who.userId,
+      scope.item.projectId,
+      scope.epoch,
+      scope.item.id,
+    ) ||
     closingSessions.has(scope.who.authSessionId) ||
     epochFor(scope.who.authSessionId, scope.item.id, scope.item.projectId) >
       scope.epoch;
@@ -326,6 +388,7 @@ export async function registerWorkbench(
       });
     if (!row) fail(404, '需求不存在');
     const { item, plan } = row;
+    await recoverPersonnelFences(who.userId, item.projectId, id);
     const roles = await projectRoles(who.userId, item.projectId);
     if (!roles.length) fail(403, '无权访问当前需求');
     const participants = await db
@@ -360,7 +423,8 @@ export async function registerWorkbench(
       epoch,
       plan: plan ?? undefined,
     };
-    if (blocked(who.userId, item.projectId)) throw new PendingAuthority();
+    if (blocked(who.userId, item.projectId, undefined, id))
+      throw new PendingAuthority();
     if (stale(scope)) fail(401, '授权已变化');
     return scope;
   }
@@ -589,6 +653,8 @@ export async function registerWorkbench(
           !(
             key === 'x-rdws-edit-session' &&
             (isTemplateBindingRequest(request) ||
+              (request.routeOptions.url === personnelPath &&
+                (request.method === 'GET' || request.method === 'POST')) ||
               (request.method === 'GET' &&
                 request.routeOptions.url === '/api/requirements/:id') ||
               (request.method === 'POST' &&
@@ -605,6 +671,8 @@ export async function registerWorkbench(
       authSessionId: string;
       projectId?: string;
       epoch: number;
+      requirementId?: string;
+      demandList?: boolean;
       platformOnly?: boolean;
       memberOnly?: boolean;
       demandAccess?: {
@@ -620,20 +688,30 @@ export async function registerWorkbench(
       authSessionId: string;
       projectId?: string;
       epoch: number;
+      requirementId?: string;
+      demandList?: boolean;
     },
     ignore?: string,
   ) {
-    const { userId, authSessionId, projectId, epoch } = scope;
+    const {
+      userId,
+      authSessionId,
+      projectId,
+      epoch,
+      requirementId,
+      demandList,
+    } = scope;
     if (
       stopping ||
       closingSessions.has(authSessionId) ||
-      blocked(userId, projectId, ignore) ||
-      changed(userId, projectId, epoch)
+      blocked(userId, projectId, ignore, requirementId, demandList) ||
+      changed(userId, projectId, epoch, requirementId, demandList)
     )
       businessError(401, '当前权限正在变更，请刷新后重试');
   }
   app.addHook('preHandler', async (request, reply) => {
-    if (request.routeOptions.url === templateBindingPath)
+    const personnel = request.routeOptions.url === personnelPath;
+    if (request.routeOptions.url === templateBindingPath || personnel)
       reply.header('cache-control', 'no-store');
     const path = new URL(request.url, expectedOrigin).pathname;
     const project = /^\/api\/projects\/([^/]+)/.exec(path);
@@ -643,17 +721,29 @@ export async function registerWorkbench(
     const epoch = authorizationEpoch;
     const who = await actor(request.headers);
     if (templateBinding) verifyEditLogin(request, who.authSessionId);
+    if (personnel) verifyEditLogin(request, who.authSessionId, true);
+    const requirementId = demand ? decodeURIComponent(demand[1]!) : undefined;
     const projectId = project
       ? decodeURIComponent(project[1]!)
-      : demand
+      : requirementId
         ? (
             await db
               .select({ projectId: schema.requirement.projectId })
               .from(schema.requirement)
-              .where(eq(schema.requirement.id, decodeURIComponent(demand[1]!)))
+              .where(eq(schema.requirement.id, requirementId))
           )[0]?.projectId
         : ':project-list';
-    const scope = { ...who, projectId, epoch };
+    const demandList =
+      request.routeOptions.url === '/api/projects/:projectId/requirements' &&
+      (request.method === 'GET' || request.method === 'HEAD');
+    if (projectId && (requirementId || demandList))
+      await recoverPersonnelFences(
+        who.userId,
+        projectId,
+        requirementId,
+        demandList,
+      );
+    const scope = { ...who, projectId, epoch, requirementId, demandList };
     assertResponse(scope);
     responseScopes.set(request, scope);
   });
@@ -662,7 +752,7 @@ export async function registerWorkbench(
     if (
       scope &&
       (reply.statusCode < 400 ||
-        (scope.demandAccess && reply.statusCode === 409))
+        (scope.requirementId && reply.statusCode === 409))
     ) {
       if (scope.demandAccess) {
         const { requirementId, projectId, authority } = scope.demandAccess;
@@ -952,15 +1042,29 @@ export async function registerWorkbench(
       };
     },
   );
-  async function revokeMember(userId: string, projectId?: string) {
-    const before = Date.now();
+  async function revokeMember(
+    userId: string,
+    projectId?: string,
+    requirementId?: string,
+    before = Date.now(),
+  ) {
     ++authorizationEpoch;
-    scopeEpochs.set(scopeKey(userId, projectId), authorizationEpoch);
-    scopeEpochs.set(scopeKey(userId, ':project-list'), authorizationEpoch);
+    scopeEpochs.set(
+      scopeKey(userId, requirementId ? 'demand:' + requirementId : projectId),
+      authorizationEpoch,
+    );
+    scopeEpochs.set(
+      scopeKey(
+        userId,
+        requirementId ? 'demands:' + projectId : ':project-list',
+      ),
+      authorizationEpoch,
+    );
     for (const transfer of transfers)
       if (
         transfer.userId === userId &&
-        (!projectId || transfer.projectId === projectId)
+        (!projectId || transfer.projectId === projectId) &&
+        (!requirementId || transfer.requirementId === requirementId)
       ) {
         transfer.revoked = true;
         transfer.controller.abort();
@@ -968,18 +1072,20 @@ export async function registerWorkbench(
     for (const lease of leases.values())
       if (
         lease.userId === userId &&
-        (!projectId || lease.projectId === projectId)
+        (!projectId || lease.projectId === projectId) &&
+        (!requirementId || lease.requirementId === requirementId)
       )
         lease.revoked = true;
     for (const bridge of [...bridges])
       if (
         bridge.userId === userId &&
-        (!projectId || bridge.projectId === projectId)
+        (!projectId || bridge.projectId === projectId) &&
+        (!requirementId || bridge.requirementId === requirementId)
       )
         bridge.close();
     for (const runtime of projects.all())
       if (!projectId || runtime.native.projectId === projectId)
-        runtime.runs.revokeUser(userId);
+        runtime.runs.revokeUser(userId, requirementId);
     const sessions = await db
       .select({ id: schema.session.id })
       .from(schema.session)
@@ -988,9 +1094,65 @@ export async function registerWorkbench(
     if (!sessions) return false;
     return (
       await Promise.all(
-        sessions.map((item) => revoke(item.id, undefined, projectId, before)),
+        sessions.map((item) =>
+          revoke(item.id, requirementId, projectId, before),
+        ),
       )
     ).every(Boolean);
+  }
+  async function settlePersonnelFence(
+    entry: PersonnelFence,
+    committed: boolean,
+  ) {
+    if (personnelFences.get(entry.key) !== entry) return false;
+    const results = committed
+      ? await Promise.all(
+          entry.userIds.map((id) =>
+            revokeMember(
+              id,
+              entry.projectId,
+              entry.requirementId,
+              entry.cutoff,
+            ).catch(() => false),
+          ),
+        )
+      : [];
+    if (personnelFences.get(entry.key) === entry)
+      personnelFences.delete(entry.key);
+    return results.every(Boolean);
+  }
+  function recoverPersonnelFence(entry: PersonnelFence) {
+    entry.recovery ??= (async () => {
+      const committed = await business
+        .recoverPersonnelCommit(
+          entry.actorId,
+          entry.projectId,
+          entry.requirementId,
+          entry.commandId,
+          entry.digest,
+        )
+        .catch(() => undefined);
+      if (committed !== undefined) await settlePersonnelFence(entry, committed);
+    })().finally(() => {
+      entry.recovery = undefined;
+    });
+    return entry.recovery;
+  }
+  async function recoverPersonnelFences(
+    userId: string,
+    projectId: string,
+    requirementId?: string,
+    list = false,
+  ) {
+    for (const entry of personnelFences.values()) {
+      if (
+        entry.uncertain &&
+        entry.projectId === projectId &&
+        (list || entry.requirementId === requirementId) &&
+        (entry.actorId === userId || entry.userIds.includes(userId))
+      )
+        await recoverPersonnelFence(entry);
+    }
   }
   const commandFields = {
     'project.create': ['projectId', 'name', 'username'],
@@ -1399,12 +1561,13 @@ export async function registerWorkbench(
     if (!original?.projectId) businessError(404, '需求不存在');
     return { ...original, projectId: original.projectId };
   }
-  function verifyEditLogin(request: FastifyRequest, authSessionId: string) {
+  function verifyEditLogin(
+    request: FastifyRequest,
+    authSessionId: string,
+    required = request.method === 'POST',
+  ) {
     const observed = request.headers['x-rdws-edit-session'];
-    if (
-      (request.method === 'POST' || observed !== undefined) &&
-      observed !== authSessionId
-    )
+    if ((required || observed !== undefined) && observed !== authSessionId)
       businessError(401, '登录已变化，请刷新后重试');
   }
   app.get<{ Params: { id: string } }>(
@@ -1498,6 +1661,181 @@ export async function registerWorkbench(
       businessError(503, '请先升级需求模板绑定数据库结构');
     throw error;
   }
+  app.get<{ Params: { id: string } }>(personnelPath, async (request) => {
+    const scope = requestDemandScope(request);
+    const { id } = request.params;
+    await business.authorizeRequirement(scope, id, scope.projectId, 'editor');
+    const members = await db
+      .select({
+        id: schema.user.id,
+        name: schema.user.name,
+        role: schema.projectMember.role,
+      })
+      .from(schema.projectMember)
+      .innerJoin(schema.user, eq(schema.user.id, schema.projectMember.userId))
+      .where(
+        and(
+          eq(schema.projectMember.projectId, scope.projectId),
+          eq(schema.user.active, true),
+          inArray(schema.projectMember.role, [...personnelRoles]),
+        ),
+      )
+      .orderBy(
+        asc(schema.user.name),
+        asc(schema.user.id),
+        asc(schema.projectMember.role),
+      );
+    responseScopes.set(request, {
+      ...scope,
+      demandAccess: {
+        requirementId: id,
+        projectId: scope.projectId,
+        authority: 'editor',
+      },
+    });
+    return { members };
+  });
+  app.post<{ Params: { id: string }; Body: RequirementPersonnelInput }>(
+    personnelPath,
+    {
+      schema: { body: RequirementPersonnelInput },
+      attachValidation: true,
+      async preValidation(request, reply) {
+        reply.header('cache-control', 'no-store');
+        const raw: unknown = request.body;
+        const textFields = [
+          'commandId',
+          'previewLeadId',
+          'leadId',
+          'taskDigest',
+        ] as const;
+        const validText = (value: unknown) =>
+          typeof value === 'string' && !/[\0\p{Surrogate}]/u.test(value);
+        const validRows = (value: unknown, fields: string[]) =>
+          Array.isArray(value) &&
+          value.every(
+            (row) =>
+              isRecord(row) &&
+              onlyKeys(row, fields) &&
+              fields.every((field) => validText(row[field])),
+          );
+        if (
+          !isRecord(raw) ||
+          !onlyKeys(raw, [
+            ...textFields,
+            'add',
+            'remove',
+            'handoffs',
+            'overrides',
+          ]) ||
+          !textFields.every((field) => validText(raw[field])) ||
+          !validRows(raw.add, ['userId', 'role']) ||
+          !validRows(raw.remove, ['userId', 'role']) ||
+          !validRows(raw.handoffs, ['fromId', 'toId']) ||
+          !validRows(raw.overrides, ['taskId', 'toId'])
+        )
+          return reply
+            .code(400)
+            .send({ code: 'invalid-personnel', error: '需求人员参数不正确' });
+      },
+    },
+    async (request, reply): Promise<RequirementPersonnelReceipt | void> => {
+      const scope = requestDemandScope(request);
+      const { id } = request.params;
+      const input = request.body;
+      if (
+        request.validationError ||
+        new Set(
+          [...input.add, ...input.remove].map(
+            ({ userId, role }) => `${userId}:${role}`,
+          ),
+        ).size !==
+          input.add.length + input.remove.length ||
+        new Set(input.handoffs.map((entry) => entry.fromId)).size !==
+          input.handoffs.length ||
+        new Set(input.overrides.map((entry) => entry.taskId)).size !==
+          input.overrides.length
+      ) {
+        await reply
+          .code(400)
+          .send({ code: 'invalid-personnel', error: '需求人员参数重复或无效' });
+        return;
+      }
+      const key = JSON.stringify([
+        scope.userId,
+        scope.projectId,
+        id,
+        input.commandId,
+      ]);
+      if (personnelFences.has(key))
+        businessError(503, '人员变更结果尚未确认，请重试原操作');
+      let entry: PersonnelFence | undefined;
+      try {
+        const result = await business.editPersonnel(
+          scope,
+          scope.projectId,
+          id,
+          input,
+          () => {
+            assertResponse(scope);
+            if (personnelFences.has(key))
+              businessError(503, '人员变更结果尚未确认，请重试原操作');
+          },
+          (userIds) => {
+            entry = {
+              key,
+              actorId: scope.userId,
+              projectId: scope.projectId,
+              requirementId: id,
+              commandId: input.commandId,
+              digest: digestOf(normalizePersonnel(input)),
+              cutoff: Date.now(),
+              userIds,
+            };
+            personnelFences.set(key, entry);
+          },
+        );
+        responseScopes.set(request, {
+          ...scope,
+          demandAccess: {
+            requirementId: id,
+            projectId: scope.projectId,
+            authority: 'editor',
+          },
+        });
+        if (result === 'conflict') {
+          await reply.code(409).send({
+            code: 'command-conflict',
+            error: '操作标识已用于不同内容，请重新编辑',
+          });
+          return;
+        }
+        const { removedUserIds, ...receipt } = result;
+        const revocation = entry
+          ? (await settlePersonnelFence(entry, true))
+            ? 'confirmed'
+            : 'lease-expiry'
+          : removedUserIds.length
+            ? 'previously-recorded'
+            : 'none';
+        return { ...receipt, revocation };
+      } catch (error) {
+        if (!entry) throw error;
+        entry.uncertain = true;
+        await recoverPersonnelFence(entry);
+        if (!personnelFences.has(key)) {
+          await business.authorizeRequirement(
+            scope,
+            id,
+            scope.projectId,
+            'editor',
+          );
+          assertResponse(scope);
+        }
+        businessError(503, '人员变更结果尚未确认，请重试原操作');
+      }
+    },
+  );
   app.get<{ Params: { id: string } }>(templateBindingPath, async (request) => {
     const scope = requestDemandScope(request);
     const { id } = request.params;
@@ -2072,7 +2410,12 @@ export async function registerWorkbench(
         upstream.on('message', (data) => {
           if (
             stopped ||
-            blocked(bridge.userId, bridge.projectId) ||
+            blocked(
+              bridge.userId,
+              bridge.projectId,
+              undefined,
+              requirementId,
+            ) ||
             browser.readyState !== WebSocket.OPEN
           )
             return;
@@ -2085,11 +2428,14 @@ export async function registerWorkbench(
         upstream.on('close', close);
         upstream.on('error', close);
         timer = setInterval(() => {
-          if (blocked(bridge.userId, bridge.projectId)) return;
+          if (
+            blocked(bridge.userId, bridge.projectId, undefined, requirementId)
+          )
+            return;
           void access(request.headers, requirementId).catch(async (error) => {
             if (
               error instanceof PendingAuthority ||
-              blocked(bridge.userId, bridge.projectId)
+              blocked(bridge.userId, bridge.projectId, undefined, requirementId)
             )
               return;
             close();

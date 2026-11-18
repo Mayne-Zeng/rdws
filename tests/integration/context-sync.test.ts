@@ -75,45 +75,72 @@ test('context reads bind the actual login, native request and Agent generation',
     statusCode: 403,
   });
 });
-test('logout while a context read is pending discards the result', async () => {
-  const key = randomUUID(),
-    generation = randomUUID(),
-    aud = 'rdws:bff:' + generation;
-  let closing = false,
-    release = () => {};
-  const barrier = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const runs = new ContextRuns(
-    generation,
-    (t) => verifyGrant(key, t, aud),
-    async () => {
-      await barrier;
-      return { private: 'stale' };
-    },
-    () => closing,
-  );
-  const run = runs.admit(
-    { userId: 'u', authSessionId: 'login' },
-    'r',
-    's',
-    'prompt',
-    'peer',
-  );
-  const body = { ...run, agentGeneration: 'agent', turn: 1 };
-  const token = signGrant(key, {
-    aud,
-    purpose: 'service',
-    operation: 'context-read',
-    bodyHash: bodyHash(body),
-    runId: run.runId,
-    hostGeneration: generation,
-  });
-  const result = runs.handle(body, token);
-  closing = true;
-  release();
-  await expect(result).rejects.toMatchObject({ statusCode: 403 });
-});
+test.each(['logout', 'demand fence'] as const)(
+  '%s while a context read is pending discards the result',
+  async (kind) => {
+    const key = randomUUID(),
+      generation = randomUUID(),
+      aud = 'rdws:bff:' + generation;
+    let closing = false,
+      release = () => {};
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runs = new ContextRuns(
+      generation,
+      (t) => verifyGrant(key, t, aud),
+      async (_who, requirementId) => {
+        if (requirementId === 'r') await barrier;
+        return { requirementId };
+      },
+      (_authSession, _userId, requirementId) =>
+        closing && (kind === 'logout' || requirementId === 'r'),
+    );
+    const run = runs.admit(
+      { userId: 'u', authSessionId: 'login' },
+      'r',
+      's',
+      'prompt',
+      'peer',
+    );
+    const body = { ...run, agentGeneration: 'agent', turn: 1 };
+    const token = signGrant(key, {
+      aud,
+      purpose: 'service',
+      operation: 'context-read',
+      bodyHash: bodyHash(body),
+      runId: run.runId,
+      hostGeneration: generation,
+    });
+    const result = runs.handle(body, token);
+    closing = true;
+    release();
+    await expect(result).rejects.toMatchObject({ statusCode: 403 });
+    if (kind === 'demand fence') {
+      const neighbor = runs.admit(
+        { userId: 'u', authSessionId: 'login' },
+        'neighbor',
+        'other-session',
+        'next',
+        'peer',
+      );
+      const input = { ...neighbor, agentGeneration: 'agent', turn: 1 };
+      await expect(
+        runs.handle(
+          input,
+          signGrant(key, {
+            aud,
+            purpose: 'service',
+            operation: 'context-read',
+            bodyHash: bodyHash(input),
+            runId: neighbor.runId,
+            hostGeneration: generation,
+          }),
+        ),
+      ).resolves.toEqual({ requirementId: 'neighbor' });
+    }
+  },
+);
 test('an invalid earlier input cannot borrow the final prompt identity', async () => {
   const callbacks = new Map<string, unknown>(),
     routes = new Map<string, (input: Record<string, unknown>) => unknown>();

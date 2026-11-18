@@ -134,9 +134,12 @@ test('requirement details preserve the original edit across reload and discard s
     await edit.click();
     await expect(save).toBeDisabled();
     await expect(description).toHaveValue('资料原文');
-    await page.locator('.requirement-details-editor').screenshot({
-      path: testInfo.outputPath('requirement-details-light-390.png'),
-    });
+    await page
+      .locator('.requirement-details-editor')
+      .filter({ has: description })
+      .screenshot({
+        path: testInfo.outputPath('requirement-details-light-390.png'),
+      });
     await page.getByLabel('需求标题', { exact: true }).fill(finalTitle);
     fault = 'drop-after';
     await save.click();
@@ -176,9 +179,12 @@ test('requirement details preserve the original edit across reload and discard s
         () => document.documentElement.scrollWidth <= innerWidth,
       ),
     ).toBe(true);
-    await page.locator('.requirement-details-editor').screenshot({
-      path: testInfo.outputPath('requirement-details-dark-390.png'),
-    });
+    await page
+      .locator('.requirement-details-editor')
+      .filter({ has: description })
+      .screenshot({
+        path: testInfo.outputPath('requirement-details-dark-390.png'),
+      });
     await description.fill('原意图重试会保存');
     fault = 'drop-before';
     await save.click();

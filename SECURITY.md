@@ -42,6 +42,10 @@ BFF 从已鉴权需求的 PostgreSQL 归属选取 Native 实例。项目具有�
 
 当前项目管理员或在该需求保有项目需求经理身份的参与者才能编辑。浏览器发送页面已读取的登录标识，服务器以 Cookie 认证，核对两者一致后受理。原登录、原项目、需求和当前角色贯穿写入及结果返回。活动响应提供操作者和字段名，完整前后值留在业务事件。Native 按既有边界读取当前资料和事件摘要，浏览器编辑能力与原命令收据留在 BFF。 [资料编辑验收](docs/02-directory-and-engineering-design.html#t11-details-delivery-20261119)
 
+## 需求人员维护与撤权
+
+人员维护由当前项目管理员或兼具该需求参与关系的需求经理发起，按本次登录鉴权。事务校验有效角色和任务接手资格，人员、任务、历史与回执同事务写入。移除参与角色时，仅阻断所涉账号在当前需求的发出中 HTTP、转发、双向连接及新上下文。原提交未知时，服务器取回原需求行锁后核对原命令，不向触发核对的其他账号返回回执。提交确认后撤回该需求内所有相关登录，Native 通知失败时使用短 Peer 租约结束旧授权。同项目其他需求继续按其当前权限运行。 [人员维护验收](docs/02-directory-and-engineering-design.html#t11-personnel-delivery-20261119)
+
 ## 当前依赖审计（2026-11-18，未修复）
 
 本轮 `pnpm audit --prod --audit-level high` 返回 1：1 项 high、3 项 moderate。新增识别的高危为 `picomatch@4.0.7` 的重复 extglob ReDoS，[官方公告 GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf) 当前列出受影响版本 ≤4.0.7、无修复版本。没有隐藏通告、修改上游源码或以未经验证的版本覆盖依赖。

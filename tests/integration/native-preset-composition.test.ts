@@ -1,15 +1,18 @@
-import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   realpath,
   rm,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { expect, test } from 'vitest';
 
@@ -264,6 +267,40 @@ test('Native appends preset versions live and restores exact compositions after 
         message: expect.stringContaining(`Unknown agent preset: ${nextPreset}`),
       },
     ]);
+    await host?.close();
+    expect(() => process.kill(replay.pid, 0)).toThrow(
+      expect.objectContaining({ code: 'ESRCH' }),
+    );
+    const journals = join(
+      root,
+      'runtime/dsh',
+      'project-' + projectId,
+      'sessions',
+    );
+    const matches = (await readdir(journals, { recursive: true })).filter(
+      (entry) =>
+        entry.split(sep).at(-2) === firstSession &&
+        /(?:^|\/)session(?:\.v[1-9]\d*)?\.jsonl\.zstd$/.test(entry),
+    );
+    expect(matches).toHaveLength(1);
+    const journal = join(journals, matches[0]!);
+    const bytes = await readFile(journal);
+    expect(bytes.readUInt32LE(0)).toBe(0xfd2fb528);
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    const { stdout, stderr } = await promisify(execFile)('pnpm', [
+      '--silent',
+      'trace:prefix',
+      'hash',
+      journal,
+      String(bytes.length),
+    ]);
+    expect(stderr).toBe('');
+    expect(JSON.parse(stdout)).toEqual({
+      status: 'hashed',
+      throughByte: bytes.length,
+      sha256,
+    });
+    expect(await readFile(journal)).toEqual(bytes);
   } finally {
     await host?.close();
     await rm(root, { recursive: true, force: true });

@@ -27,6 +27,7 @@
     "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm build",
     "dsh:model:import": "node scripts/dsh-model-import.mjs",
     "dsh:probe": "tsx scripts/dsh-probe.ts",
+    "trace:prefix": "node scripts/trace-prefix.mjs",
     "test:web-live": "playwright test --config playwright.web-live.config.ts"
   },
   "devDependencies": {

@@ -112,6 +112,17 @@ pnpm dsh:probe
 
 DSH 保持 `0.2.2-rc.3`；`pnpm-workspace.yaml` 对原固定的 `undici@8.11.2` 定向使用 `8.12.2` 安全补丁，升级 DSH 时须复核并回归，不修改上游源码。
 
+## 核对会话日志的原始前缀
+
+`journal` 为运维选定的原生文件规范绝对路径。`through_byte` 为已确认刷盘且进程已停稳的原件或相应不可变快照中的物理字节截止。首次计算后，将 SHA-256 与会话、确切文件代际、编码和截止一同留存，核对时使用同一组信息。
+
+```sh
+pnpm --silent trace:prefix hash "$journal" "$through_byte"
+pnpm --silent trace:prefix verify "$journal" "$through_byte" "$sha256"
+```
+
+命令按原编码读取 `[0, through_byte)` 并输出一条 JSON。退出码 0 表示成功计算或匹配，1 表示与既有摘要不符或文件已稳定截短，2 表示输入或读取证据不可用。读取期间观察到的文件变化返回 `source-changed`。截止位置之后已有的追加不影响核对。独立持久锚点和只读校验账号的接线见[研发清单 T16](docs/05-development-backlog.md#主计划任务)。
+
 ## 这个仓库现在有什么
 
 | 路径                                            | 内容                                                             |

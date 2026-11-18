@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   RequirementInput,
   BusinessCommand,
+  RequirementDetailsInput,
   TemplateBindingInput,
   SessionCreate,
   SessionFork,
@@ -27,6 +28,7 @@ import {
   createBusiness,
   digestOf,
   normalizeManagement,
+  type RequirementAuthority,
 } from './business.ts';
 import {
   MirrorRequestError,
@@ -578,7 +580,15 @@ export async function registerWorkbench(
     if (
       Object.keys(request.headers).some(
         (key) =>
-          key.startsWith('x-rdws-') && key !== 'x-rdws-client-generation',
+          key.startsWith('x-rdws-') &&
+          key !== 'x-rdws-client-generation' &&
+          !(
+            key === 'x-rdws-edit-session' &&
+            ((request.method === 'GET' &&
+              request.routeOptions.url === '/api/requirements/:id') ||
+              (request.method === 'POST' &&
+                request.routeOptions.url === '/api/requirements/:id/details'))
+          ),
       )
     )
       return reply.code(403).send({ error: '身份头不受信任' });
@@ -592,10 +602,10 @@ export async function registerWorkbench(
       epoch: number;
       platformOnly?: boolean;
       memberOnly?: boolean;
-      templateBinding?: {
+      demandAccess?: {
         requirementId: string;
         projectId: string;
-        adminOnly: boolean;
+        authority: RequirementAuthority;
       };
     }
   >();
@@ -643,15 +653,15 @@ export async function registerWorkbench(
     if (
       scope &&
       (reply.statusCode < 400 ||
-        (scope.templateBinding && reply.statusCode === 409))
+        (scope.demandAccess && reply.statusCode === 409))
     ) {
-      if (scope.templateBinding) {
-        const { requirementId, projectId, adminOnly } = scope.templateBinding;
-        await business.authorizeTemplateBinding(
+      if (scope.demandAccess) {
+        const { requirementId, projectId, authority } = scope.demandAccess;
+        await business.authorizeRequirement(
           scope,
           requirementId,
           projectId,
-          adminOnly,
+          authority,
         );
       }
       if (scope.platformOnly) {
@@ -1375,17 +1385,104 @@ export async function registerWorkbench(
       return { state };
     },
   );
-  app.get('/api/requirements/:id', async (request) =>
-    business.read(
-      await actor(request.headers),
-      (request.params as { id: string }).id,
-    ),
-  );
-  function templateBindingScope(request: FastifyRequest) {
+  function requestDemandScope(request: FastifyRequest) {
     const original = responseScopes.get(request);
     if (!original?.projectId) businessError(404, '需求不存在');
     return { ...original, projectId: original.projectId };
   }
+  function verifyDetailsLogin(request: FastifyRequest, authSessionId: string) {
+    const observed = request.headers['x-rdws-edit-session'];
+    if (
+      (request.method === 'POST' || observed !== undefined) &&
+      observed !== authSessionId
+    )
+      businessError(401, '登录已变化，请刷新后重试');
+  }
+  app.get<{ Params: { id: string } }>(
+    '/api/requirements/:id',
+    {
+      async onRequest(_request, reply) {
+        reply.header('cache-control', 'no-store');
+      },
+    },
+    async (request) => {
+      const scope = requestDemandScope(request);
+      verifyDetailsLogin(request, scope.authSessionId);
+      const { id } = request.params;
+      const detail = await business.read(scope, id);
+      if (detail.requirement.projectId !== scope.projectId)
+        businessError(403, '需求所属项目已变化');
+      responseScopes.set(request, {
+        ...scope,
+        demandAccess: {
+          requirementId: id,
+          projectId: scope.projectId,
+          authority: detail.permissions.canEditDetails ? 'editor' : 'reader',
+        },
+      });
+      return detail;
+    },
+  );
+  app.post<{ Params: { id: string }; Body: RequirementDetailsInput }>(
+    '/api/requirements/:id/details',
+    {
+      schema: { body: RequirementDetailsInput },
+      attachValidation: true,
+      async onRequest(_request, reply) {
+        reply.header('cache-control', 'no-store');
+      },
+      async preValidation(request, reply) {
+        const raw: unknown = request.body;
+        if (
+          !isRecord(raw) ||
+          !onlyKeys(raw, ['commandId', 'patch']) ||
+          typeof raw.commandId !== 'string' ||
+          !isRecord(raw.patch) ||
+          !onlyKeys(raw.patch, ['title', 'description', 'acceptance']) ||
+          !Object.keys(raw.patch).length ||
+          Object.values(raw.patch).some(
+            (value) =>
+              typeof value !== 'string' || /[\0\p{Surrogate}]/u.test(value),
+          )
+        )
+          return reply
+            .code(400)
+            .send({ code: 'invalid-details', error: '需求资料参数不正确' });
+        if (typeof raw.patch.title === 'string')
+          raw.patch.title = raw.patch.title.trim();
+      },
+    },
+    async (request, reply) => {
+      if (request.validationError)
+        return reply
+          .code(400)
+          .send({ code: 'invalid-details', error: '需求资料参数不正确' });
+      const scope = requestDemandScope(request);
+      verifyDetailsLogin(request, scope.authSessionId);
+      const { id } = request.params;
+      const result = await business.editDetails(
+        scope,
+        id,
+        scope.projectId,
+        request.body,
+        () => assertResponse(scope),
+      );
+      responseScopes.set(request, {
+        ...scope,
+        demandAccess: {
+          requirementId: id,
+          projectId: scope.projectId,
+          authority: 'editor',
+        },
+      });
+      if (result === 'conflict')
+        return reply.code(409).send({
+          code: 'command-conflict',
+          error: '操作标识已用于不同内容，请重新编辑',
+        });
+      return result;
+    },
+  );
   function templateBindingFailure(error: unknown): never {
     const failure = error as { code?: string; cause?: { code?: string } };
     if ((failure.cause?.code ?? failure.code) === '42P01')
@@ -1396,17 +1493,17 @@ export async function registerWorkbench(
     '/api/requirements/:id/capability-template',
     async (request, reply) => {
       reply.header('cache-control', 'no-store');
-      const scope = templateBindingScope(request);
+      const scope = requestDemandScope(request);
       const { id } = request.params;
       const result = await business
         .readTemplateBinding(scope, id, scope.projectId)
         .catch(templateBindingFailure);
       responseScopes.set(request, {
         ...scope,
-        templateBinding: {
+        demandAccess: {
           requirementId: id,
           projectId: scope.projectId,
-          adminOnly: result.options !== undefined,
+          authority: result.options !== undefined ? 'project-admin' : 'reader',
         },
       });
       return result;
@@ -1430,7 +1527,7 @@ export async function registerWorkbench(
       },
     },
     async (request, reply) => {
-      const scope = templateBindingScope(request);
+      const scope = requestDemandScope(request);
       const { id } = request.params;
       const result = await business
         .bindTemplate(scope, id, scope.projectId, request.body, () =>
@@ -1439,10 +1536,10 @@ export async function registerWorkbench(
         .catch(templateBindingFailure);
       responseScopes.set(request, {
         ...scope,
-        templateBinding: {
+        demandAccess: {
           requirementId: id,
           projectId: scope.projectId,
-          adminOnly: true,
+          authority: 'project-admin',
         },
       });
       if (result === 'conflict')

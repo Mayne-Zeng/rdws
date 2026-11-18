@@ -121,6 +121,26 @@ export const RequirementInput = Type.Object(
   { additionalProperties: false },
 );
 export type RequirementInput = Static<typeof RequirementInput>;
+export const RequirementDetailsInput = Type.Object(
+  {
+    commandId: Type.String({ format: 'uuid' }),
+    patch: Type.Object(
+      {
+        title: Type.Optional(RequirementInput.properties.title),
+        description: Type.Optional(RequirementInput.properties.description),
+        acceptance: Type.Optional(RequirementInput.properties.acceptance),
+      },
+      { additionalProperties: false, minProperties: 1 },
+    ),
+  },
+  { additionalProperties: false },
+);
+export type RequirementDetailsInput = Static<typeof RequirementDetailsInput>;
+export interface RequirementDetailsReceipt {
+  commandId: string;
+  changed: boolean;
+  contextVersion: number;
+}
 export const BusinessCommand = Type.Union([
   Type.Object(
     {
@@ -206,17 +226,20 @@ export interface RequirementDetail {
     id: string;
     kind: string;
     actorId: string;
+    actorName: string | null;
     source: string;
     version: number;
     taskId: string | null;
     before: unknown;
     after: unknown;
+    changedFields?: (keyof RequirementDetailsInput['patch'])[];
     createdAt: string;
   }[];
   permissions: {
     canManageTasks: boolean;
     canChangeStage: boolean;
     canUpdateOwnTasks: boolean;
+    canEditDetails: boolean;
     userId: string;
     codeWrite: false;
   };

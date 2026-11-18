@@ -36,6 +36,10 @@ BFF 从已鉴权需求的 PostgreSQL 归属选取 Native 实例。项目具有�
 
 绑定写入仅允许当前项目管理员，服务端锁定登录、账号、角色和需求，校验本项目的确切模板版本及当前审核引用。绑定与原命令回执同一事务持久化，成功、无变化与同键异文响应都重新检查授权。两条复合外键约束项目归属，应用角色只能更新模板 ID 和版本列。Native 会话的能力生成与启用另按 T14 验收。 [绑定配置验收](docs/02-directory-and-engineering-design.html#t14-demand-binding-delivery-20261119)
 
+## 需求资料编辑
+
+当前项目管理员或在该需求保有项目需求经理身份的参与者才能编辑。浏览器发送页面已读取的登录标识，服务器以 Cookie 认证，核对两者一致后受理。原登录、原项目、需求和当前角色贯穿写入及结果返回。活动响应提供操作者和字段名，完整前后值留在业务事件。Native 按既有边界读取当前资料和事件摘要，浏览器编辑能力与原命令收据留在 BFF。 [资料编辑验收](docs/02-directory-and-engineering-design.html#t11-details-delivery-20261119)
+
 ## 当前依赖审计（2026-11-18，未修复）
 
 本轮 `pnpm audit --prod --audit-level high` 返回 1：1 项 high、3 项 moderate。新增识别的高危为 `picomatch@4.0.7` 的重复 extglob ReDoS，[官方公告 GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf) 当前列出受影响版本 ≤4.0.7、无修复版本。没有隐藏通告、修改上游源码或以未经验证的版本覆盖依赖。

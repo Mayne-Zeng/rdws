@@ -23,7 +23,13 @@ export function contextSnapshot(data: Detail) {
     stage: r.stage,
     leadId: r.leadId,
     contextVersion: r.contextVersion,
-    permissions: data.permissions,
+    permissions: {
+      canManageTasks: data.permissions.canManageTasks,
+      canChangeStage: data.permissions.canChangeStage,
+      canUpdateOwnTasks: data.permissions.canUpdateOwnTasks,
+      userId: data.permissions.userId,
+      codeWrite: data.permissions.codeWrite,
+    },
     participants: data.participants
       .map((p) => ({
         id: p.id,

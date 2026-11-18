@@ -14,6 +14,10 @@ import { Icon, api, roleLabels } from '../lib/ui.tsx';
 import { Conversation } from './conversation.tsx';
 import { RequirementWorktrees } from './requirement-worktrees.tsx';
 import { RequirementTemplate } from './requirement-template.tsx';
+import {
+  RequirementDetailsEditor,
+  detailFieldLabels,
+} from './requirement-details-editor.tsx';
 import type { View } from './project.tsx';
 const stages = Object.keys(stageLabels) as Stage[];
 export function RequirementPage({
@@ -30,12 +34,42 @@ export function RequirementPage({
   projectId: string;
 }) {
   const client = useQueryClient();
+  const detailsScope = JSON.stringify([sessionId, userId, projectId, id]);
   const detail = useQuery({
-    queryKey: ['requirement', id],
+    queryKey: ['requirement', id, sessionId, userId, projectId],
     queryFn: ({ signal }) =>
-      api<RequirementDetail>(`/api/requirements/${id}`, { signal }),
+      api<RequirementDetail>(`/api/requirements/${id}`, {
+        signal,
+        headers: { 'x-rdws-edit-session': sessionId },
+      }),
     refetchInterval: 2000,
+    refetchOnMount: 'always',
   });
+  const [detailsReceipt, setDetailsReceipt] = useState<{
+    scope: string;
+    changed: boolean;
+  }>();
+  const status = (detail.error as { status?: number } | null)?.status;
+  const editAuthorityLost =
+    status === 401 ||
+    status === 403 ||
+    status === 404 ||
+    (detail.isSuccess &&
+      detail.isFetchedAfterMount &&
+      (!detail.data.permissions.canEditDetails ||
+        detail.data.permissions.userId !== userId));
+  useEffect(() => {
+    if (editAuthorityLost || view !== 'overview') setDetailsReceipt(undefined);
+  }, [editAuthorityLost, view]);
+  const receiptNotice = view === 'overview' &&
+    !editAuthorityLost &&
+    detailsReceipt?.scope === detailsScope && (
+      <p className="save-notice" role="status">
+        {detailsReceipt.changed
+          ? '原保存已确认。'
+          : '原保存已确认，资料未发生变化。'}
+      </p>
+    );
   const [editing, setEditing] = useState<TaskRecord | 'new'>(),
     [error, setError] = useState(''),
     [notice, setNotice] = useState(''),
@@ -90,17 +124,20 @@ export function RequirementPage({
   if (detail.isPending) return <Loading text="正在读取需求档案" />;
   if (detail.isError)
     return (
-      <div className="inline-feedback" role="alert">
-        <Alert theme="error" message={detail.error.message} />
-        <Button
-          tag="button"
-          variant="outline"
-          loading={detail.isFetching}
-          onClick={() => void detail.refetch()}
-        >
-          重试读取需求档案
-        </Button>
-      </div>
+      <>
+        {receiptNotice}
+        <div className="inline-feedback" role="alert">
+          <Alert theme="error" message={detail.error.message} />
+          <Button
+            tag="button"
+            variant="outline"
+            loading={detail.isFetching}
+            onClick={() => void detail.refetch()}
+          >
+            重试读取需求档案
+          </Button>
+        </div>
+      </>
     );
   const data = detail.data,
     r = data.requirement,
@@ -362,6 +399,31 @@ export function RequirementPage({
                   ))}
                 </dd>
               </dl>
+              {receiptNotice}
+              <RequirementDetailsEditor
+                key={detailsScope}
+                requirement={r}
+                userId={userId}
+                sessionId={sessionId}
+                onReceipt={(receipt) =>
+                  setDetailsReceipt(
+                    receipt
+                      ? { scope: detailsScope, changed: receipt.changed }
+                      : undefined,
+                  )
+                }
+                canEdit={
+                  detail.isFetchedAfterMount &&
+                  data.permissions.userId === userId &&
+                  data.permissions.canEditDetails
+                }
+                refresh={() =>
+                  Promise.all([
+                    detail.refetch(),
+                    client.invalidateQueries({ queryKey: ['requirements'] }),
+                  ])
+                }
+              />
             </div>
           </section>
           <section className="document-section">
@@ -458,19 +520,22 @@ export function RequirementPage({
                   <Icon name="clock" />
                   <div>
                     <strong>
-                      {names.get(e.actorId) ??
+                      {e.actorName ??
+                        names.get(e.actorId) ??
                         (e.source === 'migration' ? '初始化' : '成员')}
                     </strong>
                     <span>
                       {e.kind === 'requirement.stage'
                         ? ` 将阶段从「${stageLabels[e.before as Stage] ?? String(e.before)}」调整至「${stageLabels[e.after as Stage] ?? String(e.after)}」`
-                        : e.kind === 'task.created'
-                          ? ' 创建了子任务'
-                          : e.kind === 'task.updated'
-                            ? ' 更新了子任务与分派'
-                            : e.kind === 'requirement.created'
-                              ? ' 创建了需求与初始分工'
-                              : ' 初始化需求阶段'}
+                        : e.kind === 'requirement.details'
+                          ? ` 更新了需求资料${e.changedFields?.length ? ` · ${e.changedFields.map((field) => detailFieldLabels[field]).join('、')}` : ''}`
+                          : e.kind === 'task.created'
+                            ? ' 创建了子任务'
+                            : e.kind === 'task.updated'
+                              ? ' 更新了子任务与分派'
+                              : e.kind === 'requirement.created'
+                                ? ' 创建了需求与初始分工'
+                                : ' 初始化需求阶段'}
                     </span>
                   </div>
                   <time>

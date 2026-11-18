@@ -11,12 +11,15 @@ import type {
   TemplateBindingInput,
   TemplateBindingReceipt,
   CapabilityVersion,
+  RequirementDetailsInput,
+  RequirementDetailsReceipt,
 } from '@rdws/contracts';
 import { capabilityKey } from '@rdws/contracts';
 import type { PublishedBaseline } from '../../../syncer/src/mirror.ts';
 type Database = ReturnType<typeof connectDatabase>['db'];
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 export type Actor = { userId: string; authSessionId: string };
+export type RequirementAuthority = 'reader' | 'editor' | 'project-admin';
 export function businessError(
   statusCode: number,
   publicMessage: string,
@@ -131,11 +134,24 @@ export function createBusiness(db: Database) {
       businessError(403, '无权访问当前项目');
     return { users, roles, session, validTargets };
   }
-  async function scope(tx: Transaction, who: Actor, id: string, lock = false) {
+  async function scope(
+    tx: Transaction,
+    who: Actor,
+    id: string,
+    lock = false,
+    projectId?: string,
+  ) {
     const query = tx
       .select()
       .from(schema.requirement)
-      .where(eq(schema.requirement.id, id));
+      .where(
+        and(
+          eq(schema.requirement.id, id),
+          projectId === undefined
+            ? undefined
+            : eq(schema.requirement.projectId, projectId),
+        ),
+      );
     const [item] = await (lock ? query.for('update') : query);
     if (!item) businessError(404, '需求不存在');
     const memberQuery = tx
@@ -309,6 +325,22 @@ export function createBusiness(db: Database) {
       (item) =>
         item.userId === who.userId &&
         ['project_admin', 'requirement_manager'].includes(item.role),
+    );
+  const mayEditDetails = (
+    roles: { userId: string; role: string }[],
+    participants: { userId: string; role: string }[],
+    who: Actor,
+  ) =>
+    roles.some(
+      (role) =>
+        role.userId === who.userId &&
+        (role.role === 'project_admin' ||
+          (role.role === 'requirement_manager' &&
+            participants.some(
+              (participant) =>
+                participant.userId === who.userId &&
+                participant.role === role.role,
+            ))),
     );
 
   function createdRequirement(value: unknown) {
@@ -616,6 +648,84 @@ export function createBusiness(db: Database) {
       });
     });
   }
+  async function editDetails(
+    who: Actor,
+    id: string,
+    projectId: string,
+    input: RequirementDetailsInput,
+    confirmResponse: () => void,
+  ): Promise<RequirementDetailsReceipt | 'conflict'> {
+    return transaction(async (tx) => {
+      const authority = await identity(tx, who, projectId, [], true);
+      const state = await scope(tx, who, id, true, projectId);
+      if (!mayEditDetails(authority.roles, state.participants, who))
+        businessError(403, '无权编辑当前需求资料');
+      const confirm = () => {
+        if (authority.session.expiresAt <= new Date())
+          businessError(401, '登录已失效，请重新登录');
+        confirmResponse();
+      };
+      const patch = { ...input.patch };
+      if (patch.title !== undefined) patch.title = patch.title.trim();
+      confirm();
+      const reservation = await reserve(
+        tx,
+        who,
+        'requirement:' + id,
+        'requirement.details',
+        input.commandId,
+        patch,
+      ).catch((error: unknown) => {
+        if ((error as { statusCode?: number }).statusCode === 409)
+          return 'conflict' as const;
+        throw error;
+      });
+      confirm();
+      if (reservation === 'conflict') return reservation;
+      if ('result' in reservation)
+        return reservation.result as RequirementDetailsReceipt;
+      const fields = (Object.keys(patch) as (keyof typeof patch)[]).filter(
+        (key) => patch[key] !== state.item[key],
+      );
+      const changed = fields.length > 0;
+      const version = state.item.contextVersion + Number(changed);
+      if (changed) {
+        const previous = Object.fromEntries(
+          fields.map((key) => [key, state.item[key]]),
+        );
+        const delta = Object.fromEntries(
+          fields.map((key) => [key, patch[key]]),
+        );
+        await tx
+          .update(schema.requirement)
+          .set({ ...delta, contextVersion: version, updatedAt: new Date() })
+          .where(
+            and(
+              eq(schema.requirement.id, id),
+              eq(schema.requirement.projectId, projectId),
+            ),
+          );
+        await event(
+          tx,
+          id,
+          who,
+          input.commandId,
+          version,
+          'requirement.details',
+          previous,
+          delta,
+        );
+      }
+      const receipt = {
+        commandId: input.commandId,
+        changed,
+        contextVersion: version,
+      };
+      await finish(tx, reservation.value, receipt);
+      confirm();
+      return receipt;
+    });
+  }
   async function read(
     who: Actor,
     id: string,
@@ -626,7 +736,7 @@ export function createBusiness(db: Database) {
       async (tx) => {
         await tx.execute(sql`set local statement_timeout='1800ms'`);
         const state = await scope(tx, who, id);
-        await identity(tx, who, state.item.projectId);
+        const authority = await identity(tx, who, state.item.projectId);
         for (const actor of relatedActors)
           await identity(tx, actor, state.item.projectId);
         if (sessionId) {
@@ -648,8 +758,15 @@ export function createBusiness(db: Database) {
           .where(eq(schema.task.requirementId, id))
           .orderBy(asc(schema.task.createdAt), asc(schema.task.id));
         const events = await tx
-          .select()
+          .select({
+            record: schema.requirementEvent,
+            actorName: schema.user.name,
+          })
           .from(schema.requirementEvent)
+          .leftJoin(
+            schema.user,
+            eq(schema.user.id, schema.requirementEvent.actorId),
+          )
           .where(eq(schema.requirementEvent.requirementId, id))
           .orderBy(
             desc(schema.requirementEvent.version),
@@ -693,7 +810,25 @@ export function createBusiness(db: Database) {
         return {
           requirement: state.item,
           tasks,
-          events,
+          events: events.map(({ record, actorName }) =>
+            record.kind === 'requirement.details'
+              ? {
+                  id: record.id,
+                  kind: record.kind,
+                  actorId: record.actorId,
+                  actorName,
+                  source: record.source,
+                  version: record.version,
+                  taskId: record.taskId,
+                  createdAt: record.createdAt,
+                  before: null,
+                  after: null,
+                  changedFields: Object.keys(
+                    record.after as RequirementDetailsInput['patch'],
+                  ) as (keyof RequirementDetailsInput['patch'])[],
+                }
+              : { ...record, actorName },
+          ),
           reachedStages: [
             ...new Set([
               'assignment',
@@ -719,6 +854,11 @@ export function createBusiness(db: Database) {
             canManageTasks: state.lead,
             canChangeStage: state.lead,
             canUpdateOwnTasks: state.developer,
+            canEditDetails: mayEditDetails(
+              authority.roles,
+              state.participants,
+              who,
+            ),
             userId: who.userId,
             codeWrite: false,
           },
@@ -761,11 +901,11 @@ export function createBusiness(db: Database) {
       return work(tx, state.item);
     });
   }
-  async function authorizeTemplateBinding(
+  async function authorizeRequirement(
     who: Actor,
     id: string,
     projectId: string,
-    adminOnly: boolean,
+    required: RequirementAuthority,
     reader: Database | Transaction = db,
   ) {
     const {
@@ -788,7 +928,8 @@ export function createBusiness(db: Database) {
             and ${projectMember.projectId} = ${projectId}
             and ${projectMember.userId} = ${who.userId}
           where ${requirementParticipant.requirementId} = ${id}
-            and ${requirementParticipant.userId} = ${who.userId})`,
+            and ${requirementParticipant.userId} = ${who.userId}
+            ${required === 'editor' ? sql`and ${requirementParticipant.role} = 'requirement_manager'` : sql``})`,
       })
       .from(session)
       .innerJoin(user, eq(session.userId, user.id))
@@ -808,9 +949,9 @@ export function createBusiness(db: Database) {
       businessError(401, '登录已失效，请重新登录');
     if (
       !current.demand ||
-      (!current.admin && (adminOnly || !current.participant))
+      (!current.admin && (required === 'project-admin' || !current.participant))
     )
-      businessError(403, '无权访问当前需求模板绑定');
+      businessError(403, '无权执行当前需求操作');
     return current;
   }
   async function readTemplateBinding(
@@ -820,11 +961,11 @@ export function createBusiness(db: Database) {
   ): Promise<RequirementTemplateBinding> {
     return db.transaction(
       async (tx) => {
-        const authority = await authorizeTemplateBinding(
+        const authority = await authorizeRequirement(
           who,
           id,
           projectId,
-          false,
+          'reader',
           tx,
         );
         const bindingTable = schema.requirementCapabilityBinding;
@@ -1443,7 +1584,8 @@ export function createBusiness(db: Database) {
     execute,
     read,
     sessionTransaction,
-    authorizeTemplateBinding,
+    authorizeRequirement,
+    editDetails,
     readTemplateBinding,
     bindTemplate,
     publishRepository,

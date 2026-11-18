@@ -291,11 +291,13 @@ export function PlatformPage({
   username,
   logout,
   back,
+  openDesign,
 }: {
   userId: string;
   username: string;
   logout: () => void;
   back?: () => void;
+  openDesign: () => void;
 }) {
   const query = useQuery({
     queryKey: ['administration', 'platform'],
@@ -335,6 +337,14 @@ export function PlatformPage({
                 登记项目、指定项目管理员，管理现有账号状态。
               </p>
             </div>
+            <Button
+              tag="button"
+              variant="outline"
+              disabled={action.locked}
+              onClick={openDesign}
+            >
+              设计系统
+            </Button>
           </div>
           <Feedback action={action} />
           {query.isPending && <Loading text="正在读取平台设置…" />}

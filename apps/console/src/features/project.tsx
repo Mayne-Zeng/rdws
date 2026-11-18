@@ -20,7 +20,8 @@ export type View =
   | 'create'
   | 'repos'
   | 'members'
-  | 'platform';
+  | 'platform'
+  | 'design';
 export type Project = ProjectList['projects'][number];
 export function ProjectWorkspace({
   projects,
@@ -297,6 +298,16 @@ export function ProjectWorkspace({
               <span>平台设置</span>
             </button>
           )}
+          <button
+            aria-label="设计系统"
+            title="设计系统"
+            disabled={protectedForm}
+            className="nav-item design-nav"
+            onClick={() => navigate('design', '')}
+          >
+            <Icon name="eye" />
+            <span>设计系统</span>
+          </button>
         </nav>
         <div className="tree-heading">
           <span>需求 / 工作区</span>

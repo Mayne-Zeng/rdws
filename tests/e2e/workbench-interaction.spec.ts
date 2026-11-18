@@ -112,6 +112,9 @@ for (const failure of ['abort', 'invalid-json'] as const)
     await expect(
       page.getByRole('button', { name: '需求管理', exact: true }),
     ).toBeDisabled();
+    await expect(
+      page.getByRole('button', { name: '设计系统', exact: true }),
+    ).toBeDisabled();
     await expect(page.getByLabel('切换项目')).toBeDisabled();
     await page.setViewportSize({ width: 820, height: 900 });
     const createEntry = page.getByRole('button', {
@@ -331,6 +334,9 @@ test('member loading and failure recover before a busy create protects navigatio
   ).toBeDisabled();
   await expect(
     page.getByRole('button', { name: '需求管理', exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole('button', { name: '设计系统', exact: true }),
   ).toBeDisabled();
   expect(
     await page

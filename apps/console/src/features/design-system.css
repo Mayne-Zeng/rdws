@@ -1,0 +1,186 @@
+.design-nav {
+  min-height: var(--control-h);
+}
+
+.design-page {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  min-height: 0;
+}
+
+.design-wordmark {
+  margin-inline-end: auto;
+  color: var(--ink);
+  font-size: 17px;
+}
+
+.design-page .design-heading {
+  align-items: center;
+}
+
+.design-page .design-heading h1:focus {
+  outline: none;
+}
+
+.design-section {
+  min-width: 0;
+  margin-top: 28px;
+}
+
+.design-section > h2 {
+  margin-bottom: 10px;
+}
+
+.design-section > p {
+  margin: -4px 0 12px;
+}
+
+.design-colors {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.design-colors li,
+.design-values,
+.design-breakpoints,
+.design-examples {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+}
+
+.design-colors li {
+  overflow: hidden;
+}
+
+.design-swatch {
+  display: block;
+  height: 36px;
+  border-bottom: 1px solid var(--line);
+}
+
+.design-colors li > div {
+  display: grid;
+  gap: 3px;
+  padding: 9px 11px;
+}
+
+.design-colors code,
+.design-values code {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.design-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.design-values {
+  margin: 0;
+}
+
+.design-values > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.design-values > div:last-child {
+  border-bottom: 0;
+}
+
+.design-values dt > code {
+  display: block;
+  margin-top: 2px;
+}
+
+.design-values dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+}
+
+.design-breakpoints {
+  width: 100%;
+  border-spacing: 0;
+  text-align: left;
+  overflow: hidden;
+}
+
+.design-breakpoints th,
+.design-breakpoints td {
+  padding: 9px 12px;
+}
+
+.design-breakpoints tr[aria-current='true'] {
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+}
+
+.design-current {
+  margin-inline-start: 8px;
+  font-size: 12px;
+}
+
+.design-examples {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+}
+
+.design-examples > div {
+  min-width: 0;
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+}
+
+.design-examples h3 {
+  margin-bottom: 8px;
+}
+
+.design-examples .design-retry {
+  grid-column: 1 / -1;
+}
+
+.design-retry .inline-feedback,
+.design-retry .save-notice {
+  margin-bottom: 0;
+}
+
+@media (max-width: 620px) {
+  .design-colors {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .design-pair,
+  .design-examples {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .design-pair {
+    gap: 0;
+  }
+
+  .design-breakpoints th,
+  .design-breakpoints td {
+    padding-inline: 8px;
+  }
+}

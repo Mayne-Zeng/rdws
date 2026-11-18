@@ -755,6 +755,22 @@
   <p>外发定序的独立裁决确认，异步签发短期许可仍可能出现先签发、撤权提交、通知失败、旧许可首次使用的顺序。若沿用直连，需要决定已获准请求何时视为开始，以及容许的撤权窗口。在本次评估的两类候选中，严格要求撤权后零新增外发的方向是强制唯一出口，使本机最后一次交付请求与撤权共享定序点，并明确该出口是否可暂时处理正文和认证头、建立供应商 TLS。这个选择涉及已确认的原生模型权威与部署信任边界，仍由用户决定。派生时如何处理留在前缀中但尚未实际外发的选择也继续待决。当前证据可用于设计，产品选模与逐次授权尚未开启。</p>
   <p>独立证据复审 APPROVE，按复审补足受控拒绝计数、所有用途的供应商总计数和独立子会话 ID。最终 <code>caffeinate -i pnpm test tests/integration/project-native-paths.test.ts</code> 返回 0（2 项）。与 DeepSeek 探针聚焦合计 3 项通过。<code>caffeinate -i pnpm check</code> 返回 0（29 文件、184 项，类型、lint、格式和构建通过），构建仍提示主包体积。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。</p>
 
+  <h4 id="t13-queued-recovery-plan-20261119">11.16.15 冷恢复后新发送的队列修复</h4>
+  <p>Change / R3，基线 <code>e84c7fd</code>。沿 §11.8.5 和 T02 的已确认恢复契约修复一条阻塞路径。真实 BFF、隔离 PostgreSQL 与锁定版 Native 中，原消息入箱后确认刷盘、仍未领取时强制终止专用临时子进程。重启后的被动读取保持日志字节原样，同键核对返回已受理且无供应商调用。首次新请求返回已受理，实际 <code>turn/end</code> 为 <code>blocked</code>。驱动从 <code>next-turn</code> 先领无本代绑定的旧输入，阻止后新输入缺少后续唤醒。锁版实现也会把旧 <code>next-step</code> 与新输入一并领取，因旧绑定缺失拒绝整批。</p>
+  <ol>
+    <li>在 <code>agent/created</code> 的 <code>resume</code> 分支记录 Agent 对象及新代次，并只标记恢复时缺少有效本代运行绑定的原生输入。逐条要求为 <code>user</code> 或 <code>retry</code>、明确 RDWS principal、非空 userId、nonce 和 rpcId。按原生 ID 与该身份元组记录，覆盖两类队列。有效性使用同一会话、准入 nonce / 请求、Host 代次、可用的本 Agent 代次及未过期本地记录判断。新建、其他来源及有有效绑定的输入沿用各自原规则。</li>
+    <li>只有同一会话首次观察到带本代有效运行绑定且位于活动队列的新 RDWS 输入时，复核原标记项仍匹配 ID、身份元组并缺少运行绑定。若原生先公开 Agent，暂按 Agent 对象逐项记录创建回调前观察到的 RDWS 入箱 ID 与身份元组。恢复快照排除这些实时输入，即使其运行在创建回调前已撤销或过期；再从所有早到输入的首次有效提交中复核仍在队列且绑定有效的任意一条作为触发。初始化维护期间驱动唤醒仍挂起。现有 <code>run.seen</code> 先记录入箱证据，再通过公开 <code>Inbox.remove(id)</code> 追加精确取消。原生逻辑日志的取消发生在新入箱之后、驱动开始之前，刷盘沿用原流程。</li>
+    <li>原输入和取消可从已有 Native 原始日志核对，现行产品回放摘要未展示未领取的输入正文。被动读取、主动恢复本身和同键核对不触发取消，旧输入继续缺少执行权。取消继承现有 BFF 定序下已送达 Native 的新输入准入，Native 本地绑定不代表 PG 当前权限，既有模型及标题后置边界继续生效。同步观察者异常不会否决已入箱请求，部分失败时未取消项仍会被 <code>pre-step</code> 拒绝，已经受理的新请求可能仍终止为 <code>blocked</code>。</li>
+    <li>只改 RDWS Native 适配和回归夹具。验证真实冷启、两队列、无需先核对即可首次新发送、旧登录撤权、原键在取消前和再次冷启后的核对、供应商零旧请求与实收新正文。比较原始压缩字节前缀，并按原生 splice 精确核对被取消 ID、时点及零旧 <code>user/message</code>。补充控制回调早于创建事件、同代有效项及相邻会话的反例，复跑现有通知故障、重连和基线。回退适配后重启对应 Host，保留原输入和已经追加的原生取消事件，活动队列中的遗留项可能恢复原先的阻塞表现。逐次外发授权、正式选模和派生业务待决仍归独立条目。</li>
+  </ol>
+  <p>第三版方案 A/B 独立复审均 APPROVE。修订包括首次入箱时点、授权失效后的保全、初始化期间逐项排除实时入箱、原始字节及精确取消读回。</p>
+
+  <h4 id="t13-queued-recovery-evidence-20261119">11.16.16 冷恢复后新发送的验收</h4>
+  <p>改前 <code>caffeinate -i pnpm test tests/integration/native-queued-recovery.test.ts</code> 返回 1，两类队列均复现新授权发送已受理、实际终态为 <code>blocked</code>。修复在既有 Native 执行边界跟踪恢复来源，在首条实际新入箱经本代准入后，仅为缺少本代运行绑定的旧活动项追加取消。初始化时首尾新输入的绑定先后被撤销，中间仍有效的首次新入箱可触发；这三条当代输入均保留给原有规则处理。</p>
+  <p>真实冷启验收使用两个独立场景。<code>next-turn</code> 核对被动读取及旧键后首次发送。<code>next-step</code> 在旧登录退出并验证 401 后直接新发。两者分别从原生刷盘检查点强制终止已核对 PID 的临时 Native，再用真实 BFF、同账号新登录及新 Host 执行。每次实际新轮完成，模拟供应商只收到该轮主推理和标题请求，旧输入未出现在正文或 <code>user/message</code> 中。原压缩字节前缀完整，取消的消息 ID 由队列 splice 演算核对。取消后第三代 Host 按旧键仍得到原受理结果，新增入箱和供应商请求均为零。</p>
+  <p>独立交付复审 APPROVE。每次取消前重新读取活动队列中的 ID 和身份元组。创建回调遇同步写入异常只记固定文本，未取消项由既有 <code>pre-step</code> 处理。集成夹具在业务启动前分别核验应用与迁移连接的测试库和登录角色。独立复跑上下文用例 10 项通过。</p>
+  <p>聚焦回归通过 12 项（冷恢复 2 项、上下文 10 项）。最终 <code>caffeinate -i pnpm check</code> 返回 0（30 文件、187 项，类型、lint、格式和构建通过），构建仍提示主包体积。<code>caffeinate -i pnpm test:e2e</code> 返回 0（34 项），<code>caffeinate -i pnpm test:web-live tests/web-live/fault.spec.ts</code> 返回 0（本机 Native 通知故障 1 项），<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订以 <code>fix: retire stale Native queue items after cold recovery</code> 为准。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

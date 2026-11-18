@@ -345,3 +345,143 @@ test.each(['before-pre-step', 'downstream-reject'] as const)(
     expect(routes.get('runs.active')!({})).toEqual({ runIds: ['queued'] });
   },
 );
+
+test('an authorized insertion retires only its Agent’s recovered RDWS inputs without a current run', () => {
+  const callbacks = new Map<string, (args: unknown) => void>();
+  const routes = new Map<string, (input: Record<string, unknown>) => unknown>();
+  installContext(
+    {
+      on: (name: string, handler: (args: unknown) => void) =>
+        callbacks.set(name, handler),
+    },
+    { contextGeneration: 'host', contextEvidenceFile: '/dev/null' },
+    'synthetic',
+    (name: string, handler: (input: Record<string, unknown>) => unknown) =>
+      routes.set(name, handler),
+  );
+  const emit = (name: string, args: unknown) => callbacks.get(name)!(args);
+  const admit = (id: string, sessionId = 'recovered') =>
+    routes.get('run')!({
+      runId: id,
+      hostGeneration: 'host',
+      sessionId,
+      requirementId: 'r',
+      requestId: id,
+      peerNonce: 'peer',
+      authSessionId: 'login',
+    });
+  const input = (id: string, kind = 'user', principal = 'rdws') => ({
+    id,
+    source: {
+      kind,
+      rpcId: id,
+      principal: { kind: principal, userId: 'user', nonce: 'peer' },
+    },
+  });
+  const removed: string[] = [];
+  const inbox = {
+    nextStep: [input('stale-step', 'retry'), input('retained')],
+    nextTurn: [
+      input('stale-turn'),
+      input('explicit-owner', 'user', 'owner'),
+      input('restored-binding'),
+    ],
+    remove: (id: string) => {
+      removed.push(id);
+      return true;
+    },
+  };
+  const agent = { session: { id: 'recovered' }, inbox };
+  admit('retained');
+  emit('agent/created', { agent, source: 'resume' });
+  expect(removed).toEqual([]);
+  emit('agent/inbox/inserted', { agent, message: input('no-run') });
+  expect(removed).toEqual([]);
+  admit('wrong-session', 'neighbor');
+  emit('agent/inbox/inserted', { agent, message: input('wrong-session') });
+  expect(removed).toEqual([]);
+
+  admit('restored-binding');
+  const newMessage = input('new');
+  admit(newMessage.id);
+  inbox.nextTurn.push(newMessage);
+  emit('agent/inbox/inserted', { agent, message: newMessage });
+  expect(removed).toEqual(['stale-step', 'stale-turn']);
+  expect(routes.get('run.status')!({ runId: 'new' })).toEqual({ seen: true });
+  emit('agent/inbox/inserted', { agent, message: newMessage });
+  expect(removed).toEqual(['stale-step', 'stale-turn']);
+
+  const startup = { session: { id: 'startup' }, inbox };
+  emit('agent/created', { agent: startup, source: 'startup' });
+  admit('new-startup', 'startup');
+  emit('agent/inbox/inserted', {
+    agent: startup,
+    message: input('new-startup'),
+  });
+  expect(removed).toEqual(['stale-step', 'stale-turn']);
+
+  const early = input('new-before-created');
+  const revoked = [input('revoked-first'), input('revoked-last')];
+  const neighbor = {
+    session: { id: 'neighbor' },
+    inbox: {
+      nextStep: [],
+      nextTurn: [input('stale-neighbor'), revoked[0]!, early, revoked[1]!],
+      remove: inbox.remove,
+    },
+  };
+  for (const message of [revoked[0]!, early, revoked[1]!]) {
+    admit(message.id, 'neighbor');
+    emit('agent/inbox/inserted', { agent: neighbor, message });
+    if (message !== early) routes.get('run.cancel')!({ runId: message.id });
+  }
+  expect(removed).toEqual(['stale-step', 'stale-turn']);
+  emit('agent/created', { agent: neighbor, source: 'resume' });
+  expect(removed).toEqual(['stale-step', 'stale-turn', 'stale-neighbor']);
+
+  const liveReplacement = {
+    nextStep: [input('stale-with-discard-hook')],
+    nextTurn: [input('restored-replaced')],
+    remove(id: string) {
+      removed.push(id);
+      this.nextTurn[0] = input('restored-replaced', 'user', 'owner');
+      return true;
+    },
+  };
+  const replacing = { session: { id: 'replacing' }, inbox: liveReplacement };
+  emit('agent/created', { agent: replacing, source: 'resume' });
+  const replacementTrigger = input('new-after-replacement');
+  admit(replacementTrigger.id, 'replacing');
+  liveReplacement.nextTurn.push(replacementTrigger);
+  emit('agent/inbox/inserted', {
+    agent: replacing,
+    message: replacementTrigger,
+  });
+  expect(removed).toEqual([
+    'stale-step',
+    'stale-turn',
+    'stale-neighbor',
+    'stale-with-discard-hook',
+  ]);
+
+  const failedTrigger = input('new-with-removal-failure');
+  const failed = {
+    session: { id: 'failed' },
+    inbox: {
+      nextStep: [input('unremoved')],
+      nextTurn: [failedTrigger],
+      remove() {
+        throw new Error('Fixture inbox append failure');
+      },
+    },
+  };
+  admit(failedTrigger.id, 'failed');
+  emit('agent/inbox/inserted', { agent: failed, message: failedTrigger });
+  expect(() =>
+    emit('agent/created', { agent: failed, source: 'resume' }),
+  ).not.toThrow();
+  expect(failed.inbox.nextStep).toEqual([input('unremoved')]);
+  expect(routes.get('run.status')!({ runId: failedTrigger.id })).toEqual({
+    seen: true,
+  });
+});

@@ -3,8 +3,75 @@ import { appendFileSync } from 'node:fs';
 import { signGrant, bodyHash } from '../../bridge/access.ts';
 export function installContext(ctx, config, key, route) {
   const authorized = new Map(),
-    agents = new WeakMap();
+    agents = new WeakMap(),
+    earlyInsertions = new WeakMap();
   const lookup = (r) => r.sessionId + ':' + r.requestId + ':' + r.peerNonce;
+  const inboxInputs = (agent) => [
+    ...agent.inbox.nextStep,
+    ...agent.inbox.nextTurn,
+  ];
+  function pendingInput(agent, id) {
+    const matches = (message) => message.id === id;
+    return (
+      agent.inbox.nextStep.find(matches) ?? agent.inbox.nextTurn.find(matches)
+    );
+  }
+  function inputIdentity({ source }) {
+    const principal = source?.principal;
+    if (
+      !['user', 'retry'].includes(source?.kind) ||
+      principal?.kind !== 'rdws' ||
+      [principal.userId, principal.nonce, source.rpcId].some(
+        (value) => typeof value !== 'string' || !value,
+      )
+    )
+      return;
+    return JSON.stringify([
+      source.kind,
+      principal.userId,
+      principal.nonce,
+      source.rpcId,
+    ]);
+  }
+  function inputRun(agent, source) {
+    return authorized.get(
+      lookup({
+        sessionId: String(agent.session.id),
+        requestId: source?.rpcId,
+        peerNonce: source?.principal?.nonce,
+      }),
+    );
+  }
+  function currentInputRun(agent, message) {
+    const run = inputRun(agent, message.source);
+    if (
+      typeof run?.authSessionId === 'string' &&
+      run.authSessionId.length > 0 &&
+      run.hostGeneration === config.contextGeneration &&
+      run.expiresAt > Date.now() &&
+      (!run.agentGeneration ||
+        run.agentGeneration === agents.get(agent)?.generation)
+    )
+      return run;
+  }
+  function cancelRecovered(agent, recovered) {
+    for (const [id, identity] of recovered) {
+      const message = pendingInput(agent, id);
+      if (
+        message &&
+        identity === inputIdentity(message) &&
+        !currentInputRun(agent, message)
+      ) {
+        try {
+          agent.inbox.remove(id);
+        } catch {
+          ctx.logger?.warn('Recovered RDWS inbox cancellation failed');
+          return;
+        }
+      }
+    }
+    recovered.clear();
+  }
   route('run', (input) => {
     for (const [id, r] of authorized)
       if (r.expiresAt <= Date.now()) authorized.delete(id);
@@ -47,16 +114,31 @@ export function installContext(ctx, config, key, route) {
   ctx.on(
     'agent/inbox/inserted',
     ({ agent, message }) => {
-      const source = message.source;
-      if (!source?.rpcId) return;
-      const run = authorized.get(
-        lookup({
-          sessionId: String(agent.session.id),
-          requestId: source.rpcId,
-          peerNonce: source.principal?.nonce,
-        }),
-      );
+      if (!message.source?.rpcId) return;
+      const run = inputRun(agent, message.source);
+      const first = run && !run.seen;
       if (run) run.seen = true;
+      const state = agents.get(agent);
+      if (state && !state.recovered?.size) return;
+      const identity = inputIdentity(message);
+      if (identity === undefined) return;
+      const trigger = first ? currentInputRun(agent, message) : undefined;
+      if (!state) {
+        // Native can publish the Agent before its serial creation observers run.
+        const early = earlyInsertions.get(agent) ?? new Map();
+        const prior = early.get(message.id);
+        early.set(message.id, {
+          identity,
+          trigger:
+            trigger ??
+            (prior?.identity === identity ? prior.trigger : undefined),
+        });
+        earlyInsertions.set(agent, early);
+      } else if (trigger && !state.recovered.has(message.id)) {
+        const item = pendingInput(agent, message.id);
+        if (item && inputIdentity(item) === identity)
+          cancelRecovered(agent, state.recovered);
+      }
     },
     { global: true },
   );
@@ -136,8 +218,36 @@ export function installContext(ctx, config, key, route) {
   }
   ctx.on(
     'agent/created',
-    ({ agent }) => {
-      agents.set(agent, { generation: randomUUID() });
+    ({ agent, source }) => {
+      const state = { generation: randomUUID() };
+      agents.set(agent, state);
+      const early = earlyInsertions.get(agent);
+      earlyInsertions.delete(agent);
+      if (source !== 'resume') return;
+      const queued = inboxInputs(agent);
+      state.recovered = new Map();
+      for (const message of queued) {
+        const identity = inputIdentity(message);
+        if (
+          identity !== undefined &&
+          early?.get(message.id)?.identity !== identity &&
+          !currentInputRun(agent, message)
+        )
+          state.recovered.set(message.id, identity);
+      }
+      if (
+        state.recovered.size &&
+        early &&
+        queued.some((message) => {
+          const observed = early.get(message.id);
+          return (
+            observed?.trigger &&
+            observed.identity === inputIdentity(message) &&
+            currentInputRun(agent, message) === observed.trigger
+          );
+        })
+      )
+        cancelRecovered(agent, state.recovered);
     },
     { global: true },
   );
@@ -146,6 +256,7 @@ export function installContext(ctx, config, key, route) {
     ({ agent }) => {
       release(agents.get(agent));
       agents.delete(agent);
+      earlyInsertions.delete(agent);
       for (const r of authorized.values())
         if (r.sessionId === String(agent.session.id)) retire(r, agent);
     },

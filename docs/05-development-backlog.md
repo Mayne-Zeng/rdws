@@ -182,6 +182,7 @@
   - 实现前验证：[发出前的传输证据](02-directory-and-engineering-design.html#t13-provider-dispatch-probe-20261119)。已在锁定版本的 PiAi HTTP 路径核对首次推理、429 后重试及独立后台标题。夹具可阻断指定的实际请求，标题原生记录可追溯到原消息。产品授权方案继续按 §11.16.7 复审。
   - 实现前验证：[DeepSeek Messages 与 Files](02-directory-and-engineering-design.html#t13-deepseek-messages-dispatch-probe-20261119)。回环实证核对上传、内联回退、缓存文件引用及扩展准备失败，确认 Files 与 Messages 各有实际外发边界。工作台图片输入及产品逐次授权未在此探针启用。
   - 实现前验证：[入箱领取选模与派生边界](02-directory-and-engineering-design.html#t13-claim-selection-probe-20261119)。实际排队发送确认本轮原模型及下轮目标模型，阻止后仍可能把未外发的选择带入派生。撤权定序所需网络边界及未外发选择的派生语义登记为待决。
+  - 已交付修复：[冷恢复后首次新发送](02-directory-and-engineering-design.html#t13-queued-recovery-evidence-20261119)。已刷盘的旧输入保留在 Native 原始日志。新的有效入箱才取消缺少运行绑定的旧活动项，首次新发送完成，旧键在再次冷启后仍可核对。独立复审、整仓 187 项、浏览器 34 项、本机 Native 通知故障回归及基线通过。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。

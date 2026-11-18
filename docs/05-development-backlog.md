@@ -169,6 +169,7 @@
   - 已交付子项：[模型目录响应脱敏](02-directory-and-engineering-design.html#t13-catalog-boundary-20261118)。BFF 保留正常目录及可用模型，供应商故障使用稳定提示，原生诊断保留在服务端边界内。
   - 已交付子项：[会话底部模型状态](02-directory-and-engineering-design.html#t13-model-status-20261118)。展示原生已记录模型或实例默认。选模写入方案经双面审阅进入修订，重点是撤权、并发准入、刷盘确认及派生后的实际路由。
   - 已交付子项：[浏览器推理故障响应](02-directory-and-engineering-design.html#t13-inference-failure-boundary-20261118)。HTTP／WS 区分正常消息、推理失败与重试诊断，原生数据保留。工作台继续支持上下文阻止提示和原消息恢复。选模写入方案继续走独立安全闸门。
+  - 新验收证据：[刷盘与恢复后选路](02-directory-and-engineering-design.html#t13-model-dispatch-evidence-20261118)。强制退出后复用 Native 状态完成两次本机合成推理，目标模型与实例默认分别命中。写入候选需确认「保存时确认，下一次有权发送时生效」；原短事务等待 Native 方案继续未准出。
 
 - [ ] **T14 · 能力白名单与模板**
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。

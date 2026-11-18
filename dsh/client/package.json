@@ -1,0 +1,23 @@
+{
+  "name": "@rdws/dsh-client",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./runtime.ts",
+    "./node-boundary": "./node-boundary.ts"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/cordis-plugin-loader": "1.1.0",
+    "@deepseek-ai/dsh-client-store": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-client-modules": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-api-session-controller": "0.2.2-rc.3",
+    "zod": "4.6.6",
+    "zustand": "4.5.7",
+    "immer": "10.1.1"
+  },
+  "peerDependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  }
+}

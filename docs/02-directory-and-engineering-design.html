@@ -7,7 +7,7 @@
 <style>
   :root{
     --brand:#0E7490; --brand-dark:#0B596E; --brand-soft:#E6F3F6; --brand-line:#B9DEE6;
-    --ink:#1C2530; --ink-2:#43505E; --ink-3:#6B7885;
+    --ink:#1C2530; --ink-2:#43505E; --ink-3:#626F7C;
     --line:#E2E7EB; --bg:#F5F7F8; --paper:#FFFFFF;
     --red:#B3373A; --red-bg:#FCEDEC; --amber:#9A6410; --amber-bg:#FDF4E3;
     --green:#24735A; --green-bg:#EAF5F0; --gray-bg:#F0F3F5;
@@ -84,6 +84,7 @@
 
 <div class="wrap">
   <div class="toc">
+    <a href="#implementation-20261117">当前：工程与运行空间实施基线</a>
     <a href="#s0">0. 评审结论</a>
     <a href="#s1">1. 目录结构逐项评审</a>
     <a href="#s2">2. 修正后的 .rdws 完整结构</a>
@@ -97,6 +98,187 @@
     <a href="#s10">10. 证据索引</a>
   </div>
 
+
+  <h2 id="implementation-20261117"><span class="num">11</span>当前工程实施基线 · 2026-11-17</h2>
+  <div class="verdict"><div class="vtitle">目录经用户确认</div><p>规范来源为 <a href="00-decision-ledger.html#implementation-20261117">决策台账 v4 §8</a>。本节优先于下方历史工程蓝图；这里只描述实现映射，不另造业务决定。旧版保留作设计与实测证据。</p></div>
+  <h3>11.1 目标代码目录</h3><pre><code>rdws/
+├── apps/
+│   ├── console/src/{app,features,lib}/
+│   ├── server/src/{modules,plugins}/
+│   ├── orchestrator/
+│   └── syncer/
+├── packages/
+│   ├── contracts/
+│   └── db/{src,migrations}/
+├── dsh/{upstream,bridge,client,host,profiles,plugins,tests}/
+├── config/
+├── deploy/compose.postgres.yml
+├── scripts/
+├── tests/{integration,e2e,web-live}/
+├── docs/
+├── demo/
+├── package.json
+├── pnpm-workspace.yaml
+├── pnpm-lock.yaml
+├── tsconfig.base.json
+└── AGENTS.md</code></pre>
+  <p>Fastify 仅用于 server；orchestrator 负责实例、工作树、写交接与交付编排；syncer 是唯一更新 sources 的组件，按任务运行。contracts 仅放共享业务契约；db 集中 Drizzle schema / migrations。dsh/bridge 是服务端适配层，dsh/client 是浏览器公开会话能力适配层。upstream 记录锁定来源并独立获取，上游内部源码不混入业务模块。</p>
+  <p>按阶段创建有实际内容的目录，不放空包或假实现。packages/ui、packages/sdk、额外 shim、全部插件拆包、Helm、DSH Docker 启动后端均不在首阶段预建；必要组件先就近放置。单元测试邻接源码，集成 / E2E 独立。工具配置以 package.json 的真实 scripts 为准；历史 HTML 不进行全仓格式化。</p>
+  <h3>11.2 目标运行空间</h3><pre><code>$RDWS_HOME/
+├── config/{platform.yaml,policies,projects}/
+├── secrets/
+├── projects/&lt;project-id&gt;/
+│   ├── sources/&lt;repo-id&gt;.git/
+│   └── demands/&lt;demand-id&gt;/
+│       ├── demand.yaml
+│       ├── AGENTS.md
+│       ├── context/
+│       ├── .gitstore/&lt;repo-id&gt;.git/
+│       ├── worktrees/&lt;repo-id&gt;/
+│       ├── artifacts/
+│       └── .rdws/
+├── runtime/
+│   ├── dsh/&lt;instance-id&gt;/
+│   ├── instances/
+│   ├── integrations/&lt;job-id&gt;/
+│   └── cache/
+└── state/{deliveries/&lt;snapshot-id&gt;,indexes,exports}/</code></pre>
+  <p>RDWS_HOME 由配置固定为绝对路径，独立于代码仓库；开发默认用户目录下 .rdws，Linux 可配置到服务账号可管理的持久目录。运行数据不进 Git。模板在代码仓库 config / dsh/profiles，运行根 config 是非敏感部署配置；业务角色与需求状态以 PG 为准，不能靠 YAML 再维护一套。</p>
+  <p>一个项目对应一个 DSH 实例，每实例独占 DSH_HOME，内部文件布局由锁定上游管理；一个需求对应一个 workspace，会话 header cwd 精确为需求根。子任务、人员与会话共用同一组需求工作树，不创建二级并行树。.git 指向需求私有 .gitstore，不指向 sources；Plan 不是只读强制执行点。</p>
+  <p>新增 integrations 为平台受控的集成检出区；新增 state/deliveries 用于封存证据，PG 存不可变映射 / 校验值。artifacts 是可继续生成的工作产物，不充当不可变快照。runtime/instances 只保存进程元数据，不能成为第二套业务写权限真相；需求临时 .rdws 不存权威授权。</p>
+  <p>PG 数据放 Docker 命名卷，不置于 RDWS_HOME。使用独立 Compose project、PG18 固定镜像、仅本机端口、开发 / 测试数据库、非超级应用账号与迁移角色；镜像 18 挂载路径须依据锁定镜像核实。私有凭据权限 600，不输出连接串；不碰现有其他项目容器与卷。</p>
+  <p><strong>已落地：</strong>原生服务只接入预置项目 <code>poc</code>。该项目实例目录为 <code>runtime/dsh/project-poc/</code>，会话工作目录为 <code>projects/poc/demands/&lt;requirement-id&gt;/</code>；进程锁与导出分别位于 <code>runtime/instances/</code>、<code>state/exports/</code>。测试运行目录独立。<code>sources/</code>、私有 Git worktree、写交接、集成检出和交付快照仍是目标结构。</p>
+  <h3>11.3 模型、运行与验证顺序</h3>
+  <p>逻辑模型、权限及技术选型均引用台账 §8.1–§8.3；迁移按纵向切片逐步实现，不提前创建审批、部署或完整 Bug 系统表。Better Auth 数据库登录会话与 DSH 会话分开；登录不等于业务授权。</p>
+  <ol><li>规格同步 → 最小 workspace / Docker PG / 迁移 / 预置登录及持久化。</li><li>公开 DSH 接入探针 → 再铺需求 / 子任务 / 状态的业务切片。</li><li>多会话单写、只读执行、恢复与上下文 → 真实 GitLab 人工 MR 与回写。</li><li>macOS 聚焦与完整回归 → Linux 同版本干净安装和真实环境最终验收。</li></ol>
+  <p>每个阶段记录命令、exit code 与关键输出；未取得外部环境的集成标“未验证”，不以 mock 代验收。迁移或服务失败保留数据库卷、工作区和轨迹，停止本次资源；不自动 down -v、删除数据或 force push。后续执行记录追加在本节。</p>
+  <p>当前代码位于 <code>apps/console/src/{app,features,lib}</code>、<code>apps/server/src/modules</code>、<code>packages/{contracts,db}</code>、<code>dsh/{upstream,bridge,client,host,profiles,plugins}</code>、<code>deploy/</code>、<code>scripts/</code> 和 <code>tests/{integration,e2e,web-live}</code>。尚未创建 orchestrator、syncer、独立 server 插件目录和配置模板目录。<code>dsh/upstream/manifest.json</code> 记录锁定来源、版本与包摘要。模型使用 GLM-5.3-Flash / OpenAI Chat Completions；<code>model.env</code> 只用作一次性引导输入，持续配置由 DSH 管理。</p>
+  <h3>11.4 执行记录</h3><p id="execution-log">2026-11-17：当前为已批准目标；开始建立工程。此前独立计划评审未返回有效结论，用户在获知限制后明确确认并要求开工。功能、依赖与真实集成的验证结果待按阶段追加。</p>
+
+  <p>阶段 1 实测：PG 18.7 镜像摘要固定为 sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc，镜像声明挂载 /var/lib/postgresql。db:bootstrap / db:migrate / db:seed 在开发与测试库完成；db:recreate 保留卷重建并健康后，账号 / 项目数据保留。集成用例验证未登录拒绝、数据库会话、退出撤销、停用后业务拒绝、管理员不继承项目成员、来源限制、限流与数据库权限。E2E 检查明暗主题及窄屏；原型与上游源码未改。</p>
+  <p>阶段 1 时点的限制：DSH / GitLab / Linux 真实闭环未验收；DSH 子集当前结果见 §11.5；独立评审未完成。审计有 1 项 moderate 的 esbuild 工具链传递依赖，未强制覆盖版本；后续工具链升级需回归迁移生成。不提供生产部署或强隔离保证。</p>
+
+  <p>模型配置归属：DSH 自己持有 Provider 的协议、端点、模型目录和凭据引用；平台不建立重复的 provider 配置表或私有模型适配器。原生 settings / credentials 控制器提供脱敏读与只写密钥；RDWS 自绘入口必须先做作用域与权限校验。launcher 只初始化缺失配置，不能在启动时用旧模板重写已有模型设置；平台锁定策略通过独立受控层维护。</p>
+  <p>pnpm dsh:model:import 仅首次转换到 runtime/dsh/project-poc/.credentials.yaml 与 profiles/rdws/cordis.patch.yml，采用原生允许直接编辑的 YAML 文档格式（JSON 子集）。重复运行保留原生文件，部分已有配置拒绝覆盖。配置已初始化，但 profile manifest / Host / 原生读写接口及真实推理仍待接入探针验证。</p>
+
+  <h3 id="dsh-live-20261117">11.5 DSH 接入探针实际落地</h3>
+  <p>对应台账 <a href="00-decision-ledger.html#dsh-live-20261117">§8.6 最终实测</a>。新增 dsh/host/instance.ts：通过官方 SDK 管理一个独立运行时子进程，严格按已存在的原生模型配置启动，仅补缺失 manifest，不使用会清空用户 patch 的 --from-default-profile。进程环境按允许列表构造，密钥由原生凭据存储读取，不复制进子进程环境。</p>
+  <p>dsh/bridge/events.ts 仅汇总探针证据；dsh/plugins/probe-observer 使用公开 agent/assistant-stream 钩子记录无正文元数据，不替代产品流式通道。dsh/profiles/probe-policy.cordis.yml 作为受控启动 overlay：只读、执行工具禁用、日志上传 / OTel 禁用、保留 Agent 必需执行器服务。没有修改上游源码或导入其内部 core 路径。</p>
+  <p>scripts/dsh-probe.ts 提供真实验证入口、项目独占运行锁、握手 / 请求超时、原生恢复与关闭。关闭确认前不释放锁；证据文件权限 600，报告不含密钥和端点。运行时进程与一次性观察记录在 runtime/，原生日志在该实例 sessions/，脱敏报告在 state/exports/，均不进 Git。实例已在验证结束后正常关闭。</p>
+  <p>最终 runId：<code>47aba3da-7efd-4d2f-a67f-5fe9944bedb9</code>；会话耗时 4161 / 3849 ms，实时文本段 66 / 23，两个原 ID 均原生恢复成功，模型 patch 未变。具体失败与修复、安全补丁、审计剩余项和验收边界均见台账 §8.6。</p>
+  <p>依赖新增 @rdws/dsh 与仅依赖标准库的探针插件工作区；原生 DSH / SDK 固定 0.2.2-rc.3。pnpm-workspace.yaml 定向将 undici@8.11.2 解析至 8.12.2，属于同主版本安全补丁，模型协议、权限与 DSH 核心版本不变。YAML 解析仅用于探针读取原生文档，不自建供应商配置系统。</p>
+  <p>该次探针通道是官方 SDK stdio（进程外协议），不是将 DSH 核心嵌入 Fastify。原生 SDK 的持久事件与原生客户端实时流不同，该次观察不等同于 Web 逐字展示；后续 Web 实测见 §11.7。</p>
+
+  <h3 id="web-session-plan">11.6 Web 会话接入实施计划</h3>
+  <p>用户授权将原生会话创建与流式响应接入工作台并验证两道闸。沿用已批准范围，最小补齐 Requirement / Participant / NativeSessionMapping 与 Web 需求创建入口；不扩展子任务、状态推进、代码写、部署或 GitLab。普通成员按需求参与读，项目管理员仅项目内管理读，只有本人会话可发送消息；全局保持只读及执行工具禁用。</p>
+  <p>浏览器 → Better Auth / PG 授权的 BFF → HMAC 短期非 owner Peer → 原生 RemoteAccessPolicy / Workspace / Session。cap 含 issuedAt、expiry（最多20秒）、nonce、项目 audience、登录会话与需求、真实workspace ID、可读 / 自有session集合；浏览器不持有原生票据。Host同步验签、读取不可变cap，过期或经私有签名端点撤销时先deny再dispose Peer并关升级socket。BFF定期复验、先停止转发再撤销 / 关流；撤销通知失败不得宣称立即一致，最迟以Host租约到期为界。</p>
+  <p>workspaceRegistry.create 返回的真实 ID 落PG。browser cap不允许session/create；BFF专用create cap仅在精确workspace资源上授权，参数只允许服务器workspaceId，不接受客户端cwd、preset或sessionId复用。native成功、PG映射失败时不给浏览器访问权、记录孤立ID，不无界重试；成功后撤旧Peer、重新鉴权重连，不热扩权。HTTP每个动作与WS每次logical open用同一显式允许表，未知拒绝；文件、附件存储、插件与供应商设置均不开放。</p>
+  <p>原生rdws Profile作为Web主入口，保留模型 / credentials；SDK探针改为独立原生probe Profile，直接引用同一模型patch，不复制配置。Web通过公开bootInjections / modules runtime、共享平台模块和ctx.sessions binding / eventSource消费原生transient settlement、恢复与重连，RDWS React自绘；不重新实现消息或Mux协议。</p>
+  <p>顺序：模型迁移与授权测试 → Native Web Host / non-owner Auth / Policy → BFF HTTP / WS与需求 / 会话入口 → 原生客户端和React → 真GLM浏览器及越权回归 → 台账证据。验证包括匿名 / 跨项目需求 / 他人会话写拒绝，list/control/history隔离，绕过BFF的native拒绝，已开流到期关断、退出撤权和通知失败、超过20秒真实响应跨generation无重复且刷新恢复。失败恢复保留数据和原生配置，关闭确认前不释放项目实例锁。</p>
+  <p>计划审阅：全新上下文A面（正确性 / 原生客户端可行性）与B面（安全 / 授权）均在修订后APPROVE；已吸纳创建专用cap、真实workspace映射、PG失败不扩权、不可变短Peer、主动关流和issuedAt撤销截止点。此为计划批准，不代表实现或验收已通过。执行证据后续追加。</p>
+
+  <p>安装包事实修订：发布的 rc.3 Connection 仍内置 BrowserAuth，不具备参考工作树中的 connection.authentication / webserver/authorize 接口。两面撤回基于新工作树的批准后，重新审核已安装源码并批准公开载体组合：独立 /_rdws 路由验签、显式non-owner Peer，复用 createSharedFetchHandler.fetch(request,peer) 与公开导出的 RemoteStreamMuxServer / wireStream。HTTP精确映射到/api原生路径，同generation HTTP/WS复用同cap与Peer。内置owner管理入口实际仍存在，仅loopback且不由BFF代理，不声称已关闭；普通用户无其Token/Cookie。公开源码导出用tsx加载，不修改上游或私有认证映射。此修订保持用户两道闸目标，真实拒绝和旧入口隔离仍须实测。</p>
+
+  <h3 id="web-live-20261117">11.7 Web 会话接入实际落地与验证</h3>
+  <p>结果与边界见 <a href="00-decision-ledger.html#web-live-20261117">台账 §8.7</a>。工程沿用 §11.1 目录：<code>dsh/client</code> 收口浏览器原生模块适配，<code>dsh/host/web.ts</code> 启动项目级子进程，<code>dsh/bridge/access.ts</code> / <code>wire.ts</code> 管授权与帧准入，<code>dsh/plugins/rdws-access</code> 承载原生策略和私有载体。业务 BFF 位于 <code>apps/server/src/modules/workbench.ts</code>，自绘会话位于 <code>apps/console/features</code>；三张业务映射表及迁移归 <code>packages/db</code>。未预建 orchestrator / syncer 或复制上游源码。</p>
+  <p><strong>原生客户端：</strong>从安装产物的公开入口加载 bootInjections、modules runtime、Session binding 与 eventSource，保留原生 history / transient / settlement 语义。按发布包实际 ABI 处理静态模块 namespace、reconnect()、refresh() 与模块 import 参数，不照搬不同提交的参考树。每次物理重连产生新 generation，PG 重新鉴权；保留同一 Cordis 根，原生会话恢复后继续消费流，避免旧 Binding 与重复历史。Native Store 所需 Zustand / Immer 是上游运行依赖，不改变 RDWS 的 Query / 局部业务状态选型。浏览器 Node 模块边界明确失败，不提供文件系统能力。</p>
+  <p><strong>两道闸：</strong>浏览器只访问 BFF。HTTP / WS 使用同一允许表和同 generation 不可变签名能力；默认拒绝未知方法、文件 / 插件 / 供应商设置与 uplink item。Host 在独立 <code>/_rdws</code> 路由验签，以 non-owner Peer 调公开 <code>createSharedFetchHandler.fetch(request, peer)</code> 与包 exports 公开的 <code>RemoteStreamMuxServer</code>，后者由 tsx 加载。内置 owner 入口仅 loopback，既未关闭也未代理。真实 workspace ID 由原生注册表返回后落 PG；原生创建成功而 PG 映射失败时保留孤立 ID 证据并拒绝浏览器准入，不热扩权。</p>
+  <p><strong>租约和关闭：</strong>能力有效期最多 20 秒；Host 先 deny 后 dispose Peer 并关 socket。退出先同步标记登录会话 closing，禁止等待期间新准入，再终止 BFF 在途 HTTP / WS、通知原生撤销；通知不可达时以租约为原生关断上界。scope epoch 防止异步旧准备结果发票，HTTP 返回前再鉴权，拒绝撤权前已取得的旧响应。正常关闭在 Fastify preClose 中先关桥与子进程，再释放锁；锁恢复仅在父子 PID 都确认停止后允许，未知状态拒绝，原生日志不删除。</p>
+  <p><strong>只读修正：</strong>只在根禁用 tool-* 并不足够，原生 standard 等 preset 会在会话作用域重新注册执行工具。已先以原生 request/header 断言复现，再加入 <code>dsh/profiles/web-readonly.cordis.yml</code> 清空 standard / minimal / ptc / cordis 的 plugins，配合 serial agent/created 限制继承工具与根 tools.guard 拒绝执行。overlay 顺序为原生模型配置、只读基础策略、preset 限制、Web 载体。新建真实会话验证请求 header 有记录且工具集合为 0；旧会话快照可能保留工具声明，由执行 guard 拒绝，不重写历史。</p>
+  <p><strong>运行空间：</strong>日常 Web 沿用 <code>~/.rdws/runtime/dsh/project-poc</code> 的 rdws Profile 和原生凭据；SDK 探针 rdws-probe 引用同一模型 patch，并共用项目进程锁。真实浏览器测试的数据 / 实例分别在 <code>~/.rdws/testing-web</code>、<code>testing-fault</code>，通过原生路径引用模型 / 凭据，不复制密钥，不覆盖日常 Web / API 端口。最终测试进程组退出后曾遗留锁文件；父子 PID 均确认已停止后，已通过既有受控锁恢复分支清理。PG 仍为本机 Docker 的独立开发 / 测试库；测试需求和原生轨迹保留以便复查，不自动清空。</p>
+  <p><strong>验证：</strong><code>pnpm check</code> exit 0，6 个文件共 28 项测试通过；<code>pnpm test:e2e</code> 2 项通过；<code>pnpm test:web-live</code> 的最终结果文件为 passed，7 项真实用例通过。真实长响应 102046 ms / 6 次 generation / 9249 实时文本帧，页面等于原生日志且刷新一致，页面错误 0、新会话工具声明 0、调用 0。实测覆盖直接原生越权、已开流失效 / 重放、退出与撤销通知故障；受控无模型回归另覆盖延迟准入 / 旧 HTTP 响应 / 退出等待期竞态。明暗主题和 390px 无横向溢出通过；修复暗色按钮样式过渡造成的瞬时低对比度，断言要求 ≥4.5。截图仅作本次最小工作台验证，不代表已实现完整设计稿。</p>
+  <p><strong>收尾核验：</strong>两个文档的 ID / 相对链接无错误；辅助文字对比度由原先约 4.20 提升至通过 4.5 门槛，逐文本测量无失败项，没有添加忽略规则。90 个仓库 / Web 构建文件对照 29 个实际私有值与模型端点扫描，匹配 0；核验的 11 个凭据文件均为 mode 600。日常 Web / API health 均返回 200，Docker PostgreSQL healthy。以上只是本轮有限检查，不代替完整安全审计。</p>
+  <p><strong>审阅与限制：</strong>两路独立代码评审修订后 APPROVE。npm 产物与参考源码不同，参考 commit 不作为安装产物一致性证明；公开源码导出与浏览器适配是升级回归点。高危依赖 0，仍有 3 moderate，构建主 JS 约 884 kB 的体积提示仍在。未验证完整写会话 / 文件与 Shell 隔离、五会话、fork / replay、GitLab 与 Linux；R-A / R-B 不变，未完成生产发布或分发合规验收。</p>
+
+  <h3 id="business-slice-plan-20261118">11.8 已批准实施：子任务、状态与会话上下文</h3>
+  <p><strong>状态：2026-11-18 用户整体确认，已授权分阶段实施。</strong>目标见 <a href="00-decision-ledger.html#business-slice-20261118">台账 §8.8</a>。来源为用户请求、I2-STATE / I2-AUTH / I3-TASK / I3-CONTEXT / I4-UI，以及 <a href="04-design-baseline.html">设计基线</a>与 <code>demo/rdws-workbench.html</code>。此为单份已批准方案，按 R3 强度完成双面独立审阅；既有“建议”措辞按本次整体确认转为实施契约。分阶段实现、保留历史和运行数据；内部验证通过前不展示中间页面。</p>
+
+  <h4>11.8.1 目标、现状与非目标</h4>
+  <p>目标是一条完整路径：需求经理 / 项目管理员创建需求并完成初始拆分与分派 → 开发负责人维护子任务 → 通过明确的按钮操作推进需求或本人任务状态 → 其他需求会话在下一推理边界感知最新业务事实。PG 为状态权威，DSH 原生日志为会话轨迹权威，模型和浏览器缓存不作业务事实源。</p>
+  <p>当前仅有需求、单角色参与关系和原生会话映射；没有子任务、阶段、分派 / 状态事件或动态业务上下文。当前参与者角色用项目成员的首条记录推导，不能可靠表达一人多角色，本阶段须在需求参与与分派切片修正；不能在新权限规则中继续沿用该推导。保持项目级 DSH 实例、需求级 workspace / 共享工作区，本阶段所有会话仍无文件 / Shell / Git 执行能力。</p>
+  <p>本阶段不做子任务嵌套、依赖编排、任务独立工作树、代码单写交接、测试用例 / 执行 / Bug 闭环、GitLab MR、部署、归档或全部 Demo 功能。阶段变化不授予代码写权限、不自动推进任务、不证明测试通过或 MR 已合入；这些事实继续分开。</p>
+
+  <h4>11.8.2 业务规则与权限</h4>
+  <table><tr><th>动作</th><th>建议规则</th><th>来源 / 边界</th></tr>
+    <tr><td>创建需求与初始拆分</td><td>项目内需求经理 / 项目管理员填写开发负责人、明确的开发成员与其他参与角色，并可同时创建零个或多个子任务；负责人未填时默认需求开发负责人。创建、参与关系、任务及初始分派事件同事务成功或失败。</td><td>I3-TASK；任务只能指派给当前需求中有效的开发成员，同时具备项目开发身份。</td></tr>
+    <tr><td>后续维护任务</td><td>需求开发负责人新增、编辑、改派、调整任意子任务状态；普通开发成员仅更新本人当前负责的任务状态。普通成员不能改派或扩大参与成员集合。</td><td>I3-TASK / I2-STATE；本轮不提供创建后变更需求开发负责人 / 参与集合的管理入口，避免引入另一套人员管理流程。</td></tr>
+    <tr><td>主阶段</td><td>仅当前需求开发负责人可选目标阶段，允许跳转 / 回退，无额外审批。建议阶段为「录入、指派、设计、开发、测试、集成（非生产）」；新建需求已有负责人，初始阶段为「指派」。</td><td>I2-STATE；Demo 的「导入」改称「录入」以适配 Web 新建；「归档」延后。跳过的阶段不显示为已完成。</td></tr>
+    <tr><td>子任务状态</td><td>建议「待开始、进行中、已完成、已取消」，可显式回退；不自动汇总为需求阶段。取消保留任务和历史，不硬删除。</td><td>新增待确认枚举；主阶段与子任务状态分开。</td></tr>
+    <tr><td>管理与测试身份</td><td>需求经理 / 项目管理员承担初始创建分派及既有范围内读取；不能凭管理身份改主阶段或冒用开发者任务。测试人员可按需求参与关系读取、创建本人分析会话，本阶段不能改业务状态或代码。</td><td>I2-AUTH；管理员需要显式兼任对应需求职责，一人多角色只在当前项目 / 需求范围合并。</td></tr>
+    <tr><td>读取范围</td><td>普通成员仍需项目成员关系及需求参与关系；项目管理员仅在当前项目管理读；平台管理员没有隐式项目业务权。全部子任务沿用所属需求读取范围，不另建任务级 ACL。</td><td>沿用已确认访问边界；分派不是授予需求读取权的后门。</td></tr>
+  </table>
+
+  <h4>11.8.3 最小数据模型与并发语义</h4>
+  <table><tr><th>模型</th><th>本阶段建议字段与不变量</th></tr>
+    <tr><td>Requirement</td><td>增加 stage、contextVersion。contextVersion 只用于机器同步，不要求用户处理 revision；业务有效变更在同一事务中递增。</td></tr>
+    <tr><td>RequirementParticipant</td><td>明确按「需求 × 用户 × 角色」保存参与身份；角色必须来自项目内有效职责集合。兼容迁移已有参与数据，归一现有 manager 别名，不按项目角色顺序猜测；原开发负责人保持开发身份，未知映射阻止迁移并报告。</td></tr>
+    <tr><td>Task</td><td>id、requirementId、title、description、acceptance、assigneeId、status、createdBy、timestamps；仅一层、一个有效负责人。关联校验同时覆盖项目开发身份与需求开发参与身份。</td></tr>
+    <tr><td>AssignmentEvent / StateChange</td><td>只追加：requirementId、可选 taskId、actorId、source（web / conversation）、可选 sessionId、commandId、before / after、服务端时间和需求内提交序号。任务创建 / 编辑也留事件，包含真正变化字段。</td></tr>
+    <tr><td>CommandReceipt</td><td>commandId、actorId、scopeType / scopeId、operation、规范化请求摘要、执行结果及关联事件；唯一键为「actor × 作用域 × operation × commandId」。创建作用域用 projectId，在生成 requirementId 前预留回执；其他动作使用 requirementId。并发相同请求通过唯一约束竞争后读取原结果，返回同一新建需求 ID；同 key / 不同请求拒绝。回执与业务同事务，不存会话正文或凭据，重放仍检查当前读取权限。</td></tr>
+  </table>
+  <p>所有业务按钮进入同一内部命令服务，commandId 是防重标识，不是让用户输入的指令。服务端从数据库登录会话确定真人身份；短事务按固定顺序锁登录会话、操作者 / 分派目标用户、项目角色、需求、参与关系和任务，同类多行按 ID 排序。会话 / 用户 / 有效角色和参与行用共享行锁防止检查后删除或停用，需求与目标任务用更新锁串行变更；核对有效期、角色、归属、当前负责人后，更新目标字段、追加事件与回执、递增 contextVersion 后一次提交。不得持有数据库锁等待 DSH、模型或网络响应；死锁 / 序列化失败只允许有界重试并沿用同一 commandId。</p>
+  <p>授权以成功取得所需锁并复核的时点定序：已经提交的停用 / 撤权必须被看见并拒绝；合法操作先取得锁时，后来的停用 / 删除等待它完成，再禁止后续操作，不撤销此前已合法提交的动作。账号和项目成员的常规 UPDATE / DELETE 会与行锁冲突；将来同事务修改多类身份的管理路径必须遵循同一锁顺序。任务编辑只提交变化字段，不用整个旧表单覆盖其他会话的更新。不同字段互不覆盖；同一字段按成功提交顺序生效，记录真实 before / after，界面告知被后续修改。相同目标值为无变化回执，失败事务不留半条历史。</p>
+  <p>开发成员失去分派后，不能再更新任务；跨需求 taskId / sessionId、客户端伪造 actor / role 均拒绝。分派时同样锁定并核对目标账号、项目开发身份与需求开发参与身份。本阶段不提供移除参与者入口；将来移除仍有未完成任务的成员，需要先改派或在同一事务处理，不能悄悄留下无效负责人。</p>
+
+  <h4>11.8.4 按钮优先的状态操作</h4>
+  <p><strong>采用用户最新纠正：不手打指令，复用阶段推进按钮。</strong>此前选择 slash 的答复已被后续意见替代，按钮方案已随整体确认生效。需求档案显示「当前阶段」和「调整阶段」按钮；点击展开目标阶段菜单，当前项标记选中，点选其他阶段直接提交，不另弹确认。提供名称明确的下一阶段快捷项，如「进入测试」，仍提交绝对目标而非反复执行 next，同时保留直接跳转 / 回退；末阶段无推进下一项。子任务状态和负责人也就近选择，不要求记命令、ID 或语法。</p>
+  <p>对话页展示当前需求阶段、最近更新，并提供定位到需求级阶段操作的快捷入口；变更后返回会话能继续讨论，下一步自动带入新状态。需求级写操作保持在需求域，不塞进会话自身菜单或平台顶栏。自然语言讨论可提出建议，不自动改库；本轮不增加语义识别或模型代操作。原先约定的对话式推进是后续可保留的演进方向，本次整体确认采用按钮入口，不将入口简化冒称完整自然语言能力。</p>
+  <p>点击后按钮显示提交中并阻止重复提交，成功更新当前阶段、轻提示及活动历史；失败保留原状态并给出重试，网络未知时沿用原 commandId 查询回执 / 重试。快捷项显示并提交确定目标，需求锁下以真实当前值更新，目标相同为无变化；回执告知实际起止，不能因重试跨过两个阶段。不增加人员审批或逐次二次确认，阶段负责人自己的点选就是执行意图。无权成员只看当前阶段和历史；任务新增、编辑及改派使用页内表单。业务回执不伪造 Assistant 回复，模型文本或引用内容不产生执行权。</p>
+
+  <h4>11.8.5 会话上下文同步</h4>
+  <p>上下文快照含：需求标识、描述 / 验收、当前阶段、开发负责人、任务及分派摘要、最近业务变更、当前会话所有者的业务权限和「代码只读」边界；不含密码、模型凭据、其他需求数据。文本字段作为数据编码，不允许其中的指令反向变成业务命令。机器使用 contextVersion，用户看到「当前业务状态」与「模型上下文将在下一步刷新 / 获取失败」；本阶段不建持久模型消费索引，不显示没有证据的「已消费 / 已同步」。</p>
+  <ol>
+    <li><strong>创建 / 重新打开：</strong>按 PG 重新读取。原生 Agent 创建 / 恢复先用公开上下文通道注入；只读浏览历史不触发一次模型调用。旧会话的历史阶段原样保留，不能作为新请求的当前值。</li>
+    <li><strong>每个推理边界：</strong>在已安装 rc.3 的公开 <code>agent/pre-step</code> 中，用短只读 REPEATABLE READ 事务读取 requirement、tasks、participants、permissions 和 contextVersion，首个 SELECT 建立的数据库快照是统一边界，禁止拼接多条默认 READ COMMITTED 查询。用专用 context source、稳定 messageId、版本及快照摘要加入原生已接受消息；原生重试沿用对应请求快照，后续新步骤再读取最新。<code>agent.inject()</code> 是排队且不唤醒的接口，可能错过已经领取输入的 pre-step，因此不把此时简单 inject 当作当前请求已刷新。</li>
+    <li><strong>业务提交后：</strong>先返回「业务已保存」，再更新页面缓存；跨会话页面采用 Query 失效、窗口恢复刷新及可见时最多 2 秒轮询，不新增消息总线。快照建立前已提交的变更必须进入本次请求，建立后提交的留到下一边界；不承诺改写已经发出的模型请求。即使查询中途发生变更，同一份快照只能全旧或全新。</li>
+    <li><strong>当前运行身份：</strong>新增 Host→BFF 的只读 context-read 服务协议，不把既有 BFF→Host 协议冒称已经支持反向调用。BFF 受理本人会话 prompt 时建立短生命周期运行记录，绑定服务端登录会话 ID、actor、projectId、requirementId、nativeSessionId、requestId 和 Host 实例代次；Host 在可信交接中将它绑定到实际 Agent 代次及 turn，不能用会话持久 owner 或“当前最后一次登录”代替。本轮纯历史查看不建立运行授权。</li>
+    <li><strong>私有读取：</strong>Host 每次发带有 context-read 专用 operation、BFF audience、运行 ID、项目 / 需求 / 原生会话、Agent 代次、有效期 / nonce 和 bodyHash 的短期签名请求。BFF 由自身运行记录还原真人身份，在一致快照中重新检查数据库登录、active、项目 / 需求关系和会话所有权，并核对全部绑定；不接受客户端指定 actor。浏览器 Cookie、browser / create 票据、其他 operation、跨需求 ID、旧代次与过期请求均不能访问，返回最小业务 DTO，不提供任意 SQL / 原生 RPC。</li>
+    <li><strong>失效与恢复：</strong>退出先按既有 closing 标记禁止上下文准入；停用 / 撤权在后续快照检查拒绝。取消 / turn 结束、Host / Agent 代次切换和 BFF 重启均使旧运行记录失效；丢失绑定时拒绝下一步，用户重新授权发起后重建，不从旧 owner 自动恢复执行权。20 秒浏览器连接 generation 更新不等于 Agent 代次变化，不能把正常流重连误判为新运行。已经发往模型的请求仍不能撤回。</li>
+    <li><strong>验证证据：</strong>通过公开 llm/stream 只读观察实际冻结请求的 context source / messageId / version / 摘要，再核对同一 ID 的原生消息事件；不把 request/header 或 user/message 单独当作模型已收到请求的证明，不只检查模型复述。无需为了显示消费版本新增实验性日志记录、消费写回 API 或 PG 索引。</li>
+    <li><strong>失败：</strong>上下文读取设置有界超时（建议 2 秒），数据库 / BFF 不可达或身份失效时拒绝准备新推理步骤并显示可重试原因，不静默使用旧权限快照。业务已经成功的提交不因 DSH 暂时离线回滚；恢复时按 PG 补齐，命令重试仍防重。Host 重启后首次请求必须重取，不依赖易丢失通知。</li>
+  </ol>
+  <p>上下文装配走有界摘要，保留需求标识、阶段、权限和版本等核心字段；超预算须显式标明摘要 / 截断以及完整数据的 Web 查看入口，不把摘要冒充全量任务事实。上下文不是权限票据，业务动作仍逐次查 PG。继续保持文件 / Shell 等工具为零；阶段按钮不需要开放 Agent 执行工具或 owner 通道。</p>
+
+  <h4>11.8.6 界面交付门槛</h4>
+  <p>视觉来源固定为 <code>demo/rdws-workbench.html</code> 与设计基线，不再以当前临时表单页作为样式先例。本阶段对齐实际可达的工作台外壳、需求列表 / 新建、需求档案 / 子任务、对话和上下文页；不顺带实现全部 16 视图的业务功能，未实现入口不放假按钮或假数据。沿用 248px 左栏、960px 内容宽度、24px gutter、桌面 30px / 窄屏 40px 控件、既有字阶与明暗主题；分派 / 编辑为页内面板，不用右侧详情抽屉。</p>
+  <p>阶段切换位于需求域，本人任务操作就近显示；对话只在本人会话启用输入。新增子任务区沿用 Demo 列表、表格和表单语言，补齐空、加载、无权、忙碌、失败、重试及长文本状态。保留 native Session / eventSource，不以自绘界面替换 DSH 流协议。流程轴只标当前阶段与真实历史，不因跳转把中间阶段画为已完成。</p>
+  <p><strong>展示前门槛：</strong>内部先对照 Demo 做同尺寸 / 同主题截图与任务走查，核对布局、密度、组件、图标、输入区和信息层级；1440 / 1024 / 820 / 390px 明暗主题通过，键盘可操作、焦点可见、正文对比度 ≥4.5、无页面横向溢出。视觉与真实流程均通过后才邀请用户查看，不再推送临时页面。截图差异不等同于审美验收，最终是否符合 Demo 由用户确认。</p>
+
+  <h4>11.8.7 实施切片、验收与恢复</h4>
+  <table><tr><th>顺序 / 约束</th><th>完整路径与主要落点</th><th>验收检查点</th></tr>
+    <tr><td>1 · I3-TASK / I4-UI</td><td>Demo 外壳下完成新建需求 → 多角色参与 → 初始任务与分派 → 需求档案读取。contracts / db / server 业务模块 / console 需求页；生成增量迁移，不改已应用迁移。</td><td>一需求多开发、每任务单负责人 / 默认 lead；一次无效分派则整次创建不落库；创建并发重复 / 响应丢失重试只返回同一需求 ID，相同 key 不同内容拒绝；旧需求数据、会话与读取范围保留；一人多角色不靠首条记录决定。</td></tr>
+    <tr><td>2 · I3-TASK / I2-AUTH</td><td>需求档案内新增 / 编辑 / 改派 / 取消任务，显示分派与编辑历史。本人任务状态更新贯通 Web 到 PG。</td><td>lead 可维护全部任务，普通开发只能改本人状态；测试、未参与、跨项目 / 需求及伪造 ID 拒绝；改派后旧负责人立即不能写状态，新负责人可写；停用目标不能接收新分派。</td></tr>
+    <tr><td>3 · I2-STATE / I3-CONTEXT</td><td>需求级调整阶段按钮 / 目标菜单 / 下一阶段快捷项、任务状态控件共用内部命令服务；需求页、回执、业务活动与数据库闭环。对话页提供回需求操作的快捷入口。</td><td>不用手打指令或二次确认；设计→测试跳转、测试→开发回退成功并准确留痕；普通开发 / 测试 / 仅管理身份不能改主阶段；不产生审批、测试通过或 MR 已合入事实；重复点击 / 重试只生效一次。</td></tr>
+    <tr><td>4 · I3-CONTEXT / I4-UI</td><td>公开原生 pre-step 注入、上下文页及重启重取。dsh/bridge / plugins / host 与 console 会话适配；业务 DTO 不套到原生事件上，不新增持久消费索引。</td><td>同需求两会话 A 变更、B 下一次真实 GLM 请求包含新阶段 / 分派；不刷新页面也可读新事实，历史恢复不覆盖当前值。冻结请求及同 ID 的原生消息确认快照内容，不把准备 / 排队冒称模型已收到；仍为零执行工具。</td></tr>
+  </table>
+  <p>并发反例必须包括：两会话同时改同一阶段（顺序、before / after、最终值一致）；不同任务 / 字段同时改互不覆盖；同 commandId 的重试 / 不同 payload，快捷推进重复点击不跳两级；操作者停用、分派目标停用、项目开发角色撤销、改派各自与命令竞争的先后两种锁顺序；A 请求慢、切到 B 后旧响应不得覆盖当前需求；在需求查询与任务 / 权限查询之间提交业务变更，整份上下文仍为同一版本；prepare 前后取消，不出现无证据的消费标签；伪造 / 跨需求 / 旧 Agent 运行、退出后 context-read、超时 / 403 时后续模型调用数为零；业务提交成功但 Host 离线，恢复后更新且不重复留痕。真实流跨 20 秒 generation 的连续性及原生越权、到期 / 退出撤权仍作邻域回归。</p>
+  <p>验证按切片先跑聚焦 Vitest / Playwright，再做真实 GLM 与原生 request 日志核对；代码稳定和交付审阅结束后运行一次 <code>pnpm check</code>、<code>pnpm test:e2e</code>、<code>pnpm test:web-live</code>。昂贵真实调用不替代事务 / 并发反例，也不在中间版本反复全量跑。最终还要访问日常 5173 实例验收，不能只验新启动的隔离测试服务，避免再次遗漏开发进程的旧解析缓存。</p>
+  <p>迁移先对开发 / 测试数据验证；旧需求阶段建议回填为「指派」，并记录 migration 来源，不伪造历史开发进度。已有会话首次使用和重启恢复均按 PG 重取。数据库写入与原生日志不做伪原子承诺；中途失败保留已提交业务与会话，禁用失败入口 / 暂停新步骤后重试，不删库、删卷、删轨迹或降级为 owner。未做真实验证前，不把任何检查点标为完成；R-A / R-B 继续有效。</p>
+  <p><strong>整体确认已收到：</strong>本阶段范围与视觉覆盖页、主阶段 / 任务枚举及初始阶段、创建后维护权限、按钮优先交互及本轮不做自然语言自动执行、同字段按提交顺序生效的语义均按本方案实施。最新按钮意见替代手打指令方案。规范审阅与用户确认已经完成；下方仅追加实际执行证据，不提前标记完成。</p>
+
+  <h4>11.8.8 草案审阅记录（非实现证据）</h4>
+  <p>2026-11-18：全新上下文 A 面（正确性 / 公开能力可行性）及 B 面（权限 / 数据 / 故障）分别只读审阅。第一轮均为 APPROVE_WITH_CHANGES：A 面发现 4 项 Major，B 面发现 3 项 Major，交叉项合并处置。已补项目级创建幂等、身份与分派行锁 / 定序、REPEATABLE READ 一致快照和当前运行身份绑定；删除未获产品需求支持的持久消费索引，不引入实验日志记录与消费写回权。用户后续纠正已替代 slash 选择，统一为按钮优先；快捷推进提交绝对目标，避免重试双跳。</p>
+  <p>内部技术取舍：持久确认索引需要实验 plugin record、flush 屏障、请求 / attempt 关联、PG 投影及恢复过滤；仅保证下一步读取 / 注入并验证实际冻结请求已满足 I3-CONTEXT。独立技术评估建议后者，故采用更小范围，不减少台账承诺。将来确有逐会话已读追踪需求时再评估索引，不提前建设。</p>
+  <p>修订后全量第二轮：A 面 APPROVE，B 面 APPROVE，均无新增发现；审阅的规范快照所在文件 SHA-256 为 <code>956f933ed64a24253c8effa1189f4fca23a8b4987d259c87b10d1926a1704b2a</code>（追加本记录前）。该结论仅表示草案可以交用户整体确认，不表示已授权实现或已通过运行验收。仅核对本地文档、当前代码与已安装 rc.3 的公开接口，未执行测试、模型调用、迁移或业务修改。</p>
+
+  <h3 id="business-live-20261118">11.9 本阶段实际落地与验证 · 2026-11-18</h3>
+  <p>对应 <a href="00-decision-ledger.html#business-live-20261118">台账 §8.9</a>。规范与用户确认先同步，再按纵向切片实现。Requirement 增加 stage / contextVersion，Participant 以需求 × 用户 × 角色保存；新增 Task、requirement_event、command_receipt，平台库合计 12 表。逻辑 AssignmentEvent / StateChange 通过需求内事件 kind 表达，共享只追加表，不提前泛化全局审计。0002 增量迁移与 0003 负责人参与修复已在开发 / 测试库执行，后者不改已应用迁移、不凭空授予项目开发角色。</p>
+  <p>服务落点 <code>apps/server/src/modules/business.ts</code>：创建 / 任务 / 阶段共用真人鉴权与请求防重，短事务按固定顺序锁登录、账号、项目角色、需求、参与和任务；补丁只更新变化字段。事件及回执与业务同事务提交；相同阶段不伪造迁移。同字段并发按提交顺序留真实前后值，身份停用 / 撤权与分派竞争有明确先后结果。应用事件改删权在专用连接的原子 GRANT / REVOKE 事务中移除，故障回归证明其他连接看不到短暂提权。完整阶段到达集合独立于最近 100 条活动，避免错误显示历史。</p>
+  <p>原生上下文落点 <code>runtime-context.ts</code>、<code>dsh/plugins/rdws-access/context.mjs</code>：BFF 受理 prompt 建立运行绑定并签名交接，Host 在公开 Agent 生命周期与 pre-step 关联真实请求 / principal / Agent 代次。整批 user / retry 和同 turn 既有来源全部在单一 PG REPEATABLE READ 快照中核对，不能借最后一条消息替旧来源授权。HMAC 反向接口仅取最小业务快照，显式标记摘要、截断和完整查看路径，硬限 24KB；不建持久消费索引，不将模型回复当状态权威。</p>
+  <p>运行清理区分已插入、已领取、仍排队与已结束：用公开 inbox inserted / claimed / discarded、idle / disposed 事件处理；取消发生在 RDWS pre-step 之前也回收已领取绑定。未受理的 sideband / RPC 失败双端撤销，未知结果保守收尾；去重受理与原生活跃清单对账不重复建立无主运行。515 次 sideband 故障及 515 次 RPC 拒绝后新请求仍可受理，真正队列不被误清。浏览器 20 秒连接轮换不等于 Agent 代次变化，保持原生流与 Session/eventSource。</p>
+  <p>工作台沿用 Demo 248px 左栏 / 960px 内容 / 24px gutter 与 TDesign 定制，已实现需求管理、新建 / 初始分派、需求档案 / 子任务、对话和上下文页；没有假按钮或假数据填充未实现功能。阶段通过目标菜单 / 明确下一目标按钮直接更新，无手写指令或二次确认。任务和需求创建未知结果冻结原 payload / commandId，可原样重试，成功后恢复编辑。上下文失败通过公开 agent/error 与 blocked 状态提示，并恢复本次未执行消息；历史查看不唤醒新推理。</p>
+  <table><tr><th>检查</th><th>真实结果</th></tr>
+    <tr><td>静态与集成</td><td>pnpm check exit 0：类型、lint、格式、56 测试 / 10 文件、Web build。覆盖多角色、初始 / 后续分派、原子创建 / 防重、同字段与不同字段并发、停用 / 角色撤销 / 改派竞争双方顺序、一致快照查询中途提交、迁移兼容及权限回滚、混合旧来源、取消及运行配额。</td></tr>
+    <tr><td>业务浏览器</td><td>pnpm test:e2e 5 passed：经理初始分派两任务（默认 lead / 显式 dev），负责人阶段跳转回退与改派，普通开发本人状态，明暗登录退出、窄屏；网络中断 / 坏 JSON 的已提交意图只创建一次，重试后可继续编辑。</td></tr>
+    <tr><td>真实上下文</td><td>两个原生会话，实际修改阶段与负责人后 3 次 GLM 请求使用版本 1 / 3；两个会话的冻结文本内容 hash、原生消息、阶段和 assignee 均核对。实际 Native + Web 的 403 / 2 秒超时均模型调用 0，安全错误提示和重试文本保留。</td></tr>
+    <tr><td>真实流与双闸</td><td>pnpm test:web-live exit 0，10 passed（约 2.5 分钟）。包括原生 non-owner 越权、已开流到期 / 重放、退出及通知失败租约兜底；94.636 秒长响应跨 5 次 generation / 9244 实时帧，展示等于原生日志、刷新一致，页面错误 0、发布工具 0、调用 0。</td></tr>
+    <tr><td>视觉与响应式</td><td>1440 / 1024 / 820 / 390px 明暗截图；820 侧栏实际 64px，小屏阶段 / 菜单 / 新建会话 / 切换会话实际 ≥40px，无水平溢出。修复主题选择器覆盖断点变量的缺陷；固定滚动容器分别拍表单顶部 / 底部，确认初始分派和提交 / 取消可见。独立审阅 fix→resolved→ship。占位文字 AA 失败红绿后采用 Demo --ink-500，聚焦审阅 ship；不是完整 WCAG 审计。</td></tr>
+  </table>
+  <p>两路代码交付审阅经历 BLOCK / APPROVE_WITH_CHANGES 后全量处置，第三轮 A / B 均 APPROVE；未自签放行。真实套件中的每 20 秒 connection lost / retry 是不可变授权轮换的预期诊断，连续性断言通过；启动期首次 API health 探测可能早于监听，runner 等 200 后再开用例。原生 SDK / DSH 仍固定 0.2.2-rc.3，没有修改上游或新增生产依赖。构建主 JS 890.84 kB / gzip 252.73 kB 的体积提示保留，未顺带优化拆包。</p>
+  <p><strong>依赖审计未通过：</strong>pnpm audit --prod --audit-level high exit 1，当前 1 high / 3 moderate。<a href="https://github.com/advisories/GHSA-fc5q-39xc-vjpf">picomatch 官方高危通告</a>列 ≤4.0.7、无修复版本。独立只读核对 HMR ignored / Forge 构造参数以及 RDWS 允许表，未发现普通业务入口控制恶意 pattern 的路径；保留已有 Profile bundles 的能力意味着不能断言所有私有实例都未加载 Forge。漏洞并未修复，不以功能 / 视觉验收替代安全或生产发布结论；详见 SECURITY.md。</p>
+  <p>脱敏最终真实报告为 <code>$RDWS_HOME/state/exports/business-slice-20261118-web-live.json</code>，mode 600；原生历史与测试数据保留。Demo 对照截图在忽略的 <code>.impeccable/review/</code>，由在仓库内的浏览器用例生成，不是隐藏测试 fixture。平台 PostgreSQL 继续本机 Docker PG18.7 / 独立命名卷，不重置其他项目数据。代码单写、文件 / Shell / sources 验收、五会话 fork / replay、GitLab 与 Linux 仍按后续阶段执行；R-A / R-B 不变。</p>
+
+  <div class="warn">以下 §0–§10 为历史设计与实测记录；涉及阶段审批、rebase、完整插件 / 部署骨架等旧方案不作为本轮实施要求，当前决定以台账 v4 §8 和本页 §11 为准。</div>
   <h2 id="s0"><span class="num">0</span>评审结论</h2>
   <div class="verdict">
     <div class="vtitle">总体判定</div>

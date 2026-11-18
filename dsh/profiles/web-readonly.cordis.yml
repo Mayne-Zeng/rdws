@@ -1,0 +1,6 @@
+[
+  { 'id': 'preset-standard', 'config': { 'id': 'standard', 'plugins': [] } },
+  { 'id': 'preset-minimal', 'config': { 'id': 'minimal', 'plugins': [] } },
+  { 'id': 'preset-ptc', 'config': { 'id': 'ptc', 'plugins': [] } },
+  { 'id': 'preset-cordis', 'config': { 'id': 'cordis', 'plugins': [] } },
+]

@@ -1,0 +1,19 @@
+{
+  "name": "@rdws/dsh",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./host": "./host/instance.ts",
+    "./events": "./bridge/events.ts",
+    "./web": "./host/web.ts",
+    "./access": "./bridge/access.ts",
+    "./wire": "./bridge/wire.ts"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-sdk-client": "0.2.2-rc.3",
+    "@deepseek-ai/dsh": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-api-gateway": "0.2.2-rc.3",
+    "yaml": "2.9.0",
+    "tsx": "4.23.15"
+  }
+}

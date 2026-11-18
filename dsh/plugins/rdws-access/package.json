@@ -1,0 +1,10 @@
+{
+  "name": "@rdws/dsh-access",
+  "private": true,
+  "type": "module",
+  "exports": "./index.mjs",
+  "dependencies": {
+    "@deepseek-ai/dsh-client-modules": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-api-gateway": "0.2.2-rc.3"
+  }
+}

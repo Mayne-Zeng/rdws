@@ -1,0 +1,199 @@
+import {
+  pgTable,
+  text,
+  timestamp,
+  boolean,
+  index,
+  primaryKey,
+  uniqueIndex,
+  integer,
+  jsonb,
+} from 'drizzle-orm/pg-core';
+const timestamps = {
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+};
+export const user = pgTable('auth_user', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  email: text('email').notNull().unique(),
+  emailVerified: boolean('email_verified').default(false).notNull(),
+  image: text('image'),
+  username: text('username').unique(),
+  displayUsername: text('display_username'),
+  active: boolean('active').default(true).notNull(),
+  platformAdmin: boolean('platform_admin').default(false).notNull(),
+  ...timestamps,
+});
+export const session = pgTable(
+  'auth_session',
+  {
+    id: text('id').primaryKey(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    token: text('token').notNull().unique(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    ...timestamps,
+  },
+  (t) => [index('auth_session_user_idx').on(t.userId)],
+);
+export const account = pgTable(
+  'auth_account',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id').notNull(),
+    providerId: text('provider_id').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    accessToken: text('access_token'),
+    refreshToken: text('refresh_token'),
+    idToken: text('id_token'),
+    accessTokenExpiresAt: timestamp('access_token_expires_at', {
+      withTimezone: true,
+    }),
+    refreshTokenExpiresAt: timestamp('refresh_token_expires_at', {
+      withTimezone: true,
+    }),
+    scope: text('scope'),
+    password: text('password'),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('auth_account_provider_idx').on(t.providerId, t.accountId),
+  ],
+);
+export const verification = pgTable('auth_verification', {
+  id: text('id').primaryKey(),
+  identifier: text('identifier').notNull(),
+  value: text('value').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  ...timestamps,
+});
+export const project = pgTable('project', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  ...timestamps,
+});
+export const projectMember = pgTable(
+  'project_member',
+  {
+    projectId: text('project_id')
+      .notNull()
+      .references(() => project.id),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id),
+    role: text('role').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.userId, t.role] })],
+);
+
+export const requirement = pgTable('requirement', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id')
+    .notNull()
+    .references(() => project.id),
+  title: text('title').notNull(),
+  description: text('description').notNull(),
+  acceptance: text('acceptance').notNull(),
+  leadId: text('lead_id')
+    .notNull()
+    .references(() => user.id),
+  createdBy: text('created_by')
+    .notNull()
+    .references(() => user.id),
+  nativeWorkspaceId: text('native_workspace_id'),
+  stage: text('stage').notNull().default('assignment'),
+  contextVersion: integer('context_version').notNull().default(1),
+  ...timestamps,
+});
+export const requirementParticipant = pgTable(
+  'requirement_participant',
+  {
+    requirementId: text('requirement_id')
+      .notNull()
+      .references(() => requirement.id),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id),
+    role: text('role').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.requirementId, t.userId, t.role] })],
+);
+export const nativeSession = pgTable('native_session', {
+  id: text('id').primaryKey(),
+  requirementId: text('requirement_id')
+    .notNull()
+    .references(() => requirement.id),
+  ownerId: text('owner_id')
+    .notNull()
+    .references(() => user.id),
+  ...timestamps,
+});
+export const task = pgTable(
+  'task',
+  {
+    id: text('id').primaryKey(),
+    requirementId: text('requirement_id')
+      .notNull()
+      .references(() => requirement.id),
+    title: text('title').notNull(),
+    description: text('description').notNull().default(''),
+    acceptance: text('acceptance').notNull().default(''),
+    assigneeId: text('assignee_id')
+      .notNull()
+      .references(() => user.id),
+    status: text('status').notNull().default('todo'),
+    createdBy: text('created_by')
+      .notNull()
+      .references(() => user.id),
+    ...timestamps,
+  },
+  (t) => [index('task_requirement_idx').on(t.requirementId)],
+);
+export const requirementEvent = pgTable(
+  'requirement_event',
+  {
+    id: text('id').primaryKey(),
+    requirementId: text('requirement_id')
+      .notNull()
+      .references(() => requirement.id),
+    taskId: text('task_id'),
+    kind: text('kind').notNull(),
+    actorId: text('actor_id').notNull(),
+    source: text('source').notNull(),
+    commandId: text('command_id').notNull(),
+    version: integer('version').notNull(),
+    before: jsonb('before'),
+    after: jsonb('after'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index('requirement_event_scope_idx').on(t.requirementId, t.version)],
+);
+export const commandReceipt = pgTable(
+  'command_receipt',
+  {
+    actorId: text('actor_id').notNull(),
+    scope: text('scope').notNull(),
+    operation: text('operation').notNull(),
+    commandId: text('command_id').notNull(),
+    digest: text('digest').notNull(),
+    result: jsonb('result'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.actorId, t.scope, t.operation, t.commandId] }),
+  ],
+);

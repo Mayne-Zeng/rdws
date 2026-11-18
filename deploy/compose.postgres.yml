@@ -1,0 +1,25 @@
+name: rdws-local
+services:
+  postgres:
+    image: postgres:18.7@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rdws_bootstrap
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    ports:
+      - '127.0.0.1:${RDWS_PG_PORT:-55432}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U rdws_bootstrap -d postgres']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+secrets:
+  postgres_password:
+    file: ${RDWS_HOME:?Run pnpm local:init}/secrets/postgres-password
+volumes:
+  postgres_data:

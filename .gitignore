@@ -36,3 +36,9 @@ coverage/
 *.backup.html
 *.orig
 .chrome-cdp/
+
+# Browser authentication and verification artifacts
+/playwright-report/
+/test-results/
+/.auth/
+/.impeccable/review/

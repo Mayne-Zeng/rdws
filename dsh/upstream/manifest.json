@@ -1,0 +1,8 @@
+{
+  "sourceRepository": "https://github.com/deepseek-ai/deepseek-harness",
+  "reviewedSourceCommit": "39163dd30f703a79079e2d2446545cff3c453738",
+  "package": "@deepseek-ai/dsh",
+  "version": "0.2.2-rc.3",
+  "packageIntegrity": "sha512-S+4oUYVKWuc1SCMMp1mpUa2llxVy0o9gIgp7TDg/Ea7PuvXVkAfnykqSH1/oDXVB+y5VzEm0QIJulo1LIB3qRg==",
+  "distribution": "npm"
+}

@@ -2,21 +2,92 @@
 
 面向项目研发全过程的多租户工程工作站。
 
-> **当前状态：D18 探索稿 · 非契约 · 可推翻。** 仓库里全部是假数据与可点击原型，不连接后端、DSH 实例或模型服务。页面结构、字段与交互都是可推翻的设计假设，不与后续实现绑定。
+> **当前状态：PoC 分阶段实现。** Web / API、Docker PostgreSQL、迁移与预置登录，以及需求分派、按钮式推进、原生会话流和动态上下文已落地。详见[决策台账](docs/00-decision-ledger.html#implementation-20261117)和[工程进度](docs/02-directory-and-engineering-design.html#business-live-20261118)。Native 运行时只接入预置 PoC 项目；代码单写、GitLab 闭环和 Linux 最终验收仍待完成。`demo/` 是假数据原型。
 
 仓库：<https://github.com/Mayne-Zeng/rdws> · 维护身份：`Mayne-Zeng <rdws@mayne.cn>`
 
+## 本地工程开发
+
+需要 Node.js 24、项目固定的 pnpm 11.28.5，以及可用的 Docker / Compose。使用 `packageManager` 自动选择项目 pnpm，不修改全局版本。
+
+```sh
+pnpm install --frozen-lockfile
+pnpm local:init
+pnpm db:up
+pnpm db:bootstrap
+pnpm db:migrate
+pnpm db:seed
+RDWS_MODE=test pnpm db:migrate
+RDWS_MODE=test pnpm db:seed
+pnpm dev
+```
+
+打开 <http://127.0.0.1:5173>。API 在 `127.0.0.1:3001`，数据库在 `127.0.0.1:55432`；端口已被占用时先调整配置，不能覆盖其他服务。`db:up` 优先沿用 Docker 配置；默认 context 不可用且本机 Unix socket 可用时显式选该端点，不更改全局 context。
+
+运行根默认为用户目录下 `.rdws`；自定义 `RDWS_HOME` 时使用仓库外的固定绝对路径。`local:init` 为 `admin / pm / manager / lead / dev / tester` 生成各自随机密码，开发和测试分别保存在运行根 `secrets/development-accounts.json` 与 `secrets/test-accounts.json`（权限 600），不输出到控制台。平台管理员不自动成为项目开发者，项目角色仍需显式分配。重复初始化与 seed 保留已有密码。
+
+PostgreSQL 使用 `rdws-local-postgres-1` 和 `rdws-local_postgres_data` 命名卷，开发 / 测试库独立、应用账号不持有 schema。`pnpm db:status` 查看状态；`pnpm db:recreate` 仅重建本项目数据库容器并保留卷。不要以删卷方式重置数据。
+
+```sh
+pnpm typecheck
+pnpm lint
+pnpm format:check
+pnpm test
+pnpm exec playwright install chromium
+pnpm test:e2e
+pnpm build
+```
+
+`test` 使用独立测试库验证认证、分派 / 状态事务、并发、防重、上下文绑定与数据库权限；E2E 自动启动测试配置服务，验证业务按钮、断网 / 损坏响应重试，以及明暗主题下的登录、刷新、退出与窄屏。浏览器测试使用 5317 / 3303，避开日常开发端口。`build` 做全工程类型检查并生成 Web 构建产物；当前 API 通过 `tsx` 在本地运行，尚未提供生产部署包。
+
+模型已选 `GLM-5.3-Flash`，协议为 OpenAI Chat Completions。供应商参数、模型目录和凭据使用 **DSH 原生 Profile / Credentials**，RDWS 只管理授权作用域与引用。当前 `pnpm dsh:model:import` 可将已有运行根 `secrets/model.env` 一次性转换为 `runtime/dsh/project-poc` 下的原生配置；它不覆盖已有原生设置，后续从 DSH 设置机制维护。此命令只初始化文件，不安装或启动 DSH，也不验证真实模型调用。临时输入与原生凭据都不进 Git。
+
+## Web 需求与会话
+
+以 `manager` 或 `pm` 登录创建需求，明确选择参与角色、开发负责人和初始子任务；任务负责人默认开发负责人，也可从已选开发成员中指定。创建后由开发负责人维护子任务和分派，普通开发只能更新本人任务状态，普通成员按需求参与关系读取。需求开发负责人通过“进入开发”等明确目标的快捷按钮或“调整阶段”菜单操作，允许跳转和回退，逐次留痕，无需手打指令或二次审批。
+
+进入需求后可新建本人会话并发送文本；同需求其他参与者可以读取会话，但不能代替所有者发送。每次新推理步骤按当前真人登录及需求权限取得数据库一致快照，注入当前阶段和分派；已发出的模型请求不会被改写。读取失败会阻止新推理、提示原因并保留未执行消息。所有会话仍为代码只读，执行工具不开放。
+
+网络结果未知时使用“重试原操作”：保留同一请求和内容，确认前冻结编辑，不重复新建需求或任务。业务成功与模型暂时不可用分开处理，已保存的状态不会因 DSH 离线回滚。
+
+工作台通过原生 modules runtime、Session binding 和 eventSource 处理历史、实时 Assistant frame、settlement 与重连；业务页面自绘。`dsh/client` 收敛浏览器适配，Native Store 使用的 Zustand / Immer 是上游依赖，不作为 RDWS 业务状态方案。
+
+发布的 `0.2.2-rc.3` 没有参考源码中的认证注册服务，因此 Host 采用公开载体组合：私有 `/_rdws` 路由认证后，把 non-owner Peer 显式交给原生 HTTP handler 与原生 mux。默认 owner 管理入口仍存在于 loopback，BFF 不代理它、不向浏览器传递其凭据。`RemoteAccessPolicy` 在原生 Gateway 内再次检查需求 / 会话资源。
+
+每个登录会话、需求及客户端 generation 使用最多 20 秒的不可变授权；到期后 Host 主动关闭 Peer，客户端重新鉴权并恢复原生流。退出首先禁止该登录会话的新准入，终止 BFF 在途请求，再通知 Host 撤销。通知失败时 BFF 已停止下行，native 最迟随租约失效；退出响应头 `x-rdws-native-revocation` 区分 `confirmed` 与 `lease-expiry`。
+
+```sh
+pnpm test:e2e
+pnpm test:web-live
+```
+
+前者验证基础浏览器旅程；后者需要已有 GLM 原生配置，会产生真实模型调用，验证页面流、上下文刷新和失败阻断、授权轮换、non-owner 拒绝与撤权故障。live 使用运行根 `testing-web` / `testing-fault` / `testing-context-denied` / `testing-context-timeout` 的独立数据目录，通过原生 patch / 凭据路径引用同一模型配置，不复制密钥。测试产物在 `test-results/`，Demo 对照截图在 `.impeccable/review/`；两者均不进 Git。
+
+## DSH 真实接入探针
+
+```sh
+pnpm dsh:probe
+```
+
+使用固定版本的官方 DSH / SDK 及项目实例的原生 `profiles/rdws/cordis.patch.yml`、`.credentials.yaml`。探针不读取 `model.env` 来覆盖原生设置。它只在缺失时补齐 Profile manifest，读取 `rdws-glm` 路由并调用 `GLM-5.3-Flash`。
+
+一次运行创建两个独立会话，验证回复标记、有效工作目录和实时文本分段；关闭实例后重新启动，使用原生 API 恢复同一会话 ID。所有实例结束后保留原生会话日志，以及运行根 `state/exports/dsh-probe-<run-id>.json` 的脱敏报告。该命令会产生少量真实模型调用费用，不属于默认 `pnpm test`。SDK 探针通过独立 `rdws-probe` Profile 引用原生 `rdws` 模型 patch；与日常 Web 实例共用项目进程锁，已被占用时拒绝启动，不会抢占。
+
+探针通过公开 `agent/assistant-stream` 钩子观察实时分段，只记录类型、长度和时间。SDK 持久事件和实时文本帧由探针验证；Web 展示与 BFF / Native 两道闸由 `pnpm test:web-live` 验证。探针只读，禁用执行工具、日志上传和遥测。项目进程锁阻止同实例并发；关闭未确认时保留锁。文件 / Shell 权限和 Linux 验收仍待完成。
+
+DSH 保持 `0.2.2-rc.3`；`pnpm-workspace.yaml` 对原固定的 `undici@8.11.2` 定向使用 `8.12.2` 安全补丁，升级 DSH 时须复核并回归，不修改上游源码。
+
 ## 这个仓库现在有什么
 
-| 路径 | 内容 |
-| --- | --- |
-| `docs/00-decision-ledger.html` | **决策台账 v3 · 唯一事实来源**，先读这份 |
-| `docs/01-feasibility-report.html` | 基于 DSH 的开源使用风险与二次开发难度评估 |
-| `docs/02-directory-and-engineering-design.html` | `.rdws` 运行空间、分支/worktree 策略、工程骨架 |
-| `docs/03-design-crosscheck-report.html` | 三面独立评审 + 运行时实测 + Q1–Q4 决策台账 |
-| `docs/04-design-baseline.html` | 设计基线与交接规格：令牌、组件规格、a11y 实测、16 视图一致性走查 |
-| `demo/rdws-workbench.html` | **当前设计稿**：16 视图可点击工作台，单文件、零外链、假数据 |
-| `demo/rdws-overall-demo.html` | D17 第一版探索稿（管理看板范式），保留作对照 |
+| 路径                                            | 内容                                                             |
+| ----------------------------------------------- | ---------------------------------------------------------------- |
+| `docs/00-decision-ledger.html`                  | **决策台账 v4 · 唯一事实来源**，先读这份                         |
+| `docs/01-feasibility-report.html`               | 基于 DSH 的开源使用风险与二次开发难度评估                        |
+| `docs/02-directory-and-engineering-design.html` | `.rdws` 运行空间、分支/worktree 策略、工程骨架                   |
+| `docs/03-design-crosscheck-report.html`         | 三面独立评审 + 运行时实测 + Q1–Q4 决策台账                       |
+| `docs/04-design-baseline.html`                  | 设计基线与交接规格：令牌、组件规格、a11y 实测、16 视图一致性走查 |
+| `demo/rdws-workbench.html`                      | **当前设计稿**：16 视图可点击工作台，单文件、零外链、假数据      |
+| `demo/rdws-overall-demo.html`                   | D17 第一版探索稿（管理看板范式），保留作对照                     |
 
 所有 HTML 都是单文件、无外部依赖，直接双击或拖进浏览器即可打开；hash 路由形如 `#/overview/D-1042`。
 
@@ -32,16 +103,16 @@
 
 ## 接下来的路线
 
-按台账 §5.2，下一步是**单需求 PoC（D1）**，验证四件事：会话 header cwd 归属、`sources` 零写入可脚本验证、≥5 会话的 resume / fork / replay、`rdws/*` push + MR 映射表闭环。
+当前以台账 v4 §8 的分阶段计划为准。当前阶段贯通需求、子任务、状态与原生上下文；后续继续验证单写与真实 MR 闭环；目标仍包括：会话 header cwd 归属、`sources` 零写入可脚本验证、≥5 会话的 resume / fork / replay、`rdws/*` push + MR 映射表闭环。
 
 PoC **不验证**：HA / 多机、Tauri 薄壳、多环境自动编排、中心化日志在线迁移，以及生产档（Docker 强隔离）验收——后者因 C1 不追认明确排除。
 
 ## 安全与残余风险
 
-本仓库是设计与原型产物，**未经过安全审计，不是生产可用实现**。两条必须携带的残余风险见 `SECURITY.md`：R-A（无 Docker 档的隔离强度）与 R-B（模型主请求可能携带源码出企业边界）。上游合规与品牌口径见 `THIRD_PARTY_NOTICES.md`。
+本仓库包含设计、原型与开发中的 PoC，**未经过安全审计，不是生产可用实现**。两条必须携带的残余风险见 `SECURITY.md`：R-A（无 Docker 档的隔离强度）与 R-B（模型主请求可能携带源码出企业边界）。上游合规与品牌口径见 `THIRD_PARTY_NOTICES.md`。
 
 ## 许可证
 
 [MIT](LICENSE) · Copyright (c) 2026 Mayne-Zeng。
 
-选型说明：当前仓库只有文档与原型、且上游技术基线同为 MIT，MIT 是成本最低的默认值；这一选择属于本轮自决、**可推翻**，如需更换请显式说明：可替换为 Apache-2.0（含专利授权）、AGPL-3.0（网络使用也要求开源）或「暂不授权」；注意仓库已公开，更换后已分发版本仍受原许可约束。决策台账 v3 的产品决策不受许可证影响。
+许可证沿用仓库既有 MIT 选择；第三方依赖保留各自许可。许可变更不在本轮范围内。

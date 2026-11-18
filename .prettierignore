@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+pnpm-lock.yaml
+docs/*.html
+demo/
+packages/db/migrations/
+playwright-report/
+test-results/
+.rdws/

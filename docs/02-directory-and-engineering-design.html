@@ -705,6 +705,24 @@
   <p>独立方案及交付复审均 APPROVE。按交付审阅补充已知接受缓存命中期间的竞争断言，检查第二请求仍为 409 且没有重复登记运行。工作台沿用原有发送失败和输入保留路径。正式会话选模和逐次推理授权仍按前述独立评审结论维护。</p>
   <p><code>caffeinate -i pnpm check</code> 返回 0（28 文件、180 项，类型、lint、格式及构建通过），构建仍有主包体积提示。<code>caffeinate -i pnpm test:e2e</code> 返回 0（32 项，约 1 分钟），<code>pnpm validate:baseline</code> 返回 0（29 任务、62 个追溯点、16 视图）。本地修订以 <code>fix: isolate overlapping session prompt submissions</code> 为准。</p>
 
+  <h4 id="t13-native-login-binding-plan-20261119">11.16.10 Native 浏览器传输的原登录绑定</h4>
+  <p>Change / R3，非批量，基线 <code>0d414c3</code>。依据 I2-AUTH、T02 登录与 Peer 定序、T03 撤权和 §11.16.7，复现并修复同账号重新登录后，仍打开的旧 Native 浏览器传输可能持新 Cookie 提交或重连。范围为工作台 Native bootstrap、HTTP RPC 与 WebSocket 载体。会话 REST 创建、派生及历史路径沿用原契约。无新增模型选择、实际推理最终授权、数据库迁移或生产配置。双面方案评审，交付另复审。</p>
+  <ol>
+    <li>工作台在当前文档首次确认登录时固定账号与观察登录 ID，持有原对话的当前待发送草稿。项目／需求查询切换、轮询报错及对话重挂载均沿用原观察。草稿只保留在文档内存，按原账号、登录、项目、需求、Native 会话归属，原作用域重新挂载可恢复。观察到登录更换或失效时卸载旧对话并释放载体。当前已确认是同一账号、重新读到该需求授权时，仅展示原草稿供复制并提示主动重新打开。账号不明或不同以及需求读取失败期间不展示原草稿或历史。用户主动重新加载后建立新绑定，不自动发送原文。本页主动退出成功后清理原观察与草稿，之后正常登录可继续使用原入口。</li>
+    <li>Native bootstrap 携带唯一标量 <code>x-rdws-edit-session</code>。BFF 在需求授权后、Host 准备前比对 Cookie 的当前登录，于准备和返回前复核。用含固定域前缀、认证登录 ID、实际归属项目和需求 ID 的 JSON 元组计算 SHA-256，以小写十六进制和 no-store 随 bootstrap 返回。绑定标识本身不授权，不承载原始 ID 或 Native grant。HTTP Native RPC POST 仅接受唯一的 <code>x-rdws-native-login</code> 和 <code>x-rdws-client-generation</code> 头，WS 仅接受各一个 <code>login</code> 和 <code>generation</code> 查询值。generation 使用小写标准 UUID 形状。混载、重复值和格式错误在 Host 前拒绝，缺失或错配的登录绑定返回 401。重连只轮换 generation，复用当前 Native 实例原 binding。绑定不传入 Native，静态资源 GET 保持既有读取条件。</li>
+    <li>HTTP 与 WS 使用经预检的原 Access。WS 同源和登录绑定检查在 101 前完成，升级后沿用同一 Access 准备并在创建上游 Peer 前复验原登录、账号、项目、需求及撤权代次。后续入站、出站与轮询沿原登录和撤权代次，识别暂时权限栅栏。HTTP prompt 在等待既有运行核对及清理后、登记新运行前复核原 Access 和 transfer，在转发及返回前继续核对。登录错配或已撤权的旧授权不得准备工作区、签发新 Peer 或登记运行。暂停准备期间发生撤权及重新授予时，旧握手不得取新一代授权创建 Peer。第二次登录可以与第一次并存，原 Cookie 与原绑定仍按其本来权限运行，包括已经握手的 WS。原 Cookie 与新绑定、新 Cookie 与原绑定均拒绝。原登录显式撤销后拒绝旧绑定及旧 Cookie、关闭旧流。</li>
+    <li>验证先用实际隔离 PostgreSQL 与可控 Native 载体复现换 Cookie 后仍可登记运行。再核对缺失、重复、混载、错形状、错绑定、无 Cookie、同一账号的两个 Cookie、同需求两个有权账号及其他需求／项目。使用真实 WS 客户端核对 101 前拒绝与原 Cookie 撤权关闭，核对同一代次下并发 HTTP／WS 共享 Peer、同登录新代次轮换、同一隔离数据库重启 BFF 后原绑定继续有效。对暂停准备和运行核对期间的撤权并重新授予分别做受控回归。更新集成及真实 Native 验收调用端走 bootstrap 后的鉴权协议，保持原业务断言。</li>
+    <li>浏览器实际打开旧对话并输入草稿。用另一页的同账号登录更换 Cookie，先暂缓旧页认证与详情读回，在自然发送路径核对 BFF 401 与原文，再触发旧页 Native 断线并观察旧 binding、新 generation 的实际重连请求。解除暂缓并跨过真实认证刷新及详情轮询，核对旧对话不重绑定、草稿可复制。另用有权访问同一需求的不同账号和同账号需求读回拒绝两种反例，核对旧草稿与历史均隐藏，再恢复有权原作用域验证草稿仍可读。新页或主动重新打开后通过新绑定读取，不自动重发。核对同登录会话创建／派生、重连及 REST 历史。已成功但重连失败的会话操作保留原键回执核对路径。更新和回退均同步切换 BFF 与前端，关闭旧桥接并刷新页面；回退会恢复此前的旧标签页风险。</li>
+  </ol>
+  <p>第 3 版方案独立 A/B 复审均 APPROVE。关闭首轮发现项包括实际认证刷新后的授权与草稿、升级前撤权代次、HTTP 运行登记时点、参数来源和多登录并存。验收额外覆盖旧页真实重连与有权异账号的草稿隔离。</p>
+
+  <h4 id="t13-native-login-binding-evidence-20261119">11.16.11 原登录绑定修复证据</h4>
+  <p>改前 <code>pnpm test tests/integration/revocation-races.test.ts -t 'unbound old browser'</code> 显示原请求换用同账号新 Cookie 后登记了 1 次运行，预期为 0。原代次标识只用于索引短租约，BFF 依据新 Cookie 重新签发浏览器 Peer。修复后同一用例返回 401，登记和转发均为 0。</p>
+  <p>隔离 PostgreSQL 与可控 Native 载体验证了重复、混载、错绑、缺失及跨需求／项目拒绝；有效的原 Cookie 与原绑定可继续使用。实际 WebSocket 在授权不符时于 101 前拒绝，同代次 HTTP 和 WebSocket 共享票据。原 Cookie 显式撤销后已有连接以 4001 结束。BFF 重建后同登录的原绑定仍可用。受控暂停升级和 HTTP 运行核对，在撤权再授予后，原请求分别停止在工作区准备和运行登记之前。</p>
+  <p>独立交付复审 APPROVE。补充 REST 已返回会话映射、Native 重连失败后的浏览器核对，恢复后沿原命令只映射一个会话。浏览器同时核对授权读回成功的异账号看不到原草稿、重新打开后的实际会话读取和全程发送计数。</p>
+  <p><code>caffeinate -i pnpm check</code> 返回 0（28 文件、183 项，类型、lint、格式和构建通过），构建仍提示主包体积。隔离 Native 与浏览器验收覆盖本机工作区与 BFF 载体，实际模型选择和逐次推理授权按 §11.16.7 继续验证。</p>
+  <p><code>caffeinate -i pnpm test:e2e</code> 返回 0（34 项），补充最后的会话读回断言后聚焦复跑通过。<code>caffeinate -i pnpm test:web-live tests/web-live/fault.spec.ts</code> 返回 0（1 项），本机 Native 通知故障时 BFF 立即关闭受影响连接，原生直连随短租约到期结束，无模型调用。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订以 <code>fix: bind native browser transport to observed login</code> 为准。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

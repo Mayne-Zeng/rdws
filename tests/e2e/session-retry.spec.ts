@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { runtimeHome } from '../../scripts/env.mjs';
 import { prepareSession } from '../helpers/auth-session.ts';
-for (const failure of ['abort', 'invalid-json'] as const)
+for (const failure of ['abort', 'invalid-json', 'reconnect'] as const)
   test(`session ${failure} preserves one operation across reload`, async ({
     page,
     baseURL,
@@ -41,9 +41,22 @@ for (const failure of ['abort', 'invalid-json'] as const)
       baseURL!,
       accounts.find((a) => a.username === 'lead')!,
     );
-    await page.goto(`/?project=poc&requirement=${id}&view=chat`);
     const commands: string[] = [];
-    let lost = false;
+    let lost = false,
+      blockReconnect = false;
+    if (failure === 'reconnect')
+      await page.routeWebSocket(
+        `**/api/dsh/${id}/native/api/remote.mux?*`,
+        async (socket) => {
+          if (blockReconnect)
+            await socket.close({
+              code: 1012,
+              reason: 'Synthetic unavailable connection',
+            });
+          else socket.connectToServer();
+        },
+      );
+    await page.goto(`/?project=poc&requirement=${id}&view=chat`);
     await page.route(`**/api/requirements/${id}/sessions`, async (route) => {
       if (route.request().method() !== 'POST') {
         await route.continue();
@@ -55,18 +68,29 @@ for (const failure of ['abort', 'invalid-json'] as const)
         const response = await route.fetch();
         expect(response.status()).toBe(200);
         if (failure === 'abort') await route.abort('failed');
-        else
+        else if (failure === 'invalid-json')
           await route.fulfill({
             status: 200,
             contentType: 'application/json',
             body: '{',
           });
+        else {
+          expect((await response.json()).status).toBe('mapped');
+          blockReconnect = true;
+          await route.fulfill({ response });
+        }
       } else await route.continue();
     });
     await expect(
       page.getByRole('button', { name: '新建会话', exact: true }),
     ).toBeEnabled();
     await page.getByRole('button', { name: '新建会话', exact: true }).click();
+    if (failure === 'reconnect') {
+      await expect(
+        page.getByText('会话结果未确认，请核对原操作。', { exact: true }),
+      ).toBeVisible({ timeout: 17_000 });
+      blockReconnect = false;
+    }
     await expect(
       page.getByRole('button', { name: '核对原操作', exact: true }),
     ).toBeVisible();

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { Pool } from 'pg';
 import WebSocket, { WebSocketServer } from 'ws';
 import { buildApp } from '@rdws/server';
+import { fixtureBinding } from '../helpers/native-browser.ts';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { actionAllowed, type Grant } from '@rdws/dsh/access';
 import { forkBoundary } from '@rdws/dsh/sessions';
@@ -293,6 +294,7 @@ test('Native inference diagnostics are projected from HTTP session history witho
   const { app, id, source, cookie, host } = await fixture();
   host.ticket = () => 'synthetic-inference-ticket';
   const rpcId = randomUUID();
+  const binding = await fixtureBinding(app, cookie, 'poc', id);
   async function read(method: string, response: Response) {
     host.fetch = async () => response;
     return app.inject({
@@ -301,6 +303,7 @@ test('Native inference diagnostics are projected from HTTP session history witho
       headers: {
         cookie,
         origin: process.env.RDWS_ORIGIN!,
+        'x-rdws-native-login': binding,
         'x-rdws-client-generation': randomUUID(),
       },
       payload: {
@@ -399,8 +402,9 @@ test('Native inference diagnostics are projected from live and resumed WebSocket
   try {
     const address = await app.listen({ host: '127.0.0.1', port: 0 });
     const connected = once(upstream, 'connection');
+    const binding = await fixtureBinding(app, cookie, 'poc', id);
     browser = new WebSocket(
-      `${address.replace('http:', 'ws:')}/api/dsh/${id}/native/api/remote.mux?generation=${randomUUID()}`,
+      `${address.replace('http:', 'ws:')}/api/dsh/${id}/native/api/remote.mux?generation=${randomUUID()}&login=${binding}`,
       {
         headers: { cookie, origin: process.env.RDWS_ORIGIN! },
       },
@@ -579,12 +583,14 @@ test('the model catalog forwards available models without exposing Native diagno
     failures: [{ id: 'unavailable', name: 'Unavailable', message: diagnostic }],
   };
   host.ticket = () => 'synthetic-catalog-ticket';
+  const binding = await fixtureBinding(app, cookie, 'poc', id);
   async function requestCatalog(response: Response) {
     host.fetch = async () => response;
     return app.inject({
       method: 'POST',
       url: `/api/dsh/${id}/native/api/session/modelCatalog`,
       headers: {
+        'x-rdws-native-login': binding,
         cookie,
         origin: process.env.RDWS_ORIGIN!,
         'x-rdws-client-generation': randomUUID(),

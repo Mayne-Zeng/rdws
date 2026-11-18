@@ -12,6 +12,7 @@ import { once } from 'node:events';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { buildApp } from '@rdws/server';
+import { bootstrapNative, fixtureBinding } from '../helpers/native-browser.ts';
 import { NativeWebHost } from '@rdws/dsh/web';
 import WebSocket, { WebSocketServer } from 'ws';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -868,10 +869,16 @@ test('pending demand fences independently stop wire frames in both directions', 
   try {
     const address = await server.listen({ host: '127.0.0.1', port: 0 });
     async function bridge(requirementId: string) {
+      const binding = await fixtureBinding(
+        server,
+        actor('lead').cookie,
+        project,
+        requirementId,
+      );
       const connected = once(upstream, 'connection');
       const client = new WebSocket(
         address.replace('http:', 'ws:') +
-          `/api/dsh/${requirementId}/native/api/remote.mux?generation=${randomUUID()}`,
+          `/api/dsh/${requirementId}/native/api/remote.mux?generation=${randomUUID()}&login=${binding}`,
         { headers: { origin: config.origin, cookie: actor('lead').cookie } },
       );
       sockets.push(client);
@@ -1060,12 +1067,14 @@ test('Native personnel revocation closes only the affected demand and the old pe
       await once(client, 'open');
       return client;
     }
-    const bridge = (id: string, cookie: string) =>
-      openSocket(
+    const bridge = async (id: string, cookie: string) => {
+      const binding = await bootstrapNative(server, cookie, id);
+      return openSocket(
         base.replace('http:', 'ws:') +
-          `/api/dsh/${id}/native/api/remote.mux?generation=${randomUUID()}`,
+          `/api/dsh/${id}/native/api/remote.mux?generation=${randomUUID()}&login=${binding}`,
         { origin: config.origin, cookie },
       );
+    };
     async function create(id: string, cookie: string) {
       const response = await server.inject({
         method: 'POST',
@@ -1076,7 +1085,12 @@ test('Native personnel revocation closes only the affected demand and the old pe
       expect(response.statusCode).toBe(200);
       return response.json().sessionId as string;
     }
-    const prompt = (id: string, sessionId: string, cookie: string) =>
+    const prompt = (
+      id: string,
+      sessionId: string,
+      cookie: string,
+      binding: string,
+    ) =>
       server.inject({
         method: 'POST',
         url: `/api/dsh/${id}/native/api/session/prompt`,
@@ -1084,6 +1098,7 @@ test('Native personnel revocation closes only the affected demand and the old pe
           origin: config.origin,
           cookie,
           'x-rdws-client-generation': randomUUID(),
+          'x-rdws-native-login': binding,
         },
         payload: {
           type: 'client-request',
@@ -1105,6 +1120,21 @@ test('Native personnel revocation closes only the affected demand and the old pe
       });
     const previous = await create(nativeDemand, removed.cookie);
     const continuing = await create(neighbor, removed.cookie);
+    const removedBinding = await bootstrapNative(
+      server,
+      removed.cookie,
+      nativeDemand,
+    );
+    const neighborBinding = await bootstrapNative(
+      server,
+      removed.cookie,
+      neighbor,
+    );
+    const managerBinding = await bootstrapNative(
+      server,
+      actor('pm').cookie,
+      nativeDemand,
+    );
     const ownBridge = await bridge(nativeDemand, removed.cookie);
     const secondBridge = await bridge(nativeDemand, otherLogin.cookie);
     const otherBridge = await bridge(neighbor, removed.cookie);
@@ -1130,7 +1160,9 @@ test('Native personnel revocation closes only the affected demand and the old pe
     });
     const expired = once(peer, 'close').then(() => Date.now());
     expect(
-      (await prompt(nativeDemand, previous, removed.cookie)).json().result,
+      (
+        await prompt(nativeDemand, previous, removed.cookie, removedBinding)
+      ).json().result,
     ).toMatchObject({ ok: true, value: { accepted: true } });
     await expect.poll(() => calls.length).toBe(1);
     const operation = edit({ leadId: actor('dev').id, remove: [removeLead()] });
@@ -1156,7 +1188,12 @@ test('Native personnel revocation closes only the affected demand and the old pe
     failNotification = false;
     expect(otherBridge.readyState).toBe(WebSocket.OPEN);
     expect(peer.readyState).toBe(WebSocket.OPEN);
-    const denied = await prompt(nativeDemand, previous, removed.cookie);
+    const denied = await prompt(
+      nativeDemand,
+      previous,
+      removed.cookie,
+      removedBinding,
+    );
     expect(denied.statusCode).toBe(403);
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain(
@@ -1175,6 +1212,7 @@ test('Native personnel revocation closes only the affected demand and the old pe
               origin: config.origin,
               cookie: actor('pm').cookie,
               'x-rdws-client-generation': randomUUID(),
+              'x-rdws-native-login': managerBinding,
             },
             payload: {
               type: 'client-request',
@@ -1197,13 +1235,22 @@ test('Native personnel revocation closes only the affected demand and the old pe
       )
       .toBe(true);
     expect(
-      (await prompt(neighbor, continuing, removed.cookie)).json().result.ok,
+      (
+        await prompt(neighbor, continuing, removed.cookie, neighborBinding)
+      ).json().result.ok,
     ).toBe(true);
     await expect.poll(() => calls.length).toBe(2);
     expect(calls[1]).toContain(neighbor);
     const next = await create(nativeDemand, actor('dev').cookie);
+    const nextBinding = await bootstrapNative(
+      server,
+      actor('dev').cookie,
+      nativeDemand,
+    );
     expect(
-      (await prompt(nativeDemand, next, actor('dev').cookie)).json().result.ok,
+      (
+        await prompt(nativeDemand, next, actor('dev').cookie, nextBinding)
+      ).json().result.ok,
     ).toBe(true);
     await expect.poll(() => calls.length).toBe(3);
     expect(calls[2]).toContain(nativeDemand);

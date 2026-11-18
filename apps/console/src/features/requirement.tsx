@@ -11,7 +11,7 @@ import {
   type TaskRecord,
 } from '@rdws/contracts';
 import { Icon, api, roleLabels } from '../lib/ui.tsx';
-import { Conversation } from './conversation.tsx';
+import { Conversation, type NativeTab } from './conversation.tsx';
 import { RequirementWorktrees } from './requirement-worktrees.tsx';
 import { RequirementTemplate } from './requirement-template.tsx';
 import { RequirementPersonnel } from './requirement-personnel.tsx';
@@ -32,12 +32,14 @@ export function RequirementPage({
   userId,
   sessionId,
   projectId,
+  nativeTab,
 }: {
   id: string;
   view: View;
   userId: string;
   sessionId: string;
   projectId: string;
+  nativeTab: NativeTab;
 }) {
   const client = useQueryClient();
   const detailsScope = JSON.stringify([sessionId, userId, projectId, id]);
@@ -318,7 +320,17 @@ export function RequirementPage({
         </p>
       )}
       {view === 'chat' ? (
-        <Conversation requirementId={id} />
+        detail.isFetchedAfterMount && data.permissions.userId === userId ? (
+          <Conversation
+            requirementId={id}
+            projectId={projectId}
+            userId={userId}
+            sessionId={sessionId}
+            nativeTab={nativeTab}
+          />
+        ) : (
+          <Loading text="正在核对需求会话权限" />
+        )
       ) : view === 'context' ? (
         <section className="context-page" data-testid="context-summary">
           <p className="muted context-explanation">

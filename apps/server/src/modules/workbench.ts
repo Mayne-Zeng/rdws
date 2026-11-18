@@ -62,6 +62,7 @@ import { sessionPage } from '@rdws/dsh/sessions';
 import {
   actionAllowed,
   isRecord,
+  nativeLoginBinding,
   onlyKeys,
   LEASE_MS,
   type Grant,
@@ -77,6 +78,11 @@ type Database = ReturnType<typeof connectDatabase>['db'];
 type Auth = ReturnType<typeof createAuth>;
 const templateBindingPath = '/api/requirements/:id/capability-template';
 const personnelPath = '/api/requirements/:id/personnel';
+const nativeBootstrapPath = '/api/dsh/:id/bootstrap';
+const nativeTransportPath = '/api/dsh/:id/native/*';
+const nativeMuxPath = '/api/dsh/:id/native/api/remote.mux';
+const nativeBindingHeader = 'x-rdws-native-login';
+const nativeGenerationHeader = 'x-rdws-client-generation';
 const importPreviewPath =
   '/api/projects/:projectId/requirements/import/preview';
 const importCommitPath = '/api/projects/:projectId/requirements/import/commit';
@@ -551,15 +557,59 @@ export async function registerWorkbench(
     if (stale(scope)) fail(401, '授权已变化');
     return runtime;
   }
-  async function ready(headers: FastifyRequest['headers'], id: string) {
-    const original = await access(headers, id);
-    const runtime = await prepared(original);
-    const fresh = await access(headers, id);
-    if (stale(original) || fresh.item.projectId !== original.item.projectId)
+  async function confirmAccess(
+    headers: FastifyRequest['headers'],
+    original: Access,
+  ) {
+    const fresh = await access(headers, original.item.id);
+    if (
+      stale(original) ||
+      fresh.item.projectId !== original.item.projectId ||
+      fresh.who.authSessionId !== original.who.authSessionId ||
+      fresh.who.userId !== original.who.userId
+    )
       fail(401, '授权已变化');
+    return fresh;
+  }
+  async function readyAccess(
+    headers: FastifyRequest['headers'],
+    original: Access,
+  ) {
+    const runtime = await prepared(original);
+    const fresh = await confirmAccess(headers, original);
     return { ...fresh, runtime };
   }
-  type ReadyAccess = Awaited<ReturnType<typeof ready>>;
+  async function ready(headers: FastifyRequest['headers'], id: string) {
+    return readyAccess(headers, await access(headers, id));
+  }
+  type ReadyAccess = Awaited<ReturnType<typeof readyAccess>>;
+  const loginBinding = ({ who, item }: Access) =>
+    nativeLoginBinding(who.authSessionId, item.projectId, item.id);
+  function verifyNativeLogin(scope: Access, binding: unknown) {
+    if (binding !== loginBinding(scope))
+      businessError(401, '登录已变化，请刷新后重新打开会话');
+  }
+  function nativeCarrier(request: FastifyRequest, socket: boolean) {
+    const query = new URL(request.url, expectedOrigin).searchParams;
+    const binding = socket
+      ? query.get('login')
+      : request.headers[nativeBindingHeader];
+    const generation = socket
+      ? query.get('generation')
+      : request.headers[nativeGenerationHeader];
+    if (
+      (socket
+        ? query.getAll('login').length > 1 ||
+          query.getAll('generation').length > 1
+        : query.has('login') || query.has('generation')) ||
+      (binding != null &&
+        (typeof binding !== 'string' || !/^[0-9a-f]{64}$/.test(binding))) ||
+      typeof generation !== 'string' ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(generation)
+    )
+      fail(400, '连接标识不正确');
+    return { binding, generation };
+  }
   function grant(
     scope: ReadyAccess,
     purpose: 'browser' | 'create' = 'browser',
@@ -578,14 +628,7 @@ export async function registerWorkbench(
         .map((row) => row.id),
     };
   }
-  function lease(scope: ReadyAccess, request: FastifyRequest) {
-    const generation =
-      request.headers['x-rdws-client-generation'] ??
-      new URL(request.url, 'http://rdws.invalid').searchParams.get(
-        'generation',
-      );
-    if (typeof generation !== 'string' || !/^[a-f0-9-]{36}$/.test(generation))
-      fail(400, '连接标识不正确');
+  function lease(scope: ReadyAccess, generation: string) {
     const id = scope.who.authSessionId + ':' + scope.item.id + ':' + generation;
     let item = leases.get(id);
     if (item && (item.revoked || item.expiresAt <= Date.now()))
@@ -658,15 +701,22 @@ export async function registerWorkbench(
     return results.every((result) => result.status === 'fulfilled');
   }
   app.addHook('onRequest', async (request, reply) => {
+    if (request.routeOptions.url === nativeMuxPath) return;
     if (
       Object.keys(request.headers).some(
         (key) =>
           key.startsWith('x-rdws-') &&
-          key !== 'x-rdws-client-generation' &&
+          !(
+            (key === nativeBindingHeader || key === nativeGenerationHeader) &&
+            request.method === 'POST' &&
+            request.routeOptions.url === nativeTransportPath
+          ) &&
           !(
             key === 'x-rdws-edit-session' &&
             (isTemplateBindingRequest(request) ||
               isImportRequest(request) ||
+              (request.method === 'GET' &&
+                request.routeOptions.url === nativeBootstrapPath) ||
               (request.routeOptions.url === personnelPath &&
                 (request.method === 'GET' || request.method === 'POST')) ||
               (request.method === 'GET' &&
@@ -2310,18 +2360,20 @@ export async function registerWorkbench(
       };
     },
   );
-  app.get('/api/dsh/:id/bootstrap', async (request) => {
+  app.get(nativeBootstrapPath, async (request, reply) => {
+    reply.header('cache-control', 'no-store');
     const requirementId = (request.params as { id: string }).id;
-    const scope = await ready(request.headers, requirementId);
+    const original = await access(request.headers, requirementId);
+    verifyEditLogin(request, original.who.authSessionId, true);
+    const scope = await readyAccess(request.headers, original);
     const response = await scope.runtime.native.fetch(
       '/api/rdws/bootstrap',
       grant(scope),
     );
     if (!response.ok) fail(503, '会话运行时暂不可用');
     const data = await response.json();
-    await access(request.headers, requirementId);
-    if (stale(scope)) fail(401, '授权已变化');
-    return data;
+    const fresh = await confirmAccess(request.headers, original);
+    return { ...data, loginBinding: loginBinding(fresh) };
   });
   async function allowedAsset(scope: ReadyAccess, path: string) {
     if (path.includes('..') || decodeURIComponent(path).includes('..'))
@@ -2349,10 +2401,14 @@ export async function registerWorkbench(
   }
   app.route({
     method: ['GET', 'POST'],
-    url: '/api/dsh/:id/native/*',
+    url: nativeTransportPath,
     handler: async (request, reply) => {
       const { id, '*': tail } = request.params as { id: string; '*': string };
-      const scope = await ready(request.headers, id);
+      const original = await access(request.headers, id);
+      const carrier =
+        request.method === 'POST' ? nativeCarrier(request, false) : undefined;
+      if (carrier) verifyNativeLogin(original, carrier.binding);
+      const scope = await readyAccess(request.headers, original);
       const { native, runs, inFlightPrompts, acceptedPrompts, abandonedRuns } =
         scope.runtime;
       const path =
@@ -2397,8 +2453,7 @@ export async function registerWorkbench(
       let pendingRun: RunBinding | undefined;
       let promptKey: string | undefined;
       try {
-        const token =
-          request.method === 'POST' ? lease(scope, request) : grant(scope);
+        const token = carrier ? lease(scope, carrier.generation) : grant(scope);
         if (
           request.method === 'POST' &&
           isRecord(request.body) &&
@@ -2435,6 +2490,8 @@ export async function registerWorkbench(
               await native.control('run.cancel', { runId });
               abandonedRuns.delete(runId);
             }
+            await confirmAccess(request.headers, original);
+            if (transfer.revoked || stale(original)) fail(401, '授权已变化');
             pendingRun = runs.admit(
               scope.who,
               id,
@@ -2447,8 +2504,8 @@ export async function registerWorkbench(
               authSessionId: scope.who.authSessionId,
             });
           }
-          await access(request.headers, id);
-          if (stale(scope)) fail(401, '授权已变化');
+          await confirmAccess(request.headers, original);
+          if (transfer.revoked || stale(original)) fail(401, '授权已变化');
         }
         let response = await native.fetch(path, token, {
           method: request.method,
@@ -2522,8 +2579,8 @@ export async function registerWorkbench(
             }
           }
         }
-        await access(request.headers, id);
-        if (transfer.revoked || stale(scope)) fail(401, '授权已变化');
+        await confirmAccess(request.headers, original);
+        if (transfer.revoked || stale(original)) fail(401, '授权已变化');
         return reply.send(data);
       } finally {
         try {
@@ -2536,29 +2593,44 @@ export async function registerWorkbench(
     },
   });
   await app.register(websocket, { options: { maxPayload: 256 * 1024 } });
+  const upgradeAccess = new WeakMap<
+    FastifyRequest,
+    { original: Access; generation: string }
+  >();
   app.get(
-    '/api/dsh/:id/native/api/remote.mux',
+    nativeMuxPath,
     {
       websocket: true,
       preValidation: async (request, reply) => {
+        if (
+          Object.keys(request.headers).some((key) => key.startsWith('x-rdws-'))
+        )
+          return reply.code(403).send({ error: '身份头不受信任' });
+        if (request.headers.origin !== expectedOrigin)
+          return reply.code(403).send({ error: '请求来源不受信任' });
+        let original: Access;
         try {
-          await access(request.headers, (request.params as { id: string }).id);
-          if (request.headers.origin !== expectedOrigin)
-            return reply.code(403).send({ error: '请求来源不受信任' });
+          original = await access(
+            request.headers,
+            (request.params as { id: string }).id,
+          );
         } catch {
           return reply.code(403).send({ error: '无权连接会话' });
         }
+        const { binding, generation } = nativeCarrier(request, true);
+        verifyNativeLogin(original, binding);
+        upgradeAccess.set(request, { original, generation });
       },
     },
     (browser, request) => {
-      const requirementId = (request.params as { id: string }).id;
+      const { original, generation } = upgradeAccess.get(request)!;
+      const requirementId = original.item.id;
       let stopped = false;
       let upstream: WebSocket | undefined;
       let hostSignal: AbortSignal | undefined;
       let timer: ReturnType<typeof setInterval> | undefined;
       let chain = Promise.resolve();
       const opened = new Set<string>();
-      let authSessionId = '';
       const close = () => {
         if (stopped) return;
         stopped = true;
@@ -2569,20 +2641,17 @@ export async function registerWorkbench(
         bridges.delete(bridge);
       };
       const bridge = {
-        authSessionId,
-        userId: '',
+        authSessionId: original.who.authSessionId,
+        userId: original.who.userId,
         requirementId,
-        projectId: '',
+        projectId: original.item.projectId,
         close,
       };
       const connection = (async () => {
-        const scope = await ready(request.headers, requirementId);
+        const scope = await readyAccess(request.headers, original);
         const { native } = scope.runtime;
-        if (stopped || stale(scope)) return;
-        authSessionId = scope.who.authSessionId;
-        bridge.authSessionId = authSessionId;
-        bridge.userId = scope.who.userId;
-        bridge.projectId = scope.item.projectId;
+        if (stopped) return;
+        if (stale(original)) return close();
         bridges.add(bridge);
         hostSignal = native.signal;
         hostSignal.addEventListener('abort', close, { once: true });
@@ -2592,19 +2661,14 @@ export async function registerWorkbench(
         }
         upstream = new WebSocket(native.socketUrl(), {
           headers: {
-            'x-rdws-delegation': lease(scope, request),
+            'x-rdws-delegation': lease(scope, generation),
             origin: new URL(native.socketUrl()).origin.replace('ws:', 'http:'),
           },
         });
         upstream.on('message', (data) => {
           if (
             stopped ||
-            blocked(
-              bridge.userId,
-              bridge.projectId,
-              undefined,
-              requirementId,
-            ) ||
+            stale(original) ||
             browser.readyState !== WebSocket.OPEN
           )
             return;
@@ -2621,14 +2685,19 @@ export async function registerWorkbench(
             blocked(bridge.userId, bridge.projectId, undefined, requirementId)
           )
             return;
-          void access(request.headers, requirementId).catch(async (error) => {
+          void confirmAccess(request.headers, original).catch(async (error) => {
             if (
               error instanceof PendingAuthority ||
               blocked(bridge.userId, bridge.projectId, undefined, requirementId)
             )
               return;
             close();
-            await revoke(authSessionId, requirementId, scope.item.projectId);
+            if (!stale(original))
+              await revoke(
+                bridge.authSessionId,
+                requirementId,
+                bridge.projectId,
+              );
           });
         }, 1000);
         await new Promise<void>((resolve, reject) => {
@@ -2642,7 +2711,11 @@ export async function registerWorkbench(
           .then(async () => {
             const runtime = await connection;
             if (stopped || !runtime) return;
-            const scope = await access(request.headers, requirementId);
+            if (
+              blocked(bridge.userId, bridge.projectId, undefined, requirementId)
+            )
+              return;
+            const scope = await confirmAccess(request.headers, original);
             authorizeStreamFrame(
               data.toString(),
               {
@@ -2654,7 +2727,7 @@ export async function registerWorkbench(
               },
               opened,
             );
-            if (!stopped) upstream!.send(data.toString());
+            if (!stopped && !stale(original)) upstream!.send(data.toString());
           })
           .catch((error) => {
             if (!(error instanceof PendingAuthority)) close();

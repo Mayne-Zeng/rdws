@@ -177,7 +177,8 @@
   - 已交付子项：[会话底部模型状态](02-directory-and-engineering-design.html#t13-model-status-20261118)。展示原生已记录模型或实例默认。选模写入方案经双面审阅进入修订，重点是撤权、并发准入、刷盘确认及派生后的实际路由。
   - 已交付子项：[浏览器推理故障响应](02-directory-and-engineering-design.html#t13-inference-failure-boundary-20261118)。HTTP／WS 区分正常消息、推理失败与重试诊断，原生数据保留。工作台继续支持上下文阻止提示和原消息恢复。选模写入方案继续走独立安全闸门。
   - 新验收证据：[刷盘与恢复后选路](02-directory-and-engineering-design.html#t13-model-dispatch-evidence-20261118)。强制退出后复用 Native 状态完成两次本机合成推理，目标模型与实例默认分别命中。新的保存与发送方案待复审和实现，原短事务等待 Native 方案继续未准出。
-  - 已交付修复：[同键提示词提交竞争](02-directory-and-engineering-design.html#t13-prompt-overlap-evidence-20261119)。重叠发送只允许首个请求持有和清理运行，竞争返回 409，其余会话和串行原键沿用现有 Native 路径。独立复审、整仓 180 项、浏览器 32 项及追溯通过。逐次推理授权、旧标签页登录绑定及完整选模入口仍待复审。
+  - 已交付修复：[同键提示词提交竞争](02-directory-and-engineering-design.html#t13-prompt-overlap-evidence-20261119)。重叠发送只允许首个请求持有和清理运行，竞争返回 409，其余会话和串行原键沿用现有 Native 路径。独立复审、整仓 180 项、浏览器 32 项及追溯通过。
+  - 已交付修复：[旧标签页的原登录绑定](02-directory-and-engineering-design.html#t13-native-login-binding-evidence-20261119)。Native HTTP 与 WebSocket 按页面原登录校验，Cookie 更换后旧页停发。同账号登录变化后的原草稿可在当前页复制，重新打开后以新登录读取。独立复审、整仓 183 项、浏览器 34 项、本机 Native 断连和追溯校验通过。逐次推理授权和本人选模入口仍待交付。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。

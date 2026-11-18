@@ -1,18 +1,31 @@
 import {
+  useCallback,
   useEffect,
   useState,
   useSyncExternalStore,
   useRef,
+  type Dispatch,
   type FormEvent,
+  type SetStateAction,
 } from 'react';
 import { Alert, Button, Loading } from 'tdesign-react';
 import type { SessionBinding } from '@deepseek-ai/dsh-api-session-controller/client';
 import { connectNative, type NativeRuntime } from '../lib/native.ts';
-import { authClient } from '../lib/auth.ts';
 import { Icon } from '../lib/ui.tsx';
 import { SessionModelStatus } from './session-model.tsx';
 import type { SessionOperationResult } from '@rdws/contracts';
 import { SessionHistory } from './session-history.tsx';
+type NativeDraft = {
+  projectId: string;
+  requirementId: string;
+  sessionId: string;
+  text: string;
+};
+export type NativeTab = {
+  login: { userId: string; sessionId: string };
+  draft: NativeDraft | undefined;
+  setDraft: Dispatch<SetStateAction<NativeDraft | undefined>>;
+};
 function text(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -100,14 +113,40 @@ function SessionPanel({
   runtime,
   id,
   own,
+  projectId,
+  requirementId,
+  draft,
+  setDraft,
 }: {
   runtime: NativeRuntime;
   id: string;
   own: boolean;
+  projectId: string;
+  requirementId: string;
+  draft: NativeTab['draft'];
+  setDraft: NativeTab['setDraft'];
 }) {
   const [binding, setBinding] = useState<SessionBinding>();
   const [error, setError] = useState('');
-  const [input, setInput] = useState('');
+  const input = draft?.sessionId === id ? draft.text : '';
+  const setInput = useCallback(
+    (update: SetStateAction<string>) => {
+      setDraft((current) => {
+        const matches =
+          current?.sessionId === id &&
+          current.requirementId === requirementId &&
+          current.projectId === projectId;
+        const next =
+          typeof update === 'string'
+            ? update
+            : update(matches ? current.text : '');
+        if (!next) return matches ? undefined : current;
+        if (matches && next === current.text) return current;
+        return { projectId, requirementId, sessionId: id, text: next };
+      });
+    },
+    [id, projectId, requirementId, setDraft],
+  );
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false),
     [retryMessage, setRetryMessage] = useState('');
@@ -151,7 +190,7 @@ function SessionPanel({
       a();
       b();
     };
-  }, [binding]);
+  }, [binding, setInput]);
   useEffect(() => {
     let live = true;
     let ref: ReturnType<NativeRuntime['sessions']['retain']> | undefined;
@@ -202,7 +241,8 @@ function SessionPanel({
         submission.requestId,
       );
       if (!result.ok) throw new Error();
-      if (!submissionState.current.failed) setInput('');
+      if (!submissionState.current.failed)
+        setInput((current) => (current === value ? '' : current));
     } catch {
       setError('消息发送失败，请检查权限或重新连接');
     } finally {
@@ -259,11 +299,60 @@ function SessionPanel({
   );
 }
 type PendingSession = { commandId: string; sourceSessionId?: string };
-export function Conversation({ requirementId }: { requirementId: string }) {
-  const { data: identity } = authClient.useSession();
-  const storageKey = identity
-    ? 'rdws:session-operation:' + identity.user.id + ':' + requirementId
-    : '';
+export function Conversation({
+  requirementId,
+  projectId,
+  userId,
+  sessionId,
+  nativeTab,
+}: {
+  requirementId: string;
+  projectId: string;
+  userId: string;
+  sessionId: string;
+  nativeTab: NativeTab;
+}) {
+  const { login, draft } = nativeTab;
+  const scopedDraft =
+    draft?.projectId === projectId && draft.requirementId === requirementId
+      ? draft
+      : undefined;
+  if (login.sessionId !== sessionId || login.userId !== userId)
+    return (
+      <section className="sessions-region">
+        <h2>会话工作区</h2>
+        <Alert theme="warning" message="登录已变化，请重新打开需求会话。" />
+        {login.userId === userId && scopedDraft && (
+          <div className="composer">
+            <label htmlFor="stale-prompt">未发送草稿</label>
+            <textarea id="stale-prompt" value={scopedDraft.text} readOnly />
+          </div>
+        )}
+        <Button tag="button" onClick={() => window.location.reload()}>
+          重新打开需求会话
+        </Button>
+      </section>
+    );
+  return (
+    <ConnectedConversation
+      requirementId={requirementId}
+      projectId={projectId}
+      login={login}
+      draft={scopedDraft}
+      setDraft={nativeTab.setDraft}
+    />
+  );
+}
+function ConnectedConversation({
+  requirementId,
+  projectId,
+  login,
+  draft,
+  setDraft,
+}: NativeTab & { requirementId: string; projectId: string }) {
+  const storageKey =
+    'rdws:session-operation:' + login.userId + ':' + requirementId;
+  const initialSession = useRef(draft?.sessionId ?? '');
   const [runtime, setRuntime] = useState<NativeRuntime>();
   const [sessions, setSessions] = useState<
     { id: string; own: boolean; sourceSessionId?: string }[]
@@ -301,9 +390,9 @@ export function Conversation({ requirementId }: { requirementId: string }) {
     let current: NativeRuntime | undefined;
     live.current = true;
     setRuntime(undefined);
-    setSelected('');
+    setSelected(initialSession.current);
     setError('');
-    void connectNative(requirementId, controller.signal)
+    void connectNative(requirementId, login.sessionId, controller.signal)
       .then(async (value) => {
         current = value;
         if (controller.signal.aborted) {
@@ -322,7 +411,7 @@ export function Conversation({ requirementId }: { requirementId: string }) {
       controller.abort();
       void current?.dispose();
     };
-  }, [requirementId]);
+  }, [requirementId, login.sessionId]);
   useEffect(() => {
     const timer = setInterval(() => {
       if (document.visibilityState === 'visible')
@@ -396,6 +485,7 @@ export function Conversation({ requirementId }: { requirementId: string }) {
       if (live.current) setBusy(false);
     }
   }
+  const selectedSession = sessions.find((session) => session.id === selected);
   return (
     <section className="sessions-region">
       <div className="title-row">
@@ -455,10 +545,10 @@ export function Conversation({ requirementId }: { requirementId: string }) {
           ))}
           {sessions.length === 0 && <p className="muted">暂无会话</p>}
         </nav>
-        {runtime && selected ? (
+        {runtime && selectedSession ? (
           <div className="conversation">
             <div className="session-actions" aria-label="当前会话操作">
-              {sessions.find((s) => s.id === selected)?.own && (
+              {selectedSession.own && (
                 <Button
                   tag="button"
                   variant="outline"
@@ -487,9 +577,11 @@ export function Conversation({ requirementId }: { requirementId: string }) {
                 key={selected}
                 runtime={runtime}
                 id={selected}
-                own={
-                  sessions.find((item) => item.id === selected)?.own ?? false
-                }
+                projectId={projectId}
+                requirementId={requirementId}
+                draft={draft}
+                setDraft={setDraft}
+                own={selectedSession.own}
               />
             )}
           </div>

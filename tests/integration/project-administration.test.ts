@@ -9,6 +9,7 @@ import { test, expect, vi } from 'vitest';
 import { Pool } from 'pg';
 import { hashPassword } from 'better-auth/crypto';
 import { buildApp } from '@rdws/server';
+import { fixtureBinding } from '../helpers/native-browser.ts';
 import { runtimeHome, loadEnvironment } from '../../scripts/env.mjs';
 import type { ManagementCommand } from '@rdws/contracts';
 loadEnvironment('test');
@@ -522,13 +523,13 @@ test('a temporary project fence suppresses output without revoking a socket when
     const address = await app.listen({ host: '127.0.0.1', port: 0 });
     const pm = await login('pm'),
       lead = await login('lead');
+    const binding = await fixtureBinding(app, lead, project, requirement);
     const connected = once(upstream, 'connection');
     browser = new WebSocket(
       address.replace('http:', 'ws:') +
         '/api/dsh/' +
         requirement +
-        '/native/api/remote.mux?generation=' +
-        randomUUID(),
+        `/native/api/remote.mux?generation=${randomUUID()}&login=${binding}`,
       {
         headers: { cookie: lead, origin },
       },

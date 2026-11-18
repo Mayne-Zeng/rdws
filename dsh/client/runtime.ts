@@ -49,7 +49,11 @@ export async function readSessionHistory(
     }[];
   }>;
 }
-export function connectNative(requirementId: string, signal: AbortSignal) {
+export function connectNative(
+  requirementId: string,
+  observedLoginId: string,
+  signal: AbortSignal,
+) {
   const task = serial
     .catch(() => {})
     .then(async () => {
@@ -58,9 +62,11 @@ export function connectNative(requirementId: string, signal: AbortSignal) {
       const prefix = `/api/dsh/${requirementId}/native/`;
       const response = await fetch(`/api/dsh/${requirementId}/bootstrap`, {
         signal,
+        headers: { 'x-rdws-edit-session': observedLoginId },
       });
       if (!response.ok) throw new Error('无法连接需求会话');
       const payload = (await response.json()) as {
+        loginBinding: string;
         graph: WebBootGraph;
         injections: {
           kind: string;
@@ -70,6 +76,12 @@ export function connectNative(requirementId: string, signal: AbortSignal) {
           value?: unknown;
         }[];
       };
+      const { loginBinding } = payload;
+      if (
+        typeof loginBinding !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(loginBinding)
+      )
+        throw new Error('会话登录校验失败，请重新打开');
       const root = new Cordis.Context();
       let disposed = false;
       let generation = crypto.randomUUID();
@@ -107,18 +119,25 @@ export function connectNative(requirementId: string, signal: AbortSignal) {
             Reflect.set(window, injection.name, injection.value);
         }
         win.__DSH_TRANSPORT__ = {
-          fetch: (input: string | URL, init: RequestInit) =>
-            fetch(prefix + String(input).replace(/^\//, ''), {
+          fetch: (input: string | URL, init: RequestInit) => {
+            const headers = new Headers(init.headers);
+            if (init.method?.toUpperCase() === 'POST') {
+              headers.set('x-rdws-client-generation', generation);
+              headers.set('x-rdws-native-login', loginBinding);
+            }
+            return fetch(prefix + String(input).replace(/^\//, ''), {
               ...init,
-              headers: {
-                ...init.headers,
-                'x-rdws-client-generation': generation,
-              },
-            }),
+              headers,
+            });
+          },
           createWebSocket: () => {
             generation = crypto.randomUUID();
+            const query = new URLSearchParams({
+              generation,
+              login: loginBinding,
+            });
             return new WebSocket(
-              `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${prefix}api/remote.mux?generation=${generation}`,
+              `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${prefix}api/remote.mux?${query}`,
             );
           },
           streamBaseUrl: location.origin,

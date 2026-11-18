@@ -77,6 +77,12 @@ export function verifyGrant(
 }
 export const bodyHash = (body: unknown) =>
   createHash('sha256').update(JSON.stringify(body)).digest('hex');
+export const nativeLoginBinding = (
+  authSessionId: string,
+  projectId: string,
+  requirementId: string,
+) =>
+  bodyHash(['rdws-native-login-v1', authSessionId, projectId, requirementId]);
 const reads = new Set([
   'session/page',
   'session/events',

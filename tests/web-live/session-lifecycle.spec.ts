@@ -1,4 +1,5 @@
 import { nativeReady } from '../helpers/native-ready.ts';
+import { bootstrapNative } from '../helpers/native-browser.ts';
 import { test, expect } from '@playwright/test';
 import { readFile, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -429,7 +430,7 @@ test('cold restart preserves five ids and separates durable logs from interrupte
     connectionString: process.env.DATABASE_MIGRATION_URL,
   });
   let cookie = '';
-  async function request(path: string, body?: unknown) {
+  async function request(path: string, body?: unknown, binding?: string) {
     return app.inject({
       method: body === undefined ? 'GET' : 'POST',
       url: path,
@@ -437,7 +438,12 @@ test('cold restart preserves five ids and separates durable logs from interrupte
         origin,
         cookie,
         'content-type': 'application/json',
-        'x-rdws-client-generation': randomUUID(),
+        ...(binding
+          ? {
+              'x-rdws-client-generation': randomUUID(),
+              'x-rdws-native-login': binding,
+            }
+          : {}),
       },
       ...(body === undefined ? {} : { payload: JSON.stringify(body) }),
     });
@@ -452,12 +458,17 @@ test('cold restart preserves five ids and separates durable logs from interrupte
   }
   let id = '';
   async function rpc(action: string, args: unknown) {
-    const response = await request(`/api/dsh/${id}/native/api/${action}`, {
-      type: 'client-request',
-      rpcId: randomUUID(),
-      method: action,
-      payload: { args },
-    });
+    const binding = await bootstrapNative(app, cookie, id);
+    const response = await request(
+      `/api/dsh/${id}/native/api/${action}`,
+      {
+        type: 'client-request',
+        rpcId: randomUUID(),
+        method: action,
+        payload: { args },
+      },
+      binding,
+    );
     expect(response.statusCode).toBe(200);
     expect(response.json().result.ok).toBe(true);
     return response.json().result.value;

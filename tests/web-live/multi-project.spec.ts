@@ -1,3 +1,4 @@
+import type { APIRequestContext } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
@@ -330,44 +331,30 @@ test('one login sends and reads in two isolated project runtimes', async ({
             .status,
         ).toBe(401);
       for (const browserContext of [page.context(), sameAccount]) {
-        expect(
-          (
-            await browserContext.request.get(
-              origin + '/api/dsh/' + ids[1] + '/bootstrap',
-            )
-          ).status(),
-        ).toBe(403);
-        expect(
-          (
-            await browserContext.request.get(
-              origin + '/api/dsh/' + ids[0] + '/bootstrap',
-            )
-          ).ok(),
-        ).toBe(true);
+        expect((await boot(browserContext.request, ids[1]!)).status()).toBe(
+          403,
+        );
+        expect((await boot(browserContext.request, ids[0]!)).ok()).toBe(true);
       }
       expect((await roles(['developer'])).ok()).toBe(true);
-      expect(
-        (
-          await page.request.get(origin + '/api/dsh/' + ids[1] + '/bootstrap')
-        ).ok(),
-      ).toBe(true);
+      expect((await boot(page.request, ids[1]!)).ok()).toBe(true);
     } finally {
       await sameAccount.close();
       await administrator.close();
     }
+    async function boot(request: APIRequestContext, id: string) {
+      const identity = await (
+        await request.get(origin + '/api/auth/get-session')
+      ).json();
+      return request.get(origin + '/api/dsh/' + id + '/bootstrap', {
+        headers: { 'x-rdws-edit-session': identity.session.id },
+      });
+    }
     process.kill(bravo.pid, 'SIGTERM');
     await expect
-      .poll(async () =>
-        (
-          await page.request.get(origin + '/api/dsh/' + ids[1] + '/bootstrap')
-        ).ok(),
-      )
+      .poll(async () => (await boot(page.request, ids[1]!)).ok())
       .toBe(false);
-    expect(
-      (
-        await page.request.get(origin + '/api/dsh/' + ids[0] + '/bootstrap')
-      ).ok(),
-    ).toBe(true);
+    expect((await boot(page.request, ids[0]!)).ok()).toBe(true);
     expect(errors).toEqual([]);
   } finally {
     await frontend?.close();

@@ -12,6 +12,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '@rdws/server';
+import { bootstrapNative } from '../helpers/native-browser.ts';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, expect, test, vi } from 'vitest';
@@ -656,11 +657,16 @@ test('an actual frozen Native request keeps old details and the next pre-step se
     });
     expect(creation.statusCode).toBe(200);
     const { sessionId } = creation.json();
+    const binding = await bootstrapNative(server, headers.cookie, nativeDemand);
     const rpc = async (method: string, args: Record<string, unknown>) => {
       const response = await server.inject({
         method: 'POST',
         url: `/api/dsh/${nativeDemand}/native/api/${method}`,
-        headers: { ...headers, 'x-rdws-client-generation': randomUUID() },
+        headers: {
+          ...headers,
+          'x-rdws-client-generation': randomUUID(),
+          'x-rdws-native-login': binding,
+        },
         payload: {
           type: 'client-request',
           rpcId: randomUUID(),

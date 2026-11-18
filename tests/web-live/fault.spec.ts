@@ -1,4 +1,5 @@
 import { nativeReady } from '../helpers/native-ready.ts';
+import { bootstrapNative } from '../helpers/native-browser.ts';
 import { test, expect } from '@playwright/test';
 import { buildApp } from '@rdws/server';
 import { NativeWebHost } from '@rdws/dsh/web';
@@ -89,9 +90,10 @@ test('native notification outage stops BFF immediately and closes native at leas
     });
     expect(createdSession.statusCode).toBe(200);
     const sid = createdSession.json().sessionId;
+    const binding = await bootstrapNative(app, cookie, id);
     bff = await opened(
       address.replace('http:', 'ws:') +
-        `/api/dsh/${id}/native/api/remote.mux?generation=${randomUUID()}`,
+        `/api/dsh/${id}/native/api/remote.mux?generation=${randomUUID()}&login=${binding}`,
       { cookie, origin },
     );
     let pending = frame(bff);

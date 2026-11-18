@@ -12,6 +12,7 @@ import { ProjectWorkspace } from './project.tsx';
 import { authClient } from '../lib/auth.ts';
 import { LoginScreen } from './login-screen.tsx';
 import { DesignSystemPage } from './design-system.tsx';
+import type { NativeTab } from './conversation.tsx';
 import { api } from '../lib/ui.tsx';
 export function Workbench() {
   const { data: session, isPending } = authClient.useSession();
@@ -21,6 +22,13 @@ export function Workbench() {
   const returnProject = route.get('project');
   const [error, setError] = useState(''),
     [busy, setBusy] = useState(false);
+  const [observedLogin, setObservedLogin] = useState<NativeTab['login']>();
+  const [draft, setDraft] = useState<NativeTab['draft']>();
+  if (session && !observedLogin)
+    setObservedLogin({
+      userId: session.user.id,
+      sessionId: session.session.id,
+    });
   const openDesign = () =>
     setRoute(
       returnProject
@@ -38,14 +46,18 @@ export function Workbench() {
     try {
       const r = await authClient.signOut();
       if (r.error) setError('退出失败，请重试');
-      else client.clear();
+      else {
+        client.clear();
+        window.location.reload();
+      }
     } catch {
       setError('退出失败，请重试');
     } finally {
       setBusy(false);
     }
   }
-  if (isPending || !session) return <LoginScreen checkingSession={isPending} />;
+  if (isPending || !session || !observedLogin)
+    return <LoginScreen checkingSession={isPending} />;
   if (design)
     return (
       <DesignSystemPage
@@ -104,6 +116,7 @@ export function Workbench() {
       projects={projects.data.projects}
       userId={session.user.id}
       sessionId={session.session.id}
+      nativeTab={{ login: observedLogin, draft, setDraft }}
       platformAdmin={platformAdmin}
       username={session.user.name}
       logout={() => void logout()}

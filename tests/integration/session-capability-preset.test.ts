@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildApp } from '@rdws/server';
+import { bootstrapNative } from '../helpers/native-browser.ts';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { Pool } from 'pg';
 import WebSocket from 'ws';
@@ -412,11 +413,17 @@ test('released capability versions stay scoped through binding changes, replay a
     );
     expect(mismatchedScope.status).toBe(403);
 
+    const binding = await bootstrapNative(app!, cookie, demand);
     function sendPrompt(sessionId: string) {
       return app!.inject({
         method: 'POST',
         url: '/api/dsh/' + demand + '/native/api/session/prompt',
-        headers: { origin, cookie, 'x-rdws-client-generation': randomUUID() },
+        headers: {
+          origin,
+          cookie,
+          'x-rdws-client-generation': randomUUID(),
+          'x-rdws-native-login': binding,
+        },
         payload: {
           type: 'client-request',
           rpcId: randomUUID(),
@@ -478,8 +485,7 @@ test('released capability versions stay scoped through binding changes, replay a
           port +
           '/api/dsh/' +
           demand +
-          '/native/api/remote.mux?generation=' +
-          randomUUID(),
+          `/native/api/remote.mux?generation=${randomUUID()}&login=${binding}`,
         { headers: { origin, cookie } },
       );
       const streamId = randomUUID();

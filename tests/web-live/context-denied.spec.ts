@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { bootstrapNative } from '../helpers/native-browser.ts';
 import { createServer as createNetServer } from 'node:net';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -116,6 +117,7 @@ for (const failure of ['denied', 'timeout'] as const)
         });
         expect(created.statusCode).toBe(200);
         const sid = created.json().sessionId;
+        const binding = await bootstrapNative(app, cookie, id);
         const start = Date.now();
         const prompt = await app.inject({
           method: 'POST',
@@ -124,6 +126,7 @@ for (const failure of ['denied', 'timeout'] as const)
             cookie,
             origin: origin,
             'x-rdws-client-generation': randomUUID(),
+            'x-rdws-native-login': binding,
           },
           payload: {
             type: 'client-request',

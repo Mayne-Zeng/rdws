@@ -15,6 +15,7 @@ import { MembersPage } from './administration.tsx';
 import { RepositoriesPage } from './repositories.tsx';
 import { CapabilityTemplates } from './capability-templates.tsx';
 import { SessionTrace } from './session-trace.tsx';
+import type { NativeTab } from './conversation.tsx';
 export type View =
   | 'requirements'
   | 'overview'
@@ -32,6 +33,7 @@ export function ProjectWorkspace({
   projects,
   userId,
   sessionId,
+  nativeTab,
   platformAdmin,
   username,
   logout,
@@ -41,6 +43,7 @@ export function ProjectWorkspace({
   projects: Project[];
   userId: string;
   sessionId: string;
+  nativeTab: NativeTab;
   platformAdmin: boolean;
   username: string;
   logout: () => void;
@@ -654,6 +657,7 @@ export function ProjectWorkspace({
                     userId={userId}
                     sessionId={sessionId}
                     projectId={project.id}
+                    nativeTab={nativeTab}
                   />
                 )
               ) : requirements.isPending ? (

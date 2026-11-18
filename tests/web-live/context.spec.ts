@@ -37,16 +37,19 @@ test('real requests receive new requirement facts at each native step', async ({
   const accounts = JSON.parse(
     await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
   ) as { username: string; password: string }[];
-  async function send(path: string, body?: unknown, cookie = '') {
+  async function send(
+    path: string,
+    body?: unknown,
+    cookie = '',
+    headers: Record<string, string> = {},
+  ) {
     return fetch(baseURL + path, {
       method: body === undefined ? 'GET' : 'POST',
       headers: {
         'content-type': 'application/json',
         origin: baseURL!,
         cookie,
-        ...(path.includes('/native/')
-          ? { 'x-rdws-client-generation': randomUUID() }
-          : {}),
+        ...headers,
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
@@ -89,6 +92,14 @@ test('real requests receive new requirement facts at each native step', async ({
     const session = await send(`/api/requirements/${id}/sessions`, {}, lead);
     expect(session.status).toBe(200);
     const sid = (await session.json()).sessionId;
+    const identity = await (
+      await send('/api/auth/get-session', undefined, lead)
+    ).json();
+    const bootstrap = await send(`/api/dsh/${id}/bootstrap`, undefined, lead, {
+      'x-rdws-edit-session': identity.session.id,
+    });
+    expect(bootstrap.status).toBe(200);
+    const { loginBinding } = await bootstrap.json();
     async function rpc(action: string, args: unknown) {
       const r = await send(
         `/api/dsh/${id}/native/api/${action}`,
@@ -99,6 +110,10 @@ test('real requests receive new requirement facts at each native step', async ({
           payload: { args },
         },
         lead,
+        {
+          'x-rdws-native-login': loginBinding,
+          'x-rdws-client-generation': randomUUID(),
+        },
       );
       expect(r.status).toBe(200);
       return r.json();

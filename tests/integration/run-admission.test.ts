@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { buildApp } from '@rdws/server';
+import { fixtureBinding } from '../helpers/native-browser.ts';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
 loadEnvironment('test');
@@ -207,6 +208,7 @@ test.each([false, true])(
         [sessionId, requirementId, uid, anotherSession],
       );
 
+      const binding = await fixtureBinding(app, cookie, 'poc', requirementId);
       const send = (
         id: string,
         text = 'Original prompt',
@@ -216,7 +218,12 @@ test.each([false, true])(
           app.inject({
             method: 'POST',
             url: `/api/dsh/${requirementId}/native/api/session/prompt`,
-            headers: { cookie, origin, 'x-rdws-client-generation': generation },
+            headers: {
+              cookie,
+              origin,
+              'x-rdws-client-generation': generation,
+              'x-rdws-native-login': binding,
+            },
             payload: {
               type: 'client-request',
               rpcId: randomUUID(),
@@ -334,6 +341,7 @@ test('failed sideband and rejected RPC admissions release their global quota', a
       'insert into native_session(id,requirement_id,owner_id) values($1,$2,$3)',
       [sid, id, uid],
     );
+    const binding = await fixtureBinding(app, cookie, 'poc', id);
     const send = () =>
       app.inject({
         method: 'POST',
@@ -342,6 +350,7 @@ test('failed sideband and rejected RPC admissions release their global quota', a
           cookie,
           origin: process.env.RDWS_ORIGIN!,
           'x-rdws-client-generation': randomUUID(),
+          'x-rdws-native-login': binding,
         },
         payload: {
           type: 'client-request',

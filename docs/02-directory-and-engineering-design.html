@@ -639,6 +639,14 @@
   <p>按 Q6 交付只读模型状态。当前会话使用既有授权的 <code>modelSelection</code> 投影。确认已有记录时显示供应商及模型标识。投影明确为空时读取当前连接代次的脱敏目录默认值，标示实例默认。等待投影、目录读取失败或返回缺失模型时显示待确认。切换会话和连接代次不会让旧目录响应覆盖当前状态。操作区只显示一次模型状态，回放沿现有的固定前缀读取展示事件。</p>
   <p>读侧交付自检通过，实机核对了明暗主题与四档宽度，并通过真实 Native 目录读出空会话的实例默认模型。改前端到端断言因状态行缺失失败，改后通过。<code>pnpm check</code> 通过（16 文件／105 项测试、类型、lint、格式和构建），<code>pnpm test:e2e</code> 通过（23 项，35.8s），<code>pnpm validate:baseline</code> 通过。读侧复用既有权限和原生读取能力，写入方案单独保持未准出。</p>
 
+  <h4 id="t13-inference-failure-boundary-20261118">11.16.5 浏览器推理故障响应</h4>
+  <p>Change / R2，修复一处浏览器 Native 桥接响应边界，D19 的普通响应脱敏约束与 T13 写入方案 B 面发现为依据。原生 <code>api-session/error</code> 广播使用异常链文本，<code>turn/end</code> 与失败流的 finish 携带供应商失败结构。现有工作台 HTTP／WS 桥透传。应用角色、现有读取权限、原生事件及模型执行均保持现有规则。</p>
+  <p>在已有 BFF HTTP／WS 桥出站处投影已知错误结构。实时通知保留会话身份、会话事件保留类型／序号与终止分类，推理失败及失败流终止原因以稳定 code／message 整对象重建。HTTP 的 <code>session/page</code>、<code>session/events</code> 覆盖结果中的记录。WS 覆盖 <code>session/follow</code> 的 opening records、activeAttempt stream、<code>assistant-stream.frame.chunk</code> 中的失败 finish、实时会话事件，以及 <code>session/observeEvent</code> 的会话事件。持久 <code>assistant/attempt</code> 和 <code>assistant/message</code> 中的失败 finish 都纳入。保留用户／助手正文、真正的 <code>frame.type=end</code>、流数据顺序和 Native 历史。</p>
+  <p>浏览器已批准的一元请求使用同一关联 ID 及稳定错误对象，保留原生客户端要求的 <code>details</code> 空对象；模型目录继续采用 §11.16.2 的专用投影。浏览器路径只返回必要响应头。异常 HTTP 状态或畸形 RPC 体转为稳定服务失败，畸形 WS 帧关闭当前桥以走既有重连。BFF 内部创建／派生及原生日志读取沿用原格式及错误详情。</p>
+  <p>用合成诊断标识走已登录 BFF HTTP 与 WebSocket，先复现异常直出，再断言标识失去可达性、正常消息和失败分类仍在、固定前缀回放保留原状。使用原生公开解析契约检查错误形状，分别验证 logical stream 故障帧和畸形物理帧的恢复，核对失效登录响应、页面与回归。验收仅支持此次已知浏览器出站结构，写入方案中的推理允许集合与运行日志仍须独立验证。允许单次回退修改，工作树当期只使用测试数据。</p>
+  <p>方案复审 APPROVE，关闭 HTTP／WS 畸形传输、RPC 失败对象兼容和流容器覆盖三项 Major。改前 HTTP 历史和 WS 实时错误事件用合成诊断标识复现直出。交付独立复核发现默认 <code>llm/retry</code> 仍携带原始失败对象（P1）。加入同一投影并证实改前失败、改后诊断消隐，重试标识、计数、等待时间与顺序保留。原生解析器可读取投影后的错误与结束帧，交付复审 APPROVE。真实拒绝／超时验证初次发现通用消息覆盖阻止提示，现工作台按 <code>blocked</code> 分类显示「本轮未执行」，沿用原文本恢复路径。</p>
+  <p>四个聚焦集成文件共 29 项通过，涵盖合成诊断、普通正文、帧顺序、固定前缀、准入和撤权。最终 <code>pnpm check</code> 通过（16 文件／107 项测试、类型、lint、格式和构建），<code>pnpm test:e2e</code> 通过（23 项，35.8s），<code>pnpm test:web-live tests/web-live/context-denied.spec.ts</code> 通过（2 项，14.6s），真实 Native 两种阻止场景的模型调用均为 0，原消息和恢复入口可用。<code>pnpm validate:baseline</code> 通过。本轮交付附本地提交 <code>fix: redact native inference diagnostics</code>。</p>
+
   <h2 id="s0"><span class="num">0</span>评审结论</h2>
   <div class="verdict">
     <div class="vtitle">总体判定</div>

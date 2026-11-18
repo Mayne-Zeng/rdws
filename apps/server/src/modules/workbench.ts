@@ -44,7 +44,11 @@ import {
   LEASE_MS,
   type Grant,
 } from '@rdws/dsh/access';
-import { authorizeStreamFrame } from '@rdws/dsh/wire';
+import {
+  authorizeStreamFrame,
+  publicNativeSessionResponse,
+  publicNativeStreamFrame,
+} from '@rdws/dsh/wire';
 import { currentAccount, type createAuth } from './auth.ts';
 import { runtimeHome } from '../../../../scripts/env.mjs';
 type Database = ReturnType<typeof connectDatabase>['db'];
@@ -71,7 +75,10 @@ async function publicModelCatalog(response: Response, rpcId: unknown) {
     return Response.json(
       {
         ...envelope,
-        result: { ok: false, error: { code: 'gateway/internal', message } },
+        result: {
+          ok: false,
+          error: { code: 'gateway/internal', message, details: {} },
+        },
       },
       options,
     );
@@ -1332,11 +1339,17 @@ export async function registerWorkbench(
               }
             : {}),
         });
-        if (request.method === 'POST' && path === '/api/session/modelCatalog') {
-          response = await publicModelCatalog(
-            response,
-            (request.body as { rpcId?: unknown }).rpcId,
-          );
+        if (request.method === 'POST') {
+          const rpcId = (request.body as { rpcId?: unknown }).rpcId;
+          response =
+            path === '/api/session/modelCatalog'
+              ? await publicModelCatalog(response, rpcId)
+              : await publicNativeSessionResponse(
+                  response,
+                  rpcId,
+                  path === '/api/session/page' ||
+                    path === '/api/session/events',
+                );
         }
         reply.code(response.status);
         for (const [key, value] of response.headers)
@@ -1460,11 +1473,16 @@ export async function registerWorkbench(
         });
         upstream.on('message', (data) => {
           if (
-            !stopped &&
-            !blocked(bridge.userId, bridge.projectId) &&
-            browser.readyState === WebSocket.OPEN
+            stopped ||
+            blocked(bridge.userId, bridge.projectId) ||
+            browser.readyState !== WebSocket.OPEN
           )
-            browser.send(data.toString());
+            return;
+          try {
+            browser.send(publicNativeStreamFrame(data.toString()));
+          } catch {
+            close();
+          }
         });
         upstream.on('close', close);
         upstream.on('error', close);

@@ -572,15 +572,26 @@ test('a temporary project fence suppresses output without revoking a socket when
       (await app.inject({ url: '/api/projects', headers: { cookie: lead } }))
         .statusCode,
     ).toBe(401);
-    peer.send('provisional-output');
+    peer.send(
+      JSON.stringify({
+        type: 'item',
+        streamId: 'fixture',
+        value: 'provisional-output',
+      }),
+    );
     await sleep(1200);
     expect(browser.readyState).toBe(WebSocket.OPEN);
     expect(native.revoked).toBe(0);
     expect(downlink).toEqual([]);
     release();
     expect((await attempt).statusCode).toBe(500);
-    peer.send('after-rollback');
-    await vi.waitFor(() => expect(downlink).toEqual(['after-rollback']));
+    const afterRollback = JSON.stringify({
+      type: 'item',
+      streamId: 'fixture',
+      value: 'after-rollback',
+    });
+    peer.send(afterRollback);
+    await vi.waitFor(() => expect(downlink).toEqual([afterRollback]));
     expect(
       (await app.inject({ url: '/api/projects', headers: { cookie: lead } }))
         .statusCode,

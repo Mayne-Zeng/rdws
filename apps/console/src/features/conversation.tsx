@@ -134,10 +134,7 @@ function SessionPanel({
       };
       if (data.reason?.kind !== 'blocked') return;
       handled = Number(blocked.event.seq);
-      setError(
-        binding.session.getSnapshot().lastAgentError ??
-          '本轮未执行，当前需求上下文或权限不可用，请稍后重试。',
-      );
+      setError('本轮未执行，当前需求上下文或权限不可用，请稍后重试。');
       const current = submissionState.current;
       if (
         current &&

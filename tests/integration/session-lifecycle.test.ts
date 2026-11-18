@@ -1,12 +1,15 @@
 import { test, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
+import WebSocket, { WebSocketServer } from 'ws';
 import { buildApp } from '@rdws/server';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { actionAllowed, type Grant } from '@rdws/dsh/access';
 import { forkBoundary } from '@rdws/dsh/sessions';
+import { parseRemoteStreamServerMessage } from '@rdws/dsh/wire';
 import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
 loadEnvironment('test');
 const pool = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
@@ -192,6 +195,375 @@ async function fixture(host = new Host()) {
     });
   return { app, id, source, cookie, post, host };
 }
+const inferenceDiagnostic = 'synthetic-inference-diagnostic';
+const inferenceFailure = {
+  code: 'FIXTURE_PROVIDER_FAILURE',
+  message: inferenceDiagnostic,
+  requestId: inferenceDiagnostic,
+};
+const finish = {
+  type: 'finish',
+  reason: { kind: 'error', failure: inferenceFailure },
+};
+const failedStream = [{ type: 'chunk', time: 1, chunk: finish }];
+const assistantMessage = {
+  id: 'fixture-assistant',
+  role: 'assistant',
+  source: { kind: 'model', provider: 'fixture', model: 'fixture-model' },
+  content: [{ type: 'text', text: 'Visible assistant reply' }],
+};
+const inferenceRecords = [
+  {
+    type: 'event',
+    event: {
+      type: 'user/message',
+      seq: 1,
+      time: 1,
+      surfaceOp: 'append',
+      data: {
+        source: { kind: 'user' },
+        message: { content: inferenceDiagnostic },
+      },
+    },
+  },
+  ...['assistant/attempt', 'assistant/message'].map((type, index) => ({
+    type: 'event',
+    event: {
+      type,
+      seq: index + 2,
+      time: 1,
+      ...(type === 'assistant/message' ? { surfaceOp: 'append' } : {}),
+      data: {
+        turn: 1,
+        step: 1,
+        ...(type === 'assistant/message'
+          ? {
+              message: assistantMessage,
+              interrupted: true,
+              stream: [
+                {
+                  type: 'chunk',
+                  time: 1,
+                  chunk: {
+                    type: 'finish',
+                    reason: { kind: 'aborted', failure: inferenceFailure },
+                  },
+                },
+              ],
+            }
+          : { stream: failedStream }),
+      },
+    },
+  })),
+  {
+    type: 'event',
+    event: {
+      type: 'llm/retry',
+      seq: 4,
+      time: 1,
+      data: {
+        retryId: 'fixture-retry',
+        turn: 1,
+        step: 1,
+        provider: 'fixture',
+        mode: 'normal',
+        policyKey: 'normal',
+        retry: 1,
+        maxRetries: 2,
+        delayMs: 200,
+        failure: inferenceFailure,
+      },
+    },
+  },
+  {
+    type: 'event',
+    event: {
+      type: 'turn/end',
+      seq: 5,
+      time: 1,
+      data: { turn: 1, reason: { kind: 'error', error: inferenceFailure } },
+    },
+  },
+];
+
+test('Native inference diagnostics are projected from HTTP session history without modifying message text', async () => {
+  const { app, id, source, cookie, host } = await fixture();
+  host.ticket = () => 'synthetic-inference-ticket';
+  const rpcId = randomUUID();
+  async function read(method: string, response: Response) {
+    host.fetch = async () => response;
+    return app.inject({
+      method: 'POST',
+      url: `/api/dsh/${id}/native/api/${method}`,
+      headers: {
+        cookie,
+        origin: process.env.RDWS_ORIGIN!,
+        'x-rdws-client-generation': randomUUID(),
+      },
+      payload: {
+        type: 'client-request',
+        rpcId,
+        method,
+        payload: {
+          args: {
+            request: { address: { kind: 'session', sessionId: source } },
+          },
+        },
+      },
+    });
+  }
+  const envelope = { type: 'server-response', rpcId };
+  try {
+    for (const method of ['session/page', 'session/events']) {
+      const response = await read(
+        method,
+        Response.json(
+          {
+            ...envelope,
+            result: {
+              ok: true,
+              value: { cursor: 5, hasMore: false, records: inferenceRecords },
+            },
+          },
+          { headers: { 'x-native-diagnostic': inferenceDiagnostic } },
+        ),
+      );
+      expect(response.statusCode).toBe(200);
+      const { records, cursor, hasMore } = response.json().result.value;
+      expect(records[0]).toEqual(inferenceRecords[0]);
+      expect(JSON.stringify(records.slice(1))).not.toContain(
+        inferenceDiagnostic,
+      );
+      expect(
+        records.map((row: { event: { seq: number } }) => row.event.seq),
+      ).toEqual([1, 2, 3, 4, 5]);
+      expect(records[3].event.data).toMatchObject({
+        retryId: 'fixture-retry',
+        retry: 1,
+        delayMs: 200,
+      });
+      expect(records[4].event.data.reason.kind).toBe('error');
+      expect(records[1].event.data.stream[0].chunk.reason.kind).toBe('error');
+      expect(records[2].event.data.message).toEqual(assistantMessage);
+      expect(records[2].event.data.stream[0].chunk.reason.kind).toBe('aborted');
+      expect(cursor).toBe(5);
+      expect(hasMore).toBe(false);
+      expect(response.headers['x-native-diagnostic']).toBeUndefined();
+    }
+    const error = await read(
+      'session/page',
+      Response.json({
+        ...envelope,
+        result: {
+          ok: false,
+          error: {
+            code: 'gateway/internal',
+            message: inferenceDiagnostic,
+            details: { requestId: inferenceDiagnostic },
+          },
+        },
+      }),
+    );
+    expect(error.statusCode).toBe(200);
+    expect(error.body).not.toContain(inferenceDiagnostic);
+    expect(error.json()).toMatchObject({
+      ...envelope,
+      result: { ok: false, error: { code: 'gateway/internal', details: {} } },
+    });
+    const malformed = await read(
+      'session/page',
+      new Response(inferenceDiagnostic, { status: 500 }),
+    );
+    expect(malformed.statusCode).toBe(503);
+    expect(malformed.body).not.toContain(inferenceDiagnostic);
+    expect(inferenceRecords[4]?.event.data).toEqual({
+      turn: 1,
+      reason: { kind: 'error', error: inferenceFailure },
+    });
+  } finally {
+    await app.close();
+  }
+});
+
+test('Native inference diagnostics are projected from live and resumed WebSocket session frames', async () => {
+  const upstream = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await once(upstream, 'listening');
+  const { app, id, source, cookie, host } = await fixture();
+  host.ticket = () => 'synthetic-inference-ticket';
+  host.socketUrl = () =>
+    `ws://127.0.0.1:${(upstream.address() as { port: number }).port}`;
+  let browser: WebSocket | undefined;
+  try {
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const connected = once(upstream, 'connection');
+    browser = new WebSocket(
+      `${address.replace('http:', 'ws:')}/api/dsh/${id}/native/api/remote.mux?generation=${randomUUID()}`,
+      {
+        headers: { cookie, origin: process.env.RDWS_ORIGIN! },
+      },
+    );
+    await once(browser, 'open');
+    const [native] = (await connected) as [WebSocket];
+    async function open(
+      streamId: string,
+      endpoint: string,
+      args: Record<string, unknown>,
+    ) {
+      const sent = once(native, 'message');
+      browser!.send(
+        JSON.stringify({ type: 'open', streamId, endpoint, payload: { args } }),
+      );
+      await sent;
+    }
+    async function receive(frame: unknown) {
+      const pending = once(browser!, 'message');
+      native.send(JSON.stringify(frame));
+      const [raw] = await pending;
+      expect(() => parseRemoteStreamServerMessage(String(raw))).not.toThrow();
+      return JSON.parse(String(raw));
+    }
+    await open('events', '$events', {});
+    const emit = await receive({
+      type: 'item',
+      streamId: 'events',
+      value: {
+        type: 'emit',
+        event: 'api-session/error',
+        args: [source, inferenceDiagnostic],
+      },
+    });
+    expect(JSON.stringify(emit)).not.toContain(inferenceDiagnostic);
+    expect(emit.value).toMatchObject({
+      event: 'api-session/error',
+      args: [source, expect.any(String)],
+    });
+
+    const session = { address: { kind: 'session', sessionId: source } };
+    await open('follow', 'session/follow', {
+      request: { ...session, assistantStream: true },
+    });
+    const snapshot = await receive({
+      type: 'item',
+      streamId: 'follow',
+      value: {
+        type: 'snapshot',
+        header: { id: source, version: 4, createdAt: 1, isSeeded: false },
+        cursor: 5,
+        hasMore: false,
+        records: inferenceRecords,
+        projections: { asOfSeq: 5, values: {} },
+        assistantStream: {
+          revision: 2,
+          activeAttempt: {
+            attemptId: 'attempt',
+            turn: 1,
+            step: 1,
+            startedAfterSeq: 5,
+            nextIndex: 1,
+            stream: failedStream,
+          },
+        },
+      },
+    });
+    expect(snapshot.value.records[0]).toEqual(inferenceRecords[0]);
+    expect(snapshot.value.records[2].event.data.message).toEqual(
+      assistantMessage,
+    );
+    expect(JSON.stringify(snapshot.value.records.slice(1))).not.toContain(
+      inferenceDiagnostic,
+    );
+    expect(JSON.stringify(snapshot.value.assistantStream)).not.toContain(
+      inferenceDiagnostic,
+    );
+    expect(snapshot.value.assistantStream.activeAttempt.nextIndex).toBe(1);
+    const chunk = await receive({
+      type: 'item',
+      streamId: 'follow',
+      value: {
+        type: 'assistant-stream',
+        frame: {
+          type: 'chunk',
+          attemptId: 'attempt',
+          revision: 2,
+          index: 1,
+          time: 1,
+          chunk: finish,
+        },
+      },
+    });
+    expect(JSON.stringify(chunk)).not.toContain(inferenceDiagnostic);
+    expect(chunk.value.frame).toMatchObject({
+      index: 1,
+      revision: 2,
+      chunk: { type: 'finish', reason: { kind: 'error' } },
+    });
+    const end = {
+      type: 'item',
+      streamId: 'follow',
+      value: {
+        type: 'assistant-stream',
+        frame: {
+          type: 'end',
+          attemptId: 'attempt',
+          revision: 2,
+          index: 2,
+          outcome: {
+            kind: 'committed',
+            eventType: 'assistant/attempt',
+            seq: 2,
+          },
+        },
+      },
+    };
+    expect(await receive(end)).toEqual(end);
+    await open('observe', 'session/observeEvent', { request: session });
+    const event = await receive({
+      type: 'item',
+      streamId: 'observe',
+      value: inferenceRecords[3],
+    });
+    expect(JSON.stringify(event)).not.toContain(inferenceDiagnostic);
+    expect(event.value.event).toMatchObject({
+      type: 'llm/retry',
+      seq: 4,
+      data: { retry: 1, delayMs: 200 },
+    });
+    const completed = await receive({
+      type: 'item',
+      streamId: 'observe',
+      value: inferenceRecords[4],
+    });
+    expect(JSON.stringify(completed)).not.toContain(inferenceDiagnostic);
+    expect(completed.value.event).toMatchObject({ type: 'turn/end', seq: 5 });
+    const logicalError = await receive({
+      type: 'error',
+      streamId: 'observe',
+      error: {
+        code: 'gateway/internal',
+        message: inferenceDiagnostic,
+        details: { requestId: inferenceDiagnostic },
+      },
+    });
+    expect(JSON.stringify(logicalError)).not.toContain(inferenceDiagnostic);
+    expect(logicalError).toMatchObject({
+      type: 'error',
+      streamId: 'observe',
+      error: { details: {} },
+    });
+    expect(browser.readyState).toBe(WebSocket.OPEN);
+
+    const closed = once(browser, 'close');
+    native.send(inferenceDiagnostic);
+    expect((await closed)[0]).toBe(4001);
+  } finally {
+    browser?.terminate();
+    for (const client of upstream.clients) client.terminate();
+    await Promise.all([
+      app.close(),
+      new Promise<void>((resolve) => upstream.close(() => resolve())),
+    ]);
+  }
+});
 test('the model catalog forwards available models without exposing Native diagnostics', async () => {
   const { app, id, cookie, host } = await fixture();
   const diagnostic = 'synthetic-private-provider-diagnostic';
@@ -269,7 +641,11 @@ test('the model catalog forwards available models without exposing Native diagno
       ...envelope,
       result: {
         ok: false,
-        error: { code: 'gateway/internal', message: '模型目录暂不可用' },
+        error: {
+          code: 'gateway/internal',
+          message: '模型目录暂不可用',
+          details: {},
+        },
       },
     });
 

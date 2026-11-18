@@ -32,13 +32,26 @@ class FailedAdmissionHost extends NativeWebHost {
       throw new Error('Controlled admission outage');
     return { seen: false };
   }
-  override async fetch() {
+  override async fetch(
+    _path: string,
+    _grant: Parameters<NativeWebHost['fetch']>[1],
+    init: RequestInit = {},
+  ) {
     return new Response(
       JSON.stringify({
+        type: 'server-response',
+        rpcId: JSON.parse(String(init.body)).rpcId,
         result:
           this.mode === 'accepted'
             ? { ok: true, value: { accepted: true } }
-            : { ok: false, error: { code: 'rejected' } },
+            : {
+                ok: false,
+                error: {
+                  code: 'gateway/internal',
+                  message: 'Rejected',
+                  details: {},
+                },
+              },
       }),
     );
   }

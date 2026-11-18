@@ -1,0 +1,12 @@
+[
+  {
+    "id": "app",
+    "name": "应用仓库",
+    "url": "https://gitlab.example.invalid/team/app.git",
+    "baselineRef": "refs/heads/main",
+    "targetName": "非生产集成",
+    "targetRef": "refs/heads/integration",
+    "signersFile": "app.allowed-signers",
+    "credentialFile": "app.gitlab.json"
+  }
+]

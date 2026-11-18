@@ -109,7 +109,9 @@ for (const failure of ['abort', 'invalid-json'] as const)
     await expect(
       page.getByRole('button', { name: '新建需求', exact: true }),
     ).toBeDisabled();
-    await expect(page.locator('.nav-item')).toBeDisabled();
+    await expect(
+      page.getByRole('button', { name: '需求管理', exact: true }),
+    ).toBeDisabled();
     await expect(page.getByLabel('切换项目')).toBeDisabled();
     await page.setViewportSize({ width: 820, height: 900 });
     await expect(page.getByLabel('切换项目')).toBeVisible();
@@ -231,7 +233,9 @@ test('mobile navigation contains keyboard focus and tabs support arrows', async 
     'inert',
     '',
   );
-  await expect(page.locator('.nav-item')).toBeFocused();
+  await expect(
+    page.getByRole('button', { name: '需求管理', exact: true }),
+  ).toBeFocused();
   await page.setViewportSize({ width: 390, height: 900 });
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
   const overview = page.getByRole('tab', { name: '需求档案', exact: true });
@@ -309,7 +313,9 @@ test('member loading and failure recover before a busy create protects navigatio
   await expect(
     page.getByRole('button', { name: '取消', exact: true }),
   ).toBeDisabled();
-  await expect(page.locator('.nav-item')).toBeDisabled();
+  await expect(
+    page.getByRole('button', { name: '需求管理', exact: true }),
+  ).toBeDisabled();
   expect(
     await page
       .getByRole('button', { name: '创建需求', exact: true })

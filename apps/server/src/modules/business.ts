@@ -647,5 +647,28 @@ export function createBusiness(db: Database) {
       return work(tx, state.item);
     });
   }
-  return { create, execute, read, sessionTransaction };
+  async function publishRepository(
+    who: Actor,
+    projectId: string,
+    closing: () => boolean,
+    publish: (confirm: () => void) => Promise<void>,
+  ) {
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`set local lock_timeout='3s'`);
+      const { roles } = await identity(tx, who, projectId, [], true);
+      if (!roles.some((row) => row.role === 'project_admin'))
+        businessError(403, '无权同步项目仓库');
+      const [session] = await tx
+        .select({ expiresAt: schema.session.expiresAt })
+        .from(schema.session)
+        .where(eq(schema.session.id, who.authSessionId));
+      const confirm = () => {
+        if (!session || session.expiresAt <= new Date() || closing())
+          businessError(401, '登录已失效，请重新登录');
+      };
+      confirm();
+      await publish(confirm);
+    });
+  }
+  return { create, execute, read, sessionTransaction, publishRepository };
 }

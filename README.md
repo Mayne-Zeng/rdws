@@ -67,6 +67,17 @@ pnpm test:web-live
 
 前者验证基础浏览器旅程和会话结果未知时的重试；后者需要已有 GLM 原生配置，会产生真实模型调用，验证页面流、上下文刷新和失败阻断、授权轮换、non-owner 拒绝与撤权故障，以及五会话的派生、被动回放和中断恢复。live 使用运行根 `testing-web` / `testing-fault` / `testing-context-denied` / `testing-context-timeout` / `testing-sessions/<run-id>` 的独立数据目录，通过原生 patch / 凭据路径引用同一模型配置，不复制密钥。中断用例仅终止其自身创建且 PID 已核对的原生子进程，保留日志与数据库记录。测试产物在 `test-results/`，Demo 对照截图在 `.impeccable/review/`；两者均不进 Git。
 
+## 仓库与环境（T04）
+
+运行维护者先按[配置示例](config/repositories.example.json)在 `$RDWS_HOME/config/projects/<project-id>/repositories.json` 登记已授权的 GitLab HTTPS 仓库、完整基线分支和一个非生产目标分支。示例使用不可连接的占位地址。预置项目 ID 为 `poc`，支持每个项目独立登记。配置由运行账户管理，在下一次读取时生效。受管目录和文件应由运行账户所有，目录禁止组与其他用户写入，引用文件名不含目录。更换仓库地址或基线分支时使用新仓库 ID。
+
+- 将可信 SSH 签名公钥登记为 Git `allowed_signers` 格式，文件放在同一个项目配置目录。T04 当前验证基线 tip 的 SSH commit 签名，Git 使用该名单判断信任。私有 CA 可通过同目录中的可选 `caFile` 引用，HTTPS 主机校验仍生效。
+- 将只读 GitLab 凭据存入 `$RDWS_HOME/secrets/<credentialFile>`，文件权限为 `0600`。私有 JSON 包含 `url`、`username`、`token`，其中 `url` 与登记的完整 HTTPS 仓库地址一致。使用目标仓库专用的 `read_repository` 凭据。运行需要支持 SSH commit 验签的 Git 与 `ssh-keygen`，syncer 从固定的系统和常用包管理器 PATH 查找 Git；隔离测试另需支持 `req -addext` 的 OpenSSL。
+- 登录后从侧栏进入“仓库与环境”。项目成员可观察基线、目标、最近结果和本地实际 SHA。项目管理员可点“同步基线”。如响应未确认，留在当前页使用“核对原同步”，同一个命令会查询原持久收据。收到待核对状态时可以继续核对，或明确选择“发起新同步”。故障状态会显示原因。
+- 已验证的基线发布在 `$RDWS_HOME/projects/<project-id>/sources/<repo-id>.git`。同步只更新指定基线 ref，目标 SHA 记录为读取时点的观察。失败详情、发布前记录与锁位于同级隐藏目录 `.<repo-id>.state` 和 `.<repo-id>.lock`。若锁遗留，先停止对应服务同步入口，先核实 `owner.json` 记录的工作进程已停止。再按该次 `git-*.pids` 的完整路径核对尚处在引导阶段的进程，确认引导已结束后重读组记录。每组在启动 Git 前写入组 ID。根据操作时间和系统进程表确认所有关联组已退出，读回实际 ref 和收据中旧值、候选值。保留证据，确认后由运行维护者解除该次锁。后续使用新命令重新同步，原命令仍返回原记录。收据按操作保留，统一维护策略由运行维护阶段处理。
+
+独立验证命令为 `pnpm test tests/integration/repository-mirror.test.ts tests/integration/repository-access.test.ts` 和 `pnpm test:e2e tests/e2e/repositories.spec.ts`。隔离 HTTPS Git 夹具生成临时签名身份及远端并通过实际 Git 读、验签和更新。真实 GitLab 首次验收需要登记具名目标与只读服务主体，核对实例版本、项目归属、读取权限与签名材料，参见[工程实施与证据](docs/02-directory-and-engineering-design.html#t04-plan-20261118)。
+
 ## DSH 真实接入探针
 
 ```sh

@@ -2,7 +2,7 @@
 
 ## 项目边界与结构
 
-RDWS 正在按已确认规格分阶段实现最小 Web PoC。`apps/console` 是 React 工作台，`apps/server` 是 Fastify API / BFF；编排与镜像同步按后续阶段进入 `apps/orchestrator`、`apps/syncer`。`packages/contracts` 存共享业务契约，`packages/db` 存 Drizzle 模型和迁移。
+RDWS 正在按已确认规格分阶段实现最小 Web PoC。`apps/console` 是 React 工作台，`apps/server` 是 Fastify API / BFF；`apps/syncer` 由 API 在同步任务内调用，独占 sources 基线写入；编排按后续阶段进入 `apps/orchestrator`。`packages/contracts` 存共享业务契约，`packages/db` 存 Drizzle 模型和迁移。
 
 DSH 接入归 `dsh/`，`dsh/client` 承载原生浏览器运行时适配，业务代码通过公开适配层访问；运行数据归独立 `RDWS_HOME`，不进 Git。`demo/` 是历史假数据原型，单文件约束仅适用于原型，不约束工程代码。
 
@@ -13,6 +13,7 @@ DSH 接入归 `dsh/`，`dsh/client` 承载原生浏览器运行时适配，业�
 - 改范围、权限或数据模型：读 [决策台账当前基线](docs/00-decision-ledger.html#implementation-20261117)。
 - 改目录、DSH 或运行配置：读 [工程实施基线](docs/02-directory-and-engineering-design.html#implementation-20261117)。
 - 改界面：读 [设计基线](docs/04-design-baseline.html)，复用 TDesign 与 RDWS 主题令牌。
+- 改镜像同步或仓库登记：读 [T04 工程设计](docs/02-directory-and-engineering-design.html#t04-plan-20261118)和 [仓库登记说明](README.md#仓库与环境t04)。
 - 改安装或凭据：读 [本地开发说明](README.md) 和 [安全边界](SECURITY.md)。
 
 ## 开发与验证

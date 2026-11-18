@@ -10,7 +10,9 @@ import {
 import { Icon, api, roleLabels } from '../lib/ui.tsx';
 import { RequirementForm } from './requirement-form.tsx';
 import { RequirementPage } from './requirement.tsx';
-export type View = 'requirements' | 'overview' | 'chat' | 'context' | 'create';
+import { RepositoriesPage } from './repositories.tsx';
+export type View =
+  'requirements' | 'overview' | 'chat' | 'context' | 'create' | 'repos';
 export type Project = ProjectList['projects'][number];
 export function ProjectWorkspace({
   projects,
@@ -30,9 +32,13 @@ export function ProjectWorkspace({
     projects.find((p) => p.id === search.get('project')) ?? projects[0]!;
   const selected = search.get('requirement') ?? '';
   const current = search.get('view');
-  const view: View = ['overview', 'chat', 'context', 'create'].includes(
-    current ?? '',
-  )
+  const view: View = [
+    'overview',
+    'chat',
+    'context',
+    'create',
+    'repos',
+  ].includes(current ?? '')
     ? (current as View)
     : 'requirements';
   const [mobile, setMobile] = useState(false),
@@ -117,6 +123,7 @@ export function ProjectWorkspace({
     requirements.data?.requirements.filter((r) =>
       r.title.toLocaleLowerCase().includes(filter.toLocaleLowerCase()),
     ) ?? [];
+  const showTabs = !!selected && view !== 'create' && view !== 'repos';
   const activeView = view === 'requirements' ? 'overview' : view;
   const tabs = [
     { view: 'chat', label: '对话', icon: 'chat' },
@@ -180,6 +187,16 @@ export function ProjectWorkspace({
             <span className="count">
               {requirements.data?.requirements.length ?? '—'}
             </span>
+          </button>
+          <button
+            aria-label="仓库与环境"
+            aria-current={view === 'repos' ? 'page' : undefined}
+            disabled={protectedForm}
+            className={'nav-item' + (view === 'repos' ? ' active' : '')}
+            onClick={() => navigate('repos', '')}
+          >
+            <Icon name="folder" />
+            <span>仓库与环境</span>
           </button>
         </nav>
         <div className="project-card">
@@ -318,7 +335,11 @@ export function ProjectWorkspace({
               </span>
             </div>
             <div className="top-title">
-              {view === 'create' ? '新建需求' : (summary?.title ?? '需求管理')}
+              {view === 'repos'
+                ? '仓库与环境'
+                : view === 'create'
+                  ? '新建需求'
+                  : (summary?.title ?? '需求管理')}
             </div>
           </div>
           <span className="pill local-badge">
@@ -326,7 +347,7 @@ export function ProjectWorkspace({
             本地 PoC
           </span>
         </header>
-        {selected && view !== 'create' && (
+        {showTabs && (
           <div className="workspace-tabs">
             <div
               role="tablist"
@@ -380,13 +401,11 @@ export function ProjectWorkspace({
           <div
             className="content-width"
             id="workspace-panel"
-            role={selected && view !== 'create' ? 'tabpanel' : undefined}
-            aria-labelledby={
-              selected && view !== 'create' ? 'view-' + activeView : undefined
-            }
-            tabIndex={selected && view !== 'create' ? 0 : undefined}
+            role={showTabs ? 'tabpanel' : undefined}
+            aria-labelledby={showTabs ? 'view-' + activeView : undefined}
+            tabIndex={showTabs ? 0 : undefined}
           >
-            {requirements.isError && (
+            {view !== 'repos' && requirements.isError && (
               <div className="inline-feedback" role="alert">
                 <Alert theme="error" message={requirements.error.message} />
                 <Button
@@ -399,7 +418,9 @@ export function ProjectWorkspace({
                 </Button>
               </div>
             )}
-            {view === 'create' ? (
+            {view === 'repos' ? (
+              <RepositoriesPage key={project.id} projectId={project.id} />
+            ) : view === 'create' ? (
               <RequirementForm
                 key={project.id}
                 project={project}

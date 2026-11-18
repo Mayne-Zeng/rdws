@@ -209,3 +209,44 @@ export interface RequirementDetail {
     codeWrite: false;
   };
 }
+
+export const RepositorySyncInput = Type.Object(
+  { commandId: Type.String({ format: 'uuid' }) },
+  { additionalProperties: false },
+);
+export type RepositorySyncIssue =
+  | 'credentials'
+  | 'connection'
+  | 'target'
+  | 'signature'
+  | 'history'
+  | 'configuration_changed'
+  | 'authorization'
+  | 'storage'
+  | 'timeout'
+  | 'stopped';
+export interface RepositorySyncResult {
+  commandId: string;
+  status: 'running' | 'succeeded' | 'failed' | 'unknown';
+  startedAt: string;
+  finishedAt?: string;
+  previousCommit?: string;
+  candidateCommit?: string;
+  targetCommit?: string;
+  signerFingerprint?: string;
+  issue?: RepositorySyncIssue;
+}
+export interface RepositorySummary {
+  id: string;
+  name: string;
+  baselineRef: string;
+  targetName: string;
+  targetRef: string;
+  publishedCommit?: string;
+  stateIssue?: 'binding' | 'storage' | 'review_required';
+  lastSync?: RepositorySyncResult;
+}
+export interface ProjectRepositories {
+  canSync: boolean;
+  repositories: RepositorySummary[];
+}

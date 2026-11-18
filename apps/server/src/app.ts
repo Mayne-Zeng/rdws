@@ -11,6 +11,7 @@ export function buildApp(options: {
   secret: string;
   origin: string;
   nativeHost?: import('@rdws/dsh/web').NativeWebHost;
+  repositoryHome?: string;
 }) {
   const database = connectDatabase(options.databaseUrl);
   const auth = createAuth(database.db, options);
@@ -117,6 +118,7 @@ export function buildApp(options: {
       auth,
       options.nativeHost,
       options.origin,
+      options.repositoryHome,
     );
   });
   app.setErrorHandler((error: FastifyError, _request, reply) => {

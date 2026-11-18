@@ -8,8 +8,15 @@ import {
   BusinessCommand,
   SessionCreate,
   SessionFork,
+  RepositorySyncInput,
+  type ProjectRepositories,
 } from '@rdws/contracts';
-import { createBusiness } from './business.ts';
+import { businessError, createBusiness } from './business.ts';
+import {
+  MirrorRequestError,
+  RepositoryMirrors,
+} from '../../../syncer/src/mirror.ts';
+import { MirrorConfigError } from '../../../syncer/src/config.ts';
 import { createSessionOperations } from './session-operations.ts';
 import {
   ContextRuns,
@@ -42,6 +49,7 @@ export async function registerWorkbench(
   auth: Auth,
   providedNative?: NativeWebHost,
   expectedOrigin = process.env.RDWS_ORIGIN || 'http://127.0.0.1:5173',
+  repositoryHome?: string,
 ) {
   const instanceRoot =
     process.env.RDWS_MODE === 'test'
@@ -56,6 +64,7 @@ export async function registerWorkbench(
         : undefined,
     );
   const business = createBusiness(db);
+  const mirrors = new RepositoryMirrors(repositoryHome ?? instanceRoot);
   const sessionOperations = createSessionOperations(db, business, native);
   let authorizationEpoch = 0;
   const closingSessions = new Set<string>();
@@ -306,6 +315,79 @@ export async function registerWorkbench(
         ),
     };
   });
+  app.get<{ Params: { projectId: string } }>(
+    '/api/projects/:projectId/repositories',
+    async (request): Promise<ProjectRepositories> => {
+      const { projectId } = request.params;
+      const who = await actor(request.headers);
+      if (!(await projectRoles(who.userId, projectId)).length)
+        businessError(403, '无权访问当前项目');
+      let repositories;
+      try {
+        repositories = await mirrors.list(projectId);
+      } catch (error) {
+        if (error instanceof MirrorConfigError || error instanceof SyntaxError)
+          businessError(409, '仓库配置无效，请联系运行维护者核对');
+        throw error;
+      }
+      await actor(request.headers);
+      const roles = await projectRoles(who.userId, projectId);
+      if (!roles.length) businessError(403, '无权访问当前项目');
+      return { repositories, canSync: roles.includes('project_admin') };
+    },
+  );
+  app.post<{
+    Params: { projectId: string; repositoryId: string };
+    Body: { commandId: string };
+  }>(
+    '/api/projects/:projectId/repositories/:repositoryId/sync',
+    {
+      schema: { body: RepositorySyncInput },
+      preValidation: async (request) => {
+        if (Object.keys(request.body ?? {}).some((key) => key !== 'commandId'))
+          businessError(400, '同步仅接受命令标识');
+      },
+    },
+    async (request) => {
+      const { projectId, repositoryId } = request.params;
+      const who = await actor(request.headers);
+      if (
+        !(await projectRoles(who.userId, projectId)).includes('project_admin')
+      )
+        businessError(403, '无权同步项目仓库');
+      try {
+        const result = await mirrors.sync(
+          projectId,
+          repositoryId,
+          who.userId,
+          request.body.commandId,
+          (publish) =>
+            business.publishRepository(
+              who,
+              projectId,
+              () => closingSessions.has(who.authSessionId),
+              publish,
+            ),
+        );
+        await actor(request.headers);
+        if (
+          !(await projectRoles(who.userId, projectId)).includes('project_admin')
+        )
+          businessError(403, '无权同步项目仓库');
+        return result;
+      } catch (error) {
+        if (error instanceof MirrorRequestError) {
+          if (error.reason === 'missing') businessError(404, '仓库未登记');
+          if (error.reason === 'busy')
+            businessError(409, '仓库正在同步或有待核对的锁，请先刷新状态');
+          businessError(409, '镜像状态需要维护者核对');
+        }
+        if (error instanceof MirrorConfigError || error instanceof SyntaxError)
+          businessError(409, '仓库配置无效，请联系运行维护者核对');
+        throw error;
+      }
+    },
+  );
   app.get('/api/projects/:projectId/requirements', async (request) => {
     const who = await actor(request.headers);
     const { projectId } = request.params as { projectId: string };
@@ -870,6 +952,7 @@ export async function registerWorkbench(
     },
   );
   app.addHook('preClose', async () => {
+    await mirrors.close();
     runs.clear();
     for (const bridge of [...bridges]) bridge.close();
     await native.close();

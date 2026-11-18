@@ -176,15 +176,16 @@
   - 已交付子项：[浏览器推理故障响应](02-directory-and-engineering-design.html#t13-inference-failure-boundary-20261118)。HTTP／WS 区分正常消息、推理失败与重试诊断，原生数据保留。工作台继续支持上下文阻止提示和原消息恢复。选模写入方案继续走独立安全闸门。
   - 新验收证据：[刷盘与恢复后选路](02-directory-and-engineering-design.html#t13-model-dispatch-evidence-20261118)。强制退出后复用 Native 状态完成两次本机合成推理，目标模型与实例默认分别命中。新的保存与发送方案待复审和实现，原短事务等待 Native 方案继续未准出。
 
-- [ ] **T14 · 能力白名单与模板**（进行中：平台登记与项目模板版本已交付）
+- [ ] **T14 · 能力白名单与模板**（进行中：需求模板绑定配置已交付，待 Native 生效验收）
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。
   - 可验收目标：白名单外能力不能使用；模板可配置和校验；生成 preset 的作用域与权限明确；preset 变更只影响之后创建的会话，不悄悄扩大旧会话权限。
   - 已确认的绑定验收：只允许当前项目管理员绑定或更换平台已发布的确切模板版本，变更只影响之后新建的会话。验证跨项目、撤权、其他角色、未发布版本及旧会话在线和冷恢复。详见[绑定和验收](02-directory-and-engineering-design.html#t14-binding-acceptance-20261118)。
   - 前置：T03。
   - 来源：D21、I4-UI；上游公开扩展边界。
   - 已交付子项：[平台白名单登记](02-directory-and-engineering-design.html#t14-allowlist-delivery-20261118)。平台管理员可登记和停用精确审核版本，并核对原命令和当前清单。新增迁移已在隔离测试库验证。
-  - 已交付子项：[项目能力模板版本](02-directory-and-engineering-design.html#t14-template-delivery-20261118)。平台管理员发布只引用已审核精确版本的项目模板，项目成员读取本项目模板的版本和停用状态。后续需求绑定及 Native preset 生成仍按 T14 推进，正式页面待用户侧视觉验收。
-  - 新验收证据：[原生 preset 冷恢复验证](02-directory-and-engineering-design.html#t14-native-preset-evidence-20261118)。固定版本真实进程验证新旧 ID 隔离、同 ID 被覆盖后旧会话装配变化以及定义缺失时拒绝恢复。需求绑定与运行时生成仍待接线。
+  - 已交付子项：[项目能力模板版本](02-directory-and-engineering-design.html#t14-template-delivery-20261118)。平台管理员发布只引用已审核精确版本的项目模板，项目成员读取本项目版本和停用状态。正式页面待用户侧视觉验收。
+  - 已交付子项：[需求模板绑定配置](02-directory-and-engineering-design.html#t14-demand-binding-delivery-20261119)。项目管理员可绑定确切版本、重放原命令并读取当前配置。隔离测试库迁移 0009、独立复审、整仓 137 项、浏览器 29 项和基线校验通过。待生成并持久化不可变 preset、关联会话创建及验证旧会话在线和冷恢复。
+  - 新验收证据：[原生 preset 冷恢复验证](02-directory-and-engineering-design.html#t14-native-preset-evidence-20261118)。固定版本真实进程验证新旧 ID 隔离、同 ID 被覆盖后旧会话装配变化以及定义缺失时拒绝恢复。运行时生成及会话应用仍待接线。
   - 新验收证据：[原生 preset 在线装载验证](02-directory-and-engineering-design.html#t14-native-preset-live-20261118)。宿主可在同一运行进程追加新版本，旧会话继续使用原组合，加载失败拒绝新建。正式接线仍需持久保存不可变定义并校验真实制品。
 
 - [ ] **T15 · 统计与配额**

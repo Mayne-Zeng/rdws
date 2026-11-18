@@ -103,6 +103,7 @@ export function Workbench() {
     <ProjectWorkspace
       projects={projects.data.projects}
       userId={session.user.id}
+      sessionId={session.session.id}
       platformAdmin={platformAdmin}
       username={session.user.name}
       logout={() => void logout()}

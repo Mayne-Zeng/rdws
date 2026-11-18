@@ -7,6 +7,10 @@ import type {
   ManagementCommand,
   ManagementResult,
   TaskInput,
+  RequirementTemplateBinding,
+  TemplateBindingInput,
+  TemplateBindingReceipt,
+  CapabilityVersion,
 } from '@rdws/contracts';
 import { capabilityKey } from '@rdws/contracts';
 import type { PublishedBaseline } from '../../../syncer/src/mirror.ts';
@@ -757,6 +761,272 @@ export function createBusiness(db: Database) {
       return work(tx, state.item);
     });
   }
+  async function authorizeTemplateBinding(
+    who: Actor,
+    id: string,
+    projectId: string,
+    adminOnly: boolean,
+    reader: Database | Transaction = db,
+  ) {
+    const {
+      session,
+      user,
+      requirement,
+      projectMember,
+      requirementParticipant,
+    } = schema;
+    const [current] = await reader
+      .select({
+        demand: requirement.id,
+        expiresAt: session.expiresAt,
+        admin: sql<boolean>`exists (select 1 from ${projectMember}
+          where ${projectMember.projectId} = ${projectId}
+            and ${projectMember.userId} = ${who.userId}
+            and ${projectMember.role} = 'project_admin')`,
+        participant: sql<boolean>`exists (select 1 from ${requirementParticipant}
+          join ${projectMember} on ${projectMember.role} = ${requirementParticipant.role}
+            and ${projectMember.projectId} = ${projectId}
+            and ${projectMember.userId} = ${who.userId}
+          where ${requirementParticipant.requirementId} = ${id}
+            and ${requirementParticipant.userId} = ${who.userId})`,
+      })
+      .from(session)
+      .innerJoin(user, eq(session.userId, user.id))
+      .leftJoin(
+        requirement,
+        and(eq(requirement.id, id), eq(requirement.projectId, projectId)),
+      )
+      .where(
+        and(
+          eq(session.id, who.authSessionId),
+          eq(user.id, who.userId),
+          eq(user.active, true),
+          eq(user.authEpoch, session.authEpoch),
+        ),
+      );
+    if (!current || current.expiresAt <= new Date())
+      businessError(401, '登录已失效，请重新登录');
+    if (
+      !current.demand ||
+      (!current.admin && (adminOnly || !current.participant))
+    )
+      businessError(403, '无权访问当前需求模板绑定');
+    return current;
+  }
+  async function readTemplateBinding(
+    who: Actor,
+    id: string,
+    projectId: string,
+  ): Promise<RequirementTemplateBinding> {
+    return db.transaction(
+      async (tx) => {
+        const authority = await authorizeTemplateBinding(
+          who,
+          id,
+          projectId,
+          false,
+          tx,
+        );
+        const bindingTable = schema.requirementCapabilityBinding;
+        const revisions = schema.capabilityTemplateRevision;
+        const [bound] = await tx
+          .select({
+            templateId: bindingTable.templateId,
+            revision: bindingTable.revision,
+          })
+          .from(bindingTable)
+          .where(
+            and(
+              eq(bindingTable.requirementId, id),
+              eq(bindingTable.projectId, projectId),
+            ),
+          );
+        if (!bound && !authority.admin) return { binding: null };
+        const available = schema.capabilityApproval;
+        const approvals = new Set(
+          (
+            await tx
+              .select()
+              .from(available)
+              .where(eq(available.approved, true))
+          ).map(capabilityKey),
+        );
+        const rows = await tx
+          .select({
+            templateId: revisions.templateId,
+            revision: revisions.revision,
+            name: revisions.name,
+            capabilities: revisions.capabilities,
+          })
+          .from(revisions)
+          .where(
+            and(
+              eq(revisions.projectId, projectId),
+              authority.admin
+                ? undefined
+                : and(
+                    eq(revisions.templateId, bound!.templateId),
+                    eq(revisions.revision, bound!.revision),
+                  ),
+            ),
+          )
+          .orderBy(
+            asc(revisions.name),
+            asc(revisions.templateId),
+            desc(revisions.revision),
+          );
+        const versions = rows.map(({ capabilities, ...version }) => ({
+          ...version,
+          available: capabilities.every((item) =>
+            approvals.has(capabilityKey(item)),
+          ),
+        }));
+        const binding =
+          versions.find(
+            (version) =>
+              version.templateId === bound?.templateId &&
+              version.revision === bound.revision,
+          ) ?? null;
+        return authority.admin
+          ? {
+              binding,
+              options: versions
+                .filter((version) => version.available)
+                .map(({ templateId, revision, name }) => ({
+                  templateId,
+                  revision,
+                  name,
+                })),
+            }
+          : { binding };
+      },
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
+  }
+  async function approvedTemplateReferences(
+    tx: Transaction,
+    references: CapabilityVersion[],
+  ) {
+    if (!references.length) return true;
+    const approval = schema.capabilityApproval;
+    const active = await tx
+      .select({ kind: approval.kind })
+      .from(approval)
+      .where(
+        and(
+          eq(approval.approved, true),
+          or(
+            ...references.map((item) =>
+              and(
+                eq(approval.kind, item.kind),
+                eq(approval.reference, item.reference),
+                eq(approval.revision, item.revision),
+              ),
+            ),
+          ),
+        ),
+      )
+      .orderBy(
+        asc(approval.kind),
+        asc(approval.reference),
+        asc(approval.revision),
+      )
+      .for('share');
+    return active.length === references.length;
+  }
+  async function bindTemplate(
+    who: Actor,
+    id: string,
+    projectId: string,
+    input: TemplateBindingInput,
+    confirmResponse: () => void,
+  ): Promise<TemplateBindingReceipt | 'conflict'> {
+    return transaction(async (tx) => {
+      const auth = await identity(tx, who, projectId, [], true);
+      if (!auth.roles.some((role) => role.role === 'project_admin'))
+        businessError(403, '无权绑定当前需求模板');
+      const [demand] = await tx
+        .select({ id: schema.requirement.id })
+        .from(schema.requirement)
+        .where(
+          and(
+            eq(schema.requirement.id, id),
+            eq(schema.requirement.projectId, projectId),
+          ),
+        )
+        .for('update');
+      if (!demand) businessError(403, '需求所属项目已变化');
+      function confirm() {
+        if (auth.session.expiresAt <= new Date())
+          businessError(401, '登录已失效，请重新登录');
+        confirmResponse();
+      }
+      confirm();
+      const { commandId, templateId, revision } = input;
+      const choice = { templateId, revision };
+      const reservation = await reserve(
+        tx,
+        who,
+        'requirement:' + id,
+        'capability.template.bind',
+        commandId,
+        choice,
+      ).catch((error: unknown) => {
+        if ((error as { statusCode?: number }).statusCode === 409)
+          return 'conflict' as const;
+        throw error;
+      });
+      confirm();
+      if (reservation === 'conflict') return reservation;
+      if (reservation.result)
+        return {
+          ...(reservation.result as Omit<TemplateBindingReceipt, 'replayed'>),
+          replayed: true,
+        };
+
+      const table = schema.requirementCapabilityBinding,
+        versions = schema.capabilityTemplateRevision;
+      const [bound] = await tx
+        .select({ templateId: table.templateId, revision: table.revision })
+        .from(table)
+        .where(
+          and(eq(table.requirementId, id), eq(table.projectId, projectId)),
+        );
+      const [selected] = await tx
+        .select({ capabilities: versions.capabilities })
+        .from(versions)
+        .where(
+          and(
+            eq(versions.projectId, projectId),
+            eq(versions.templateId, templateId),
+            eq(versions.revision, revision),
+          ),
+        );
+      const available =
+        selected &&
+        (await approvedTemplateReferences(tx, selected.capabilities));
+      const status = !available
+        ? 'unavailable'
+        : bound?.templateId === templateId && bound.revision === revision
+          ? 'unchanged'
+          : 'saved';
+      confirm();
+      if (status === 'saved')
+        await tx
+          .insert(table)
+          .values({ requirementId: id, projectId, ...choice })
+          .onConflictDoUpdate({ target: table.requirementId, set: choice });
+      const receipt: Omit<TemplateBindingReceipt, 'replayed'> = {
+        commandId,
+        status,
+        before: bound ?? null,
+        after: status === 'saved' ? choice : (bound ?? null),
+      };
+      await finish(tx, reservation.value, receipt);
+      confirm();
+      return { ...receipt, replayed: false };
+    });
+  }
   type ManagementReceipt = {
     changed: boolean;
     targetId?: string;
@@ -804,34 +1074,8 @@ export function createBusiness(db: Database) {
     }
     if (previous && input.expectedRevision !== previous.revision)
       return unchanged('conflict');
-    const approval = schema.capabilityApproval;
-    if (input.capabilities.length) {
-      const active = await tx
-        .select({ kind: approval.kind })
-        .from(approval)
-        .where(
-          and(
-            eq(approval.approved, true),
-            or(
-              ...input.capabilities.map((item) =>
-                and(
-                  eq(approval.kind, item.kind),
-                  eq(approval.reference, item.reference),
-                  eq(approval.revision, item.revision),
-                ),
-              ),
-            ),
-          ),
-        )
-        .orderBy(
-          asc(approval.kind),
-          asc(approval.reference),
-          asc(approval.revision),
-        )
-        .for('share');
-      if (active.length !== input.capabilities.length)
-        return unchanged('unavailable');
-    }
+    if (!(await approvedTemplateReferences(tx, input.capabilities)))
+      return unchanged('unavailable');
     if (
       previous &&
       previous.name === input.name &&
@@ -1199,6 +1443,9 @@ export function createBusiness(db: Database) {
     execute,
     read,
     sessionTransaction,
+    authorizeTemplateBinding,
+    readTemplateBinding,
+    bindTemplate,
     publishRepository,
     manage,
   };

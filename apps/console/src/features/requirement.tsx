@@ -13,9 +13,22 @@ import {
 import { Icon, api, roleLabels } from '../lib/ui.tsx';
 import { Conversation } from './conversation.tsx';
 import { RequirementWorktrees } from './requirement-worktrees.tsx';
+import { RequirementTemplate } from './requirement-template.tsx';
 import type { View } from './project.tsx';
 const stages = Object.keys(stageLabels) as Stage[];
-export function RequirementPage({ id, view }: { id: string; view: View }) {
+export function RequirementPage({
+  id,
+  view,
+  userId,
+  sessionId,
+  projectId,
+}: {
+  id: string;
+  view: View;
+  userId: string;
+  sessionId: string;
+  projectId: string;
+}) {
   const client = useQueryClient();
   const detail = useQuery({
     queryKey: ['requirement', id],
@@ -250,6 +263,13 @@ export function RequirementPage({ id, view }: { id: string; view: View }) {
               </dl>
             </section>
           </div>
+          <RequirementTemplate
+            key={JSON.stringify([sessionId, userId, projectId, id])}
+            id={id}
+            userId={userId}
+            sessionId={sessionId}
+            projectId={projectId}
+          />
           <section className="document-section info-panel context-tasks">
             <div className="panel-heading">
               <h2>子任务与当前分派</h2>

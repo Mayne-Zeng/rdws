@@ -410,6 +410,27 @@ export interface CapabilityTemplateList {
 export interface CapabilityTemplateManagement extends CapabilityTemplateList {
   options: CapabilityVersion[];
 }
+export const TemplateBindingInput = Type.Object(
+  {
+    commandId: ManagementCommandId,
+    templateId: Type.String({ format: 'uuid' }),
+    revision: Type.Integer({ minimum: 1, maximum: 2147483647 }),
+  },
+  { additionalProperties: false },
+);
+export type TemplateBindingInput = Static<typeof TemplateBindingInput>;
+type TemplateVersion = Pick<TemplateBindingInput, 'templateId' | 'revision'>;
+export interface RequirementTemplateBinding {
+  binding: (TemplateVersion & { name: string; available: boolean }) | null;
+  options?: (TemplateVersion & { name: string })[];
+}
+export interface TemplateBindingReceipt {
+  commandId: string;
+  status: 'saved' | 'unchanged' | 'unavailable';
+  before: TemplateVersion | null;
+  after: TemplateVersion | null;
+  replayed: boolean;
+}
 export interface ManagementAccount {
   username: string;
   name: string;

@@ -364,7 +364,7 @@
     <tr data-source="D2" data-owner="T19" data-point="model.platform-lock"><td>D2 / 模型外发与锁定策略</td><td><a href="05-development-backlog.md#主计划任务">T19</a></td><td>T13</td><td>日志上传／OTel 强制关闭，供应商不限定公网／内网；出口和数据合规由部署方确认。</td></tr>
     <tr data-source="D3" data-owner="T03" data-point="access.two-gates"><td>D3 / BFF 与 Native 两道闸</td><td><a href="05-development-backlog.md#主计划任务">T03</a></td><td>T02 T06</td><td>当前只读 allowlist／短 Peer 已实测；后续多项目和写工具逐项扩展，旧“内部授权留 MVP”不撤销已确认第二道闸。</td></tr>
     <tr data-source="D4" data-owner="T03" data-point="runtime.project-instance"><td>D4 / 项目级实例</td><td><a href="05-development-backlog.md#主计划任务">T03</a></td><td>T14</td><td>当前仅 poc；项目实例注册／路由／生命周期在 T03，禁止按人或按需求重建实例分片。</td></tr>
-    <tr data-source="D4 D21" data-owner="T14" data-point="preset.requirement-binding"><td>D4 D21 / 每需求 preset</td><td><a href="05-development-backlog.md#主计划任务">T14</a></td><td>T03 T13</td><td>workspace 已独立；需求 preset 的生成／引用尚未实现，静态只读 preset 不算需求模板能力完成。</td></tr>
+    <tr data-source="D4 D21" data-owner="T14" data-point="preset.requirement-binding"><td>D4 D21 / 每需求 preset</td><td><a href="05-development-backlog.md#主计划任务">T14</a></td><td>T03 T13</td><td><a href="#t14-demand-binding-delivery-20261119">需求精确版本绑定已交付</a>，实际 preset 生成、装载和创建时引用待验收。</td></tr>
     <tr data-source="D5" data-owner="T06" data-point="execution.local-isolation"><td>D5 / 主机执行隔离</td><td><a href="05-development-backlog.md#主计划任务">T06</a></td><td>T07 T21</td><td><a href="#t06-execution-delivery-20261118">macOS 文件／Shell／Git 隔离执行已验</a>，产品工具保持关闭，Linux 实证归 T21。</td></tr>
     <tr data-source="D5" data-owner="F03" data-point="execution.optional-container"><td>D5 / 可选 Docker 强隔离</td><td><a href="05-development-backlog.md#单独保留的后续任务">F03</a></td><td>—</td><td>不增加为当前 PoC 或 T22 的强制生产档验收。</td></tr>
     <tr data-source="D6" data-owner="T18" data-point="maintenance.repair"><td>D6 / 修复与冷备</td><td><a href="05-development-backlog.md#主计划任务">T18</a></td><td>F06</td><td>固定运行根、worktree repair／重建、受控导出和清理；doctor 尚未实现。</td></tr>
@@ -738,6 +738,23 @@
     <li>真实隔离 Native 验证同需求变更前后各建会话，新会话使用对应新版本，既有会话在线及冷恢复继续使用原组合。发布模板新版本后，按原绑定再次新建仍使用原版。</li>
     <li>在交付方案中明确绑定提交与会话创建的定序，验证过期、失败和重放。方案须明确派生怎样衔接 T02 已批准的原生固定前缀与权限边界。出现无效引用或配置装载失败时不得悄悄扩大到其他组合。</li>
   </ul>
+
+  <h4 id="t14-demand-binding-plan-20261118">11.17.7 需求模板绑定配置</h4>
+  <p>Change / R3，非批量，基线 <code>f42c864</code>。按 §11.17.6、D21 和 I6-COMMAND 实现需求上下文中的精确版本绑定、重放和读回。页面把绑定配置和会话生效状态分别说明。可选范围包含本项目所有仍通过审核的发布版本，模板发布新版本不会移动原绑定。T14 后续仍须实现制品解析、不可变定义生成、与会话创建定序及在线／冷恢复验证。当前 Native 会话保持零执行工具。</p>
+  <ol>
+    <li>在 0008 之上生成 0009。<code>requirement_capability_binding</code> 每个需求至多一行，需求、项目、模板、版本都为非空。两条无级联复合外键引用需求的 (id, projectId) 和版本的 (projectId, templateId, revision)，添加需求唯一索引并复用模板现有索引职责。既有需求默认无绑定。应用授权在同一事务撤回绑定表的表级 UPDATE、DELETE、TRUNCATE，只保留 SELECT、INSERT 和模板 ID、版本两列的 UPDATE。外键只约束关联，BFF 校验真人和当前审核状态。回退保留 0009、回执和新版授权脚本，待核对操作须使用支持版本。未迁移的 0008 只让绑定入口返回升级提示。</li>
+    <li><code>GET /api/requirements/:id/capability-template</code> 复用需求读取资格，以一致快照查询已有绑定和审核状态。返回最小版本标识、名称与可用性，即使没有可选版本，也只有当前项目管理员收到候选字段。GET、POST 的业务响应设置 no-store。出站用一次新查询核对原需求及项目、当前账号代次与参与角色交集或管理员资格，候选字段、终态回执和同键异文 409 均复核当前项目管理员。查询后同步核对登录截止和原请求撤权栅栏，权限变化时仅返回拒绝。跨项目、平台管理员和普通参与者不凭其他身份取得配置能力。</li>
+    <li><code>POST</code> 复用 Origin 校验和当前账号，Ajv 前严查原始对象和三个字段的标量类型。按登录、账号、项目角色、需求定序，以同一谓词锁原需求 ID 与已授权项目，若不匹配则在读取回执前拒绝。确认管理员后查同真人／需求／动作／命令标识回执。同内容重放保留实际前后值，异内容在末次授权检查后返回 409。新命令校验本项目精确版本，并按稳定元组顺序锁定当前审核行。未知、跨项目或审核失效产生统一的无变化终态。相同绑定也保存无变化回执。2xx 回执包含匹配的原命令标识、状态与实际前后值。写入和回执同事务，最后等待点后同步复核登录截止和请求栅栏。审核停用先提交则本次绑定无变化，反序时已保存引用保持并标为不可用。事务已提交但响应被撤权阻断时，授权恢复后可核对原回执。</li>
+    <li>需求上下文加入独立面板，复用 TDesign 与主题令牌。管理员按名称、版本和稳定标识选择确切版本，其他有权读取者只看状态。写请求在按账号／需求存好原键与完整参数后发送，存储失败不发送。连接、5xx、401／403、截断或无法匹配的结果保留原命令，只允许核对。有效 2xx 终态才解除挂起，现值独立读回。同一账号换登录、切换项目或需求均隔离查询与请求代次。查询或权限失效时立即隐藏候选与已显示回执，按当前授权 2xx 恢复。迟到请求不覆盖现态且只能清理其匹配的原键。面板明确显示当前会话尚未使用此配置，既有业务与 Native 会话路径独立。</li>
+    <li>仅在验证实际库 <code>rdws_test</code>、回环端点及迁移登录后应用 0009。复核两条跨项目外键、列级授权、授权失败无部分授权、迁移重跑及旧库隔离。接口用例覆盖权限矩阵、GET 等待降权、原项目归属变化、Ajv 前类型、失效和不存在的统一终态、等待时到期、提交后撤权且原键可重放。用实际锁定序验证两个管理员依次得到空→A、A→B，重放 A 的回执而现值仍为 B，同键并发只有一条。同一模板出版新版本后旧绑定保持，旧版仍可选，停用引用后从选项移除。浏览器覆盖 390px 与明暗、操作未送达后重放无变化、已提交后断线或返回 401／403、重新登录核对、切换需求后返回、权限拒绝与迟到响应、独立 GET 失败恢复。运行聚焦用例、<code>pnpm check</code>、<code>pnpm test:e2e</code> 及 <code>pnpm validate:baseline</code>，复核既有创建、派生、恢复及零工具边界。</li>
+  </ol>
+
+  <h4 id="t14-demand-binding-delivery-20261119">11.17.8 需求模板绑定交付证据</h4>
+  <p>需求「上下文」可绑定当前项目仍通过审核的发布版本。只有当前项目管理员可保存与核对原操作，普通有权读取者仅取得当前状态。提交与回执同事务，模板发布新版本保留原绑定，引用失效后仍能读回原版本和失效状态。应用读取并显示实际绑定，当前 Native 会话尚未使用这项配置。</p>
+  <p>在 0008 上使用实际 <code>rdws_test</code> 迁移账号核对需求档案 200、绑定 GET／POST 503、失败回执 0。只向隔离测试库应用并重跑 0009。生成迁移在添加外键之前建立两个唯一索引。对照 0008／0009 快照，已有表只调整这两处索引。实际应用角色能更新模板 ID 和版本，无表级 UPDATE、DELETE、TRUNCATE 或表所有权。两条复合外键分别拒绝错项目，事务内注入授权失败后仍拒绝更新项目列。</p>
+  <p>两面方案复审均为 APPROVE。交付审阅使用 <code>dbeaa07</code> 为基线，复审 APPROVE。关闭完整终态判定、失权后仍显示候选及接口定序用例依赖前一项的问题。<code>caffeinate -i pnpm test tests/integration/requirement-template.test.ts tests/integration/capability-approvals.test.ts</code> 通过（2 文件、11 项）。双管理员实际持锁顺序记录真实前后值，旧回执不改现值。提交后、出站前撤权同时覆盖 2xx 和 409。使用管理 API 撤权再授回后，旧请求仍被原授权代次拒绝。登录到期与项目变化均回滚未提交命令。</p>
+  <p><code>caffeinate -i pnpm test:e2e tests/e2e/requirement-template.spec.ts</code> 通过（1 项）。浏览器覆盖已提交 403、未送达后版本停用、同账号重登、残缺 2xx、切换需求后旧结果迟到、读取失败恢复，以及保留参与角色的真实降权。390px 明暗均无横向溢出。T14 剩余工作是不可变制品与 preset 的绑定、会话创建定序及真实在线和冷恢复验收。</p>
+  <p><code>caffeinate -i pnpm check</code> 返回 0（22 文件、137 项，类型、lint、格式与构建通过）。<code>caffeinate -i pnpm test:e2e</code> 返回 0（29 项，51.2 秒）。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 个追溯点、16 视图）。</p>
 
   <h3 id="t16-trace-plan-20261118">11.18 T16 会话轨迹页</h3>
   <p>Change / R2。依据 D7、I2-AUTH、设计基线 Q1／Q2、T16 的轨迹读取、详情和摘要验收，以及已验证的 T02 被动历史分页，交付一条“需求内选会话 → 读取固定逻辑历史 → 展开详情 → 下载已读摘要”的路径。复用 <a href="#session-lifecycle-live-20261118">T02 的真实恢复与被动读取证据</a>，T02 用户侧视觉验收保留。影响面为已有前端导航和历史读取适配，撤销本次功能提交即可恢复原入口。原始持久前缀与独立哈希锚点另按 T16 实现。</p>

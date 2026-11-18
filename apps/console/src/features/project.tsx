@@ -30,6 +30,7 @@ export type Project = ProjectList['projects'][number];
 export function ProjectWorkspace({
   projects,
   userId,
+  sessionId,
   platformAdmin,
   username,
   logout,
@@ -38,6 +39,7 @@ export function ProjectWorkspace({
 }: {
   projects: Project[];
   userId: string;
+  sessionId: string;
   platformAdmin: boolean;
   username: string;
   logout: () => void;
@@ -608,7 +610,14 @@ export function ProjectWorkspace({
                     requirementId={selected}
                   />
                 ) : (
-                  <RequirementPage key={selected} id={selected} view={view} />
+                  <RequirementPage
+                    key={selected}
+                    id={selected}
+                    view={view}
+                    userId={userId}
+                    sessionId={sessionId}
+                    projectId={project.id}
+                  />
                 )
               ) : requirements.isPending ? (
                 <Loading text="正在核对需求归属" />

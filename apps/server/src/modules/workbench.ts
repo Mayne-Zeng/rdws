@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   RequirementInput,
   BusinessCommand,
+  TemplateBindingInput,
   SessionCreate,
   SessionFork,
   RepositorySyncInput,
@@ -591,6 +592,11 @@ export async function registerWorkbench(
       epoch: number;
       platformOnly?: boolean;
       memberOnly?: boolean;
+      templateBinding?: {
+        requirementId: string;
+        projectId: string;
+        adminOnly: boolean;
+      };
     }
   >();
   function assertResponse(
@@ -634,7 +640,20 @@ export async function registerWorkbench(
   });
   app.addHook('onSend', async (request, reply, payload) => {
     const scope = responseScopes.get(request);
-    if (scope && reply.statusCode < 400) {
+    if (
+      scope &&
+      (reply.statusCode < 400 ||
+        (scope.templateBinding && reply.statusCode === 409))
+    ) {
+      if (scope.templateBinding) {
+        const { requirementId, projectId, adminOnly } = scope.templateBinding;
+        await business.authorizeTemplateBinding(
+          scope,
+          requirementId,
+          projectId,
+          adminOnly,
+        );
+      }
       if (scope.platformOnly) {
         const current = await currentAccount(
           db,
@@ -1361,6 +1380,77 @@ export async function registerWorkbench(
       await actor(request.headers),
       (request.params as { id: string }).id,
     ),
+  );
+  function templateBindingScope(request: FastifyRequest) {
+    const original = responseScopes.get(request);
+    if (!original?.projectId) businessError(404, '需求不存在');
+    return { ...original, projectId: original.projectId };
+  }
+  function templateBindingFailure(error: unknown): never {
+    const failure = error as { code?: string; cause?: { code?: string } };
+    if ((failure.cause?.code ?? failure.code) === '42P01')
+      businessError(503, '请先升级需求模板绑定数据库结构');
+    throw error;
+  }
+  app.get<{ Params: { id: string } }>(
+    '/api/requirements/:id/capability-template',
+    async (request, reply) => {
+      reply.header('cache-control', 'no-store');
+      const scope = templateBindingScope(request);
+      const { id } = request.params;
+      const result = await business
+        .readTemplateBinding(scope, id, scope.projectId)
+        .catch(templateBindingFailure);
+      responseScopes.set(request, {
+        ...scope,
+        templateBinding: {
+          requirementId: id,
+          projectId: scope.projectId,
+          adminOnly: result.options !== undefined,
+        },
+      });
+      return result;
+    },
+  );
+  app.post<{ Params: { id: string }; Body: TemplateBindingInput }>(
+    '/api/requirements/:id/capability-template',
+    {
+      schema: { body: TemplateBindingInput },
+      async preValidation(request, reply) {
+        reply.header('cache-control', 'no-store');
+        const raw: unknown = request.body;
+        if (
+          !isRecord(raw) ||
+          !onlyKeys(raw, ['commandId', 'templateId', 'revision']) ||
+          typeof raw.commandId !== 'string' ||
+          typeof raw.templateId !== 'string' ||
+          typeof raw.revision !== 'number'
+        )
+          businessError(400, '能力模板绑定参数不正确');
+      },
+    },
+    async (request, reply) => {
+      const scope = templateBindingScope(request);
+      const { id } = request.params;
+      const result = await business
+        .bindTemplate(scope, id, scope.projectId, request.body, () =>
+          assertResponse(scope),
+        )
+        .catch(templateBindingFailure);
+      responseScopes.set(request, {
+        ...scope,
+        templateBinding: {
+          requirementId: id,
+          projectId: scope.projectId,
+          adminOnly: true,
+        },
+      });
+      if (result === 'conflict')
+        return reply
+          .code(409)
+          .send({ error: '操作标识已用于不同内容，请核对原操作' });
+      return result;
+    },
   );
   app.post(
     '/api/requirements/:id/commands',

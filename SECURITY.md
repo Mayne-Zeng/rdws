@@ -32,6 +32,10 @@ BFF 从已鉴权需求的 PostgreSQL 归属选取 Native 实例。项目具有�
 
 平台编排层从有同源成功回执的本地镜像读取冻结 SHA。Git 使用固定参数、私有 GitStore 与独立对象。目录领取、准备与就绪检查受平台路径和持久锁约束。计划需求通过就绪检查后才进入 Native。T06 的隔离适配沿用该就绪检查。产品代码写权限与写者交接由 T07 验收。 [T05 工程设计](docs/02-directory-and-engineering-design.html#t05-worktree-plan-20261118)
 
+## 需求模板绑定
+
+绑定写入仅允许当前项目管理员，服务端锁定登录、账号、角色和需求，校验本项目的确切模板版本及当前审核引用。绑定与原命令回执同一事务持久化，成功、无变化与同键异文响应都重新检查授权。两条复合外键约束项目归属，应用角色只能更新模板 ID 和版本列。Native 会话的能力生成与启用另按 T14 验收。 [绑定配置验收](docs/02-directory-and-engineering-design.html#t14-demand-binding-delivery-20261119)
+
 ## 当前依赖审计（2026-11-18，未修复）
 
 本轮 `pnpm audit --prod --audit-level high` 返回 1：1 项 high、3 项 moderate。新增识别的高危为 `picomatch@4.0.7` 的重复 extglob ReDoS，[官方公告 GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf) 当前列出受影响版本 ≤4.0.7、无修复版本。没有隐藏通告、修改上游源码或以未经验证的版本覆盖依赖。

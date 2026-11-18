@@ -6,6 +6,7 @@ import {
   timestamp,
   boolean,
   index,
+  foreignKey,
   primaryKey,
   uniqueIndex,
   integer,
@@ -100,25 +101,29 @@ export const projectMember = pgTable(
   (t) => [primaryKey({ columns: [t.projectId, t.userId, t.role] })],
 );
 
-export const requirement = pgTable('requirement', {
-  id: text('id').primaryKey(),
-  projectId: text('project_id')
-    .notNull()
-    .references(() => project.id),
-  title: text('title').notNull(),
-  description: text('description').notNull(),
-  acceptance: text('acceptance').notNull(),
-  leadId: text('lead_id')
-    .notNull()
-    .references(() => user.id),
-  createdBy: text('created_by')
-    .notNull()
-    .references(() => user.id),
-  nativeWorkspaceId: text('native_workspace_id'),
-  stage: text('stage').notNull().default('assignment'),
-  contextVersion: integer('context_version').notNull().default(1),
-  ...timestamps,
-});
+export const requirement = pgTable(
+  'requirement',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => project.id),
+    title: text('title').notNull(),
+    description: text('description').notNull(),
+    acceptance: text('acceptance').notNull(),
+    leadId: text('lead_id')
+      .notNull()
+      .references(() => user.id),
+    createdBy: text('created_by')
+      .notNull()
+      .references(() => user.id),
+    nativeWorkspaceId: text('native_workspace_id'),
+    stage: text('stage').notNull().default('assignment'),
+    contextVersion: integer('context_version').notNull().default(1),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex('requirement_id_project_idx').on(t.id, t.projectId)],
+);
 export const requirementParticipant = pgTable(
   'requirement_participant',
   {
@@ -310,7 +315,7 @@ export const capabilityTemplateRevision = pgTable(
   },
   (t) => [
     primaryKey({ columns: [t.templateId, t.revision] }),
-    index('capability_template_revision_project_idx').on(
+    uniqueIndex('capability_template_revision_project_idx').on(
       t.projectId,
       t.templateId,
       t.revision,
@@ -328,5 +333,31 @@ export const capabilityTemplateRevision = pgTable(
       'capability_template_revision_choices',
       sql`jsonb_typeof(${t.capabilities}) = 'array' and jsonb_array_length(${t.capabilities}) <= 64`,
     ),
+  ],
+);
+
+export const requirementCapabilityBinding = pgTable(
+  'requirement_capability_binding',
+  {
+    requirementId: text('requirement_id').primaryKey(),
+    projectId: text('project_id').notNull(),
+    templateId: text('template_id').notNull(),
+    revision: integer('revision').notNull(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'requirement_capability_binding_demand_fk',
+      columns: [t.requirementId, t.projectId],
+      foreignColumns: [requirement.id, requirement.projectId],
+    }),
+    foreignKey({
+      name: 'requirement_capability_binding_template_fk',
+      columns: [t.projectId, t.templateId, t.revision],
+      foreignColumns: [
+        capabilityTemplateRevision.projectId,
+        capabilityTemplateRevision.templateId,
+        capabilityTemplateRevision.revision,
+      ],
+    }),
   ],
 );

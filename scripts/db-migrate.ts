@@ -30,6 +30,17 @@ export async function grantApplication(
       await client.query(
         `revoke update, delete on requirement_worktree_plan from ${application}`,
       );
+    const hasBinding = await client.query(
+      "select to_regclass('public.requirement_capability_binding') is not null as present",
+    );
+    if (hasBinding.rows[0]?.present) {
+      await client.query(
+        `revoke update, delete, truncate on requirement_capability_binding from ${application}`,
+      );
+      await client.query(
+        `grant update (template_id, revision) on requirement_capability_binding to ${application}`,
+      );
+    }
     await client.query('commit');
   } catch (error) {
     await client.query('rollback');

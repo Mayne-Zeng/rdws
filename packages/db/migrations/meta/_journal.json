@@ -64,6 +64,13 @@
       "when": 1795010113841,
       "tag": "0008_requirement_worktree_plan",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795018160208,
+      "tag": "0009_requirement_capability_binding",
+      "breakpoints": true
     }
   ]
 }

@@ -79,6 +79,12 @@ pnpm test:web-live
 
 聚焦命令为 `pnpm test tests/integration/project-administration.test.ts`、`pnpm test:e2e tests/e2e/project-administration.spec.ts` 和 `pnpm test:web-live -g 'one login sends and reads'`。最后一项用两个隔离实例和一个账号验证实际 GLM 请求，使用测试库与独立运行根。详见[工程实施与验收](docs/02-directory-and-engineering-design.html#t03-plan-20261118)。
 
+## 平台能力白名单（T14）
+
+平台管理员可在平台设置登记已审核的插件、技能和 MCP 版本。登记包含来源／标识和精确审核版本。停用保留历史记录，原命令核对后以当前清单显示的状态为准。
+
+已有本地开发库通过 `pnpm db:migrate` 应用新增审核表，测试库使用 `RDWS_MODE=test pnpm db:migrate`。部署应用前先核验迁移和应用账号权限。代码回退保留审核表、原命令回执及新版迁移授权脚本，应用账号保持无审核表删除权限。回退前在支持白名单的版本核对待处理命令，必要时恢复该应用版本再核对。[工程方案与证据](docs/02-directory-and-engineering-design.html#t14-allowlist-plan-20261118)
+
 ## 仓库与环境（T04）
 
 运行维护者先按[配置示例](config/repositories.example.json)在 `$RDWS_HOME/config/projects/<project-id>/repositories.json` 登记已授权的 GitLab HTTPS 仓库、完整基线分支和一个非生产目标分支。示例使用不可连接的占位地址。预置项目 ID 为 `poc`，支持每个项目独立登记。配置由运行账户管理，在下一次读取时生效。受管目录和文件应由运行账户所有，目录禁止组与其他用户写入，引用文件名不含目录。更换仓库地址或基线分支时使用新仓库 ID。

@@ -8,6 +8,7 @@ import type {
   ProjectAdministration,
 } from '@rdws/contracts';
 import { api, roleLabels } from '../lib/ui.tsx';
+import { CapabilityApprovals } from './capability-approvals.tsx';
 
 type Intent = ManagementCommand extends infer Command
   ? Command extends ManagementCommand
@@ -90,7 +91,15 @@ function useManagement(userId: string) {
         none: response.changed ? '已保存。' : '当前设置已一致。',
         'previously-recorded': '已核对原操作，当前设置已刷新。',
       };
-      setNotice(messages[response.revocation]);
+      if (submitted.kind === 'capability.approval') {
+        setNotice(
+          response.replayed
+            ? '原审核命令已核对，请以当前清单为准。'
+            : response.changed
+              ? '审核状态已保存。'
+              : '审核状态未变。',
+        );
+      } else setNotice(messages[response.revocation]);
     } catch (failure) {
       const issue = failure as Error & { resultUnknown?: boolean };
       setError(issue.message);
@@ -353,6 +362,10 @@ export function PlatformPage({
           )}
           {query.data && !query.isError && (
             <>
+              <CapabilityApprovals
+                locked={action.locked}
+                change={action.send}
+              />
               <section className="document-section">
                 <h2>登记项目</h2>
                 <form

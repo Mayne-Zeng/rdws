@@ -12,7 +12,11 @@ export async function currentAccount(
   userId: string,
 ) {
   const [user] = await db
-    .select({ id: schema.user.id, platformAdmin: schema.user.platformAdmin })
+    .select({
+      id: schema.user.id,
+      platformAdmin: schema.user.platformAdmin,
+      expiresAt: schema.session.expiresAt,
+    })
     .from(schema.session)
     .innerJoin(schema.user, eq(schema.session.userId, schema.user.id))
     .where(
@@ -24,7 +28,8 @@ export async function currentAccount(
         eq(schema.user.authEpoch, schema.session.authEpoch),
       ),
     );
-  return user;
+  if (!user || user.expiresAt <= new Date()) return;
+  return { id: user.id, platformAdmin: user.platformAdmin };
 }
 
 type Login = { id: string; epoch: number };

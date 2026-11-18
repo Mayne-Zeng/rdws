@@ -17,6 +17,9 @@ export async function grantApplication(
     await client.query(
       `revoke update, delete on requirement_event from ${application}`,
     );
+    await client.query(
+      `revoke delete on capability_approval from ${application}`,
+    );
     await client.query('commit');
   } catch (error) {
     await client.query('rollback');

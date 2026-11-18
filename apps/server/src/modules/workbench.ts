@@ -10,6 +10,7 @@ import {
   SessionFork,
   RepositorySyncInput,
   ManagementCommand,
+  type CapabilityApprovalList,
   type PlatformAdministration,
   type ProjectAdministration,
   type ManagementResult,
@@ -483,7 +484,13 @@ export async function registerWorkbench(
   });
   const responseScopes = new WeakMap<
     FastifyRequest,
-    { userId: string; authSessionId: string; projectId?: string; epoch: number }
+    {
+      userId: string;
+      authSessionId: string;
+      projectId?: string;
+      epoch: number;
+      platformOnly?: boolean;
+    }
   >();
   function assertResponse(
     scope: {
@@ -526,7 +533,19 @@ export async function registerWorkbench(
   });
   app.addHook('onSend', async (request, reply, payload) => {
     const scope = responseScopes.get(request);
-    if (scope && reply.statusCode < 400) assertResponse(scope);
+    if (scope && reply.statusCode < 400) {
+      if (scope.platformOnly) {
+        const current = await currentAccount(
+          db,
+          scope.authSessionId,
+          scope.userId,
+        );
+        if (!current) fail(401, '账号或会话不可用');
+        if (!current.platformAdmin)
+          businessError(403, '无权读取平台能力白名单');
+      }
+      assertResponse(scope);
+    }
     return payload;
   });
   app.get(
@@ -568,6 +587,27 @@ export async function registerWorkbench(
     name: schema.user.name,
     active: schema.user.active,
   };
+  app.get(
+    '/api/management/capability-approvals',
+    async (request, reply): Promise<CapabilityApprovalList> => {
+      reply.header('cache-control', 'no-store');
+      const epoch = authorizationEpoch;
+      const who = await actor(request.headers);
+      if (!who.platformAdmin) businessError(403, '无权读取平台能力白名单');
+      const table = schema.capabilityApproval;
+      const approvals = await db
+        .select({
+          kind: table.kind,
+          reference: table.reference,
+          revision: table.revision,
+          approved: table.approved,
+        })
+        .from(table)
+        .orderBy(asc(table.kind), asc(table.reference), asc(table.revision));
+      responseScopes.set(request, { ...who, epoch, platformOnly: true });
+      return { approvals };
+    },
+  );
   app.get(
     '/api/management/platform',
     async (request): Promise<PlatformAdministration> => {
@@ -708,6 +748,12 @@ export async function registerWorkbench(
     'project.roles': ['projectId', 'username', 'roles'],
     'project.admin': ['projectId', 'username', 'enabled'],
     'account.active': ['username', 'active'],
+    'capability.approval': [
+      'capabilityKind',
+      'reference',
+      'revision',
+      'approved',
+    ],
   } as const;
   app.post<{ Body: ManagementCommand }>(
     '/api/management/commands',
@@ -717,7 +763,8 @@ export async function registerWorkbench(
         const body = request.body;
         if (
           !isRecord(body) ||
-          !Object.hasOwn(commandFields, body.kind as string) ||
+          typeof body.kind !== 'string' ||
+          !Object.hasOwn(commandFields, body.kind) ||
           !onlyKeys(body, [
             'kind',
             'commandId',
@@ -725,6 +772,15 @@ export async function registerWorkbench(
           ])
         )
           businessError(400, '管理操作参数不正确');
+        if (
+          body.kind === 'capability.approval' &&
+          (typeof body.commandId !== 'string' ||
+            typeof body.capabilityKind !== 'string' ||
+            typeof body.reference !== 'string' ||
+            typeof body.revision !== 'string' ||
+            typeof body.approved !== 'boolean')
+        )
+          businessError(400, '审核登记参数不正确');
       },
     },
     async (request): Promise<ManagementResult> => {

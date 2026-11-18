@@ -1,5 +1,7 @@
+import { sql } from 'drizzle-orm';
 import {
   pgTable,
+  check,
   text,
   timestamp,
   boolean,
@@ -233,5 +235,29 @@ export const commandReceipt = pgTable(
   },
   (t) => [
     primaryKey({ columns: [t.actorId, t.scope, t.operation, t.commandId] }),
+  ],
+);
+export const capabilityApproval = pgTable(
+  'capability_approval',
+  {
+    kind: text('kind', { enum: ['plugin', 'skill', 'mcp'] }).notNull(),
+    reference: text('reference').notNull(),
+    revision: text('revision').notNull(),
+    approved: boolean('approved').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.kind, t.reference, t.revision] }),
+    check(
+      'capability_approval_kind',
+      sql`${t.kind} in ('plugin', 'skill', 'mcp')`,
+    ),
+    check(
+      'capability_approval_reference',
+      sql`char_length(${t.reference}) <= 160 and ${t.reference} ~ '^@?[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$'`,
+    ),
+    check(
+      'capability_approval_revision',
+      sql`char_length(${t.revision}) <= 128 and ${t.revision} ~ '^[A-Za-z0-9][A-Za-z0-9._:+-]*$'`,
+    ),
   ],
 );

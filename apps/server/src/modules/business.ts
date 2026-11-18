@@ -787,6 +787,53 @@ export function createBusiness(db: Database) {
                 updatedAt: new Date(),
               })
               .where(eq(schema.user.id, person!.id));
+        } else if (normalized.kind === 'capability.approval') {
+          const table = schema.capabilityApproval;
+          const item = {
+            kind: normalized.capabilityKind,
+            reference: normalized.reference,
+            revision: normalized.revision,
+          };
+          const exact = and(
+            eq(table.kind, item.kind),
+            eq(table.reference, item.reference),
+            eq(table.revision, item.revision),
+          );
+          if (normalized.approved) {
+            const [created] = await tx
+              .insert(table)
+              .values({ ...item, approved: true })
+              .onConflictDoNothing()
+              .returning({ approved: table.approved });
+            if (created)
+              Object.assign(result, {
+                changed: true,
+                before: false,
+                after: true,
+              });
+            else {
+              const [current] = await tx
+                .select({ approved: table.approved })
+                .from(table)
+                .where(exact)
+                .for('share');
+              Object.assign(result, {
+                before: current!.approved,
+                after: current!.approved,
+              });
+            }
+          } else {
+            const [stopped] = await tx
+              .update(table)
+              .set({ approved: false })
+              .where(and(exact, eq(table.approved, true)))
+              .returning({ approved: table.approved });
+            Object.assign(result, {
+              changed: !!stopped,
+              before: !!stopped,
+              after: false,
+            });
+          }
         } else if (normalized.kind === 'project.create') {
           if (!person!.active)
             businessError(409, '初始项目管理员须使用活动账号');

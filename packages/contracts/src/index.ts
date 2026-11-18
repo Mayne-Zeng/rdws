@@ -268,6 +268,23 @@ const MemberRole = Type.Union([
   Type.Literal('developer'),
   Type.Literal('tester'),
 ]);
+const CapabilityKind = Type.Union([
+  Type.Literal('plugin'),
+  Type.Literal('skill'),
+  Type.Literal('mcp'),
+]);
+export type CapabilityKind = Static<typeof CapabilityKind>;
+const CapabilityReference = Type.String({
+  minLength: 3,
+  maxLength: 160,
+  pattern:
+    '^@?[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$(?![\\s\\S])',
+});
+const CapabilityRevision = Type.String({
+  minLength: 1,
+  maxLength: 128,
+  pattern: '^[A-Za-z0-9][A-Za-z0-9._:+-]*$(?![\\s\\S])',
+});
 export const ManagementCommand = Type.Union([
   Type.Object(
     {
@@ -317,8 +334,27 @@ export const ManagementCommand = Type.Union([
     },
     { additionalProperties: false },
   ),
+  Type.Object(
+    {
+      kind: Type.Literal('capability.approval'),
+      commandId: ManagementCommandId,
+      capabilityKind: CapabilityKind,
+      reference: CapabilityReference,
+      revision: CapabilityRevision,
+      approved: Type.Boolean(),
+    },
+    { additionalProperties: false },
+  ),
 ]);
 export type ManagementCommand = Static<typeof ManagementCommand>;
+export interface CapabilityApprovalList {
+  approvals: {
+    kind: CapabilityKind;
+    reference: string;
+    revision: string;
+    approved: boolean;
+  }[];
+}
 export interface ManagementAccount {
   username: string;
   name: string;

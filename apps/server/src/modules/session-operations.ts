@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { and, eq, isNull } from 'drizzle-orm';
 import { schema, type connectDatabase } from '@rdws/db';
 import type { SessionOperationResult } from '@rdws/contracts';
-import type { NativeWebHost } from '@rdws/dsh/web';
+import { isDemandPreset, type NativeWebHost } from '@rdws/dsh/web';
 import { isRecord, type Grant } from '@rdws/dsh/access';
 import { forkBoundary, sessionRpc } from '@rdws/dsh/sessions';
 import {
@@ -15,6 +15,29 @@ import {
 } from './business.ts';
 type Database = ReturnType<typeof connectDatabase>['db'];
 type Operation = typeof schema.sessionOperation.$inferSelect;
+type Frozen = NonNullable<Operation['frozen']>;
+const presetRejections = {
+  'preset-unavailable':
+    '原操作未执行。绑定或来源的能力版本未能装载，请联系管理员核对后重试。',
+  'preset-unapproved': '原操作未执行。能力版本的审核已失效，请核对需求模板。',
+  'preset-paused': '原操作未执行。使用能力模板的新会话当前暂停，请联系管理员。',
+};
+function nativeRequest(frozen: Frozen, sourceSessionId?: string) {
+  return sourceSessionId
+    ? { sessionId: sourceSessionId, atSeq: frozen.atSeq, allowMigration: false }
+    : {
+        workspaceId: frozen.workspaceId,
+        ...(frozen.agentPreset ? { agentPreset: frozen.agentPreset } : {}),
+      };
+}
+function frozenDigest(frozen: Frozen, sourceSessionId?: string) {
+  const request = nativeRequest(frozen, sourceSessionId);
+  return digestOf(
+    frozen.dispatchVersion === 1
+      ? { request, agentPreset: frozen.agentPreset }
+      : request,
+  );
+}
 export function createSessionOperations(
   db: Database,
   business: ReturnType<typeof createBusiness>,
@@ -23,12 +46,17 @@ export function createSessionOperations(
   const generation = randomUUID(),
     active = new Set<string>();
   const table = schema.sessionOperation;
+  const presetsPaused = process.env.RDWS_PAUSE_PRESET_CREATION === '1';
   const result = (row: Operation): SessionOperationResult => ({
     commandId: row.commandId,
     status: row.status as SessionOperationResult['status'],
     ...(row.status === 'mapped' ? { sessionId: row.nativeSessionId! } : {}),
     ...(row.status === 'rejected'
-      ? { error: '原操作已拒绝且未执行，可重新发起。' }
+      ? {
+          error: row.frozen?.rejection
+            ? presetRejections[row.frozen.rejection]
+            : '原操作已拒绝且未执行，可重新发起。',
+        }
       : {}),
   });
   async function execute(
@@ -54,16 +82,17 @@ export function createSessionOperations(
       sourceSessionId: sourceSessionId ?? null,
     });
     async function authorized<T>(
-      work: Parameters<typeof business.sessionTransaction<T>>[3],
+      work: Parameters<typeof business.sessionTransaction<T>>[4],
     ) {
       await options.current();
       return business.sessionTransaction(
         who,
         requirementId,
+        native.projectId,
         sourceSessionId,
-        async (tx, item) => {
+        async (tx, item, expiresAt) => {
           options.assertOpen();
-          const value = await work(tx, item);
+          const value = await work(tx, item, expiresAt);
           options.assertOpen();
           return value;
         },
@@ -178,9 +207,10 @@ export function createSessionOperations(
       if (row.status === 'reserved') {
         const prepared = await options.prepare();
         let atSeq: number | undefined;
+        let agentPreset: string | null = null;
         try {
           if (sourceSessionId) {
-            const identity = await native.control('session.inspect', {
+            const identity = await native.control('session.preset', {
               requirementId,
               sessionId: sourceSessionId,
             });
@@ -189,6 +219,8 @@ export function createSessionOperations(
               identity.workspaceId !== prepared.workspaceId
             )
               businessError(409, '会话工作区不匹配，派生未执行');
+            if (typeof identity.agentPreset === 'string')
+              agentPreset = identity.agentPreset;
             atSeq = await forkBoundary(native, prepared.grant, sourceSessionId);
             if (atSeq === undefined)
               businessError(409, '当前会话没有已结束的轮次，暂不能派生');
@@ -214,28 +246,91 @@ export function createSessionOperations(
               : {}),
           };
         }
-        const frozen = {
+        let inherited:
+          Awaited<ReturnType<typeof native.presets.read>> | undefined;
+        let rejection: Frozen['rejection'];
+        if (sourceSessionId && isDemandPreset(agentPreset)) {
+          try {
+            inherited = await native.presets.read(agentPreset, requirementId);
+          } catch {
+            rejection = 'preset-unavailable';
+          }
+        }
+        const candidate = sourceSessionId
+          ? undefined
+          : await authorized(business.sessionTemplate);
+        if (candidate?.approved === false) rejection = 'preset-unapproved';
+        if (!rejection && presetsPaused && (candidate || inherited))
+          rejection = 'preset-paused';
+        if (!rejection) {
+          try {
+            if (candidate) {
+              agentPreset = (
+                await native.preparePreset(requirementId, candidate.selection)
+              ).id;
+            } else if (inherited) {
+              await native.ensurePreset(requirementId, inherited.id);
+            }
+          } catch {
+            rejection = 'preset-unavailable';
+          }
+        }
+        const frozen: Frozen = {
           workspaceId: prepared.workspaceId,
           cwd: prepared.cwd,
           ...(atSeq === undefined ? {} : { atSeq }),
-          requestDigest: digestOf(
-            sourceSessionId
-              ? { sessionId: sourceSessionId, atSeq, allowMigration: false }
-              : { workspaceId: prepared.workspaceId },
-          ),
+          dispatchVersion: 1,
+          agentPreset,
         };
-        const dispatched = await authorized(async (tx) => {
+        frozen.requestDigest = frozenDigest(frozen, sourceSessionId);
+        const dispatched = await authorized(async (tx, item, expiresAt) => {
+          if (item.nativeWorkspaceId !== frozen.workspaceId) return;
+          let failure = rejection;
+          if (sourceSessionId) {
+            if (
+              inherited &&
+              !(await business.approvedTemplateReferences(
+                tx,
+                inherited.capabilities,
+              ))
+            )
+              failure = 'preset-unapproved';
+          } else {
+            const current = await business.sessionTemplate(tx, item);
+            if (digestOf(current?.selection) !== digestOf(candidate?.selection))
+              return;
+            if (current?.approved === false) failure = 'preset-unapproved';
+            else if (candidate?.approved === false) return;
+          }
           const [entry] = await tx
             .update(table)
             .set({
-              status: 'dispatched',
-              frozen,
+              status: failure ? 'rejected' : 'dispatched',
+              frozen: failure ? { ...frozen, rejection: failure } : frozen,
               generation,
               updatedAt: new Date(),
             })
             .where(and(eq(table.id, row.id), eq(table.status, 'reserved')))
             .returning();
-          return entry;
+          if (!entry) return;
+          options.assertOpen();
+          if (expiresAt <= Date.now())
+            businessError(401, '登录已失效，请重新登录');
+          const ticket = failure
+            ? undefined
+            : native.ticket(
+                sourceSessionId
+                  ? {
+                      ...prepared.grant,
+                      purpose: 'fork',
+                      sourceSessionId,
+                      atSeq,
+                      agentPreset,
+                    }
+                  : { ...prepared.grant, purpose: 'create', agentPreset },
+                expiresAt,
+              );
+          return { entry, ticket };
         });
         if (!dispatched) {
           const [existing] = await db
@@ -245,18 +340,15 @@ export function createSessionOperations(
           await options.current();
           return result(existing!);
         }
-        row = dispatched;
+        row = dispatched.entry;
+        if (!dispatched.ticket) return result(row);
         try {
-          await options.current();
+          options.assertOpen();
           const value = await sessionRpc(
             native,
-            sourceSessionId
-              ? { ...prepared.grant, purpose: 'fork', sourceSessionId, atSeq }
-              : { ...prepared.grant, purpose: 'create' },
+            dispatched.ticket,
             'session/' + operation,
-            sourceSessionId
-              ? { sessionId: sourceSessionId, atSeq, allowMigration: false }
-              : { workspaceId: frozen.workspaceId },
+            nativeRequest(frozen, sourceSessionId),
           );
           if (
             !value ||
@@ -287,27 +379,27 @@ export function createSessionOperations(
       await options.current();
       if (
         row.frozen?.requestDigest &&
-        row.frozen.requestDigest !==
-          digestOf(
-            sourceSessionId
-              ? {
-                  sessionId: sourceSessionId,
-                  atSeq: row.frozen.atSeq,
-                  allowMigration: false,
-                }
-              : { workspaceId: row.frozen.workspaceId },
-          )
+        row.frozen.requestDigest !== frozenDigest(row.frozen, sourceSessionId)
       )
         businessError(409, '原操作参数无法核实，请联系管理员核对');
       await options.prepare();
-      const identity = await native.control('session.inspect', {
-        requirementId,
-        sessionId: row.nativeSessionId,
-      });
+      const identity = await native.control(
+        row.frozen?.dispatchVersion === 1
+          ? 'session.preset'
+          : 'session.inspect',
+        {
+          requirementId,
+          sessionId: row.nativeSessionId,
+        },
+      );
       if (
         !row.frozen ||
         identity.cwd !== row.frozen.cwd ||
-        identity.workspaceId !== row.frozen.workspaceId
+        identity.workspaceId !== row.frozen.workspaceId ||
+        (row.frozen.dispatchVersion === 1 &&
+          (row.frozen.agentPreset
+            ? identity.agentPreset !== row.frozen.agentPreset
+            : isDemandPreset(identity.agentPreset)))
       )
         businessError(409, '新会话工作区无法核实，请核对原操作');
       row = await authorized(async (tx) => {

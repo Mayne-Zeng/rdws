@@ -14,7 +14,7 @@ export interface NativePage {
 }
 export async function sessionRpc(
   host: NativeWebHost,
-  grant: Omit<Grant, 'aud' | 'issuedAt' | 'expiresAt' | 'nonce'>,
+  grant: string | Omit<Grant, 'aud' | 'issuedAt' | 'expiresAt' | 'nonce'>,
   action: string,
   request: Record<string, unknown>,
 ) {

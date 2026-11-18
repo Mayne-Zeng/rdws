@@ -59,6 +59,9 @@ class Host extends NativeWebHost {
   override async workspace(id: string) {
     return { cwd: join(this.demandRoot, id), workspaceId: 'w' };
   }
+  override ticket() {
+    return 'fixture-session-ticket';
+  }
   override async control(_operation: string, input: Record<string, unknown>) {
     return {
       cwd: join(this.demandRoot, String(input.requirementId)),

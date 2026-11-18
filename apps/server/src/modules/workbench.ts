@@ -2149,6 +2149,7 @@ export async function registerWorkbench(
           await business.sessionTransaction(
             scope.who,
             requirementId,
+            scope.item.projectId,
             sourceSessionId,
             async () => {
               if (closingSessions.has(scope.who.authSessionId))

@@ -34,9 +34,11 @@ BFF 从已鉴权需求的 PostgreSQL 归属选取 Native 实例。项目具有�
 
 ## 需求模板绑定
 
-绑定写入仅允许当前项目管理员，服务端锁定登录、账号、角色和需求，校验本项目的确切模板版本及当前审核引用。绑定与原命令回执同一事务持久化，成功、无变化与同键异文响应都重新检查授权。两条复合外键约束项目归属，应用角色只能更新模板 ID 和版本列。Native 会话的能力生成与启用另按 T14 验收。 [绑定配置验收](docs/02-directory-and-engineering-design.html#t14-demand-binding-delivery-20261119)
+绑定写入仅允许当前项目管理员，服务端锁定登录、账号、角色和需求，校验本项目的确切模板版本及当前审核引用。绑定与原命令回执同一事务持久化，成功、无变化与同键异文响应都重新检查授权。两条复合外键约束项目归属，应用角色只能更新模板 ID 和版本列。 [绑定配置验收](docs/02-directory-and-engineering-design.html#t14-demand-binding-delivery-20261119)
 
 绑定面板的读写均携带页面打开时的登录标识。BFF 以 Cookie 认证，在查询需求前比对会话。登录变化时返回 401 并保留原账号的待核对命令。读接口仍支持使用当前 Cookie 的无头请求，写接口必须携带会话标识。 [登录隔离验收](docs/02-directory-and-engineering-design.html#t14-binding-login-20261119)
+
+会话装载只接受随 RDWS 发布并通过当前审核的精确制品。Native 独立核验发布摘要、活动装载清单和需求工作区。浏览器只提交原命令标识，不能指定原生 preset 或模块路径。BFF 在会话分发事务使用原登录的绝对截止签发固定票据。历史按保留的定义适配原组合，停用版本拒绝新建和派生。执行权限继续由已生效的根工具限制和 T07 准入管理。 [Native 装载方案](docs/02-directory-and-engineering-design.html#t14-preset-delivery-plan-20261119)
 
 ## 需求资料编辑
 

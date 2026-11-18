@@ -8,12 +8,15 @@ import {
   bodyHash,
   LEASE_MS,
   actionAllowed,
+  targetSession,
   isRecord,
   onlyKeys,
 } from '../../bridge/access.ts';
 import { bootInjections } from '@deepseek-ai/dsh-client-modules';
 import { RemoteStreamMuxServer } from '@deepseek-ai/dsh-api-gateway/src/stream-server.ts';
 import { installContext } from './context.mjs';
+import { installPresets } from './presets.mjs';
+import { isDemandPreset } from '../../host/presets.ts';
 export const name = 'rdws-access';
 export const inject = [
   'connection',
@@ -24,6 +27,7 @@ export const inject = [
   'typertGateway',
   'tools',
   'sessionQuery',
+  'agentPresets',
 ];
 export function apply(ctx, config) {
   if (process.send)
@@ -38,6 +42,7 @@ export function apply(ctx, config) {
   );
   const key = readFileSync(config.keyFile, 'utf8').trim();
   const peers = new Map();
+  const peerRecords = new WeakMap();
   const revoked = new Map();
   const metrics = { accepted: 0, expired: 0, revoked: 0 };
   const group = (cap) => `${cap.authSessionId}:${cap.requirementId ?? '*'}`;
@@ -89,6 +94,7 @@ export function apply(ctx, config) {
       });
       record = { cap, peer, active: true, sockets: new Set() };
       peers.set(cap.nonce, record);
+      peerRecords.set(peer, record);
       metrics.accepted++;
       const timer = setTimeout(
         () => stop(record, 'expired'),
@@ -150,6 +156,7 @@ export function apply(ctx, config) {
     });
   }
   const revokeContext = installContext(ctx, config, key, route);
+  const presets = installPresets(ctx, config, route);
   route('health', () => ({
     ready: true,
     metrics,
@@ -178,7 +185,7 @@ export function apply(ctx, config) {
       return () => clearInterval(timer);
     });
   }
-  route('session.inspect', async (input) => {
+  async function inspectSession(input, withPreset = false) {
     const workspace = ctx.workspaceRegistry
       .list()
       .find(
@@ -191,11 +198,96 @@ export function apply(ctx, config) {
     try {
       if (observation.header.cwd !== workspace.path)
         throw new Error('Session cwd mismatch');
-      return { workspaceId: workspace.id, cwd: observation.header.cwd };
+      if (withPreset && !observation.projections)
+        throw new Error('Session preset projection unavailable');
+      return {
+        workspaceId: workspace.id,
+        cwd: observation.header.cwd,
+        ...(withPreset
+          ? { agentPreset: observation.projections.values.agentPreset ?? null }
+          : {}),
+      };
     } finally {
       observation[Symbol.dispose]();
     }
-  });
+  }
+  route('session.inspect', (input) => inspectSession(input));
+  route('session.preset', (input) => inspectSession(input, true));
+  function assertActivation(record, signal) {
+    if (
+      signal.aborted ||
+      !record?.active ||
+      outdated(record.cap) ||
+      record.cap.expiresAt <= Date.now()
+    )
+      throw new Error('Session activation expired');
+  }
+  async function prepareActivation(record, action, payload, signal) {
+    const args = payload?.args;
+    if (
+      action !== 'session/prompt' &&
+      !(action === 'session/follow' && args?.request?.activate === true)
+    )
+      return;
+    assertActivation(record, signal);
+    if (!actionAllowed(record.cap, action, args))
+      throw new Error('Session activation denied');
+    const sessionId = targetSession(args);
+    const identity = await inspectSession(
+      {
+        requirementId: record.cap.requirementId,
+        sessionId,
+      },
+      true,
+    );
+    assertActivation(record, signal);
+    if (
+      identity.workspaceId !== record.cap.workspaceId ||
+      identity.cwd !== record.cap.cwd
+    )
+      throw new Error('Session activation workspace differs');
+    if (isDemandPreset(identity.agentPreset))
+      await presets.ensure(identity.agentPreset, record.cap.requirementId);
+    assertActivation(record, signal);
+  }
+  async function presetAllowed(record) {
+    const { cap } = record;
+    if (cap.agentPreset === undefined) return true;
+    if (
+      typeof cap.requirementId !== 'string' ||
+      !ctx.workspaceRegistry
+        .list()
+        .some(
+          (workspace) =>
+            workspace.id === cap.workspaceId &&
+            workspace.path === cap.cwd &&
+            workspace.path === resolve(config.demandRoot, cap.requirementId),
+        )
+    )
+      return false;
+    if (cap.purpose === 'create')
+      return (
+        cap.agentPreset === null ||
+        presets.loaded(cap.agentPreset, cap.requirementId)
+      );
+    if (cap.purpose === 'fork') {
+      const identity = await inspectSession(
+        {
+          requirementId: cap.requirementId,
+          sessionId: cap.sourceSessionId,
+        },
+        true,
+      ).catch(() => undefined);
+      return (
+        identity?.agentPreset === cap.agentPreset &&
+        identity.workspaceId === cap.workspaceId &&
+        identity.cwd === cap.cwd &&
+        (!isDemandPreset(cap.agentPreset) ||
+          presets.loaded(cap.agentPreset, cap.requirementId))
+      );
+    }
+    return false;
+  }
   route('workspace', async (input) => {
     const path = resolve(input.cwd);
     if (
@@ -267,6 +359,18 @@ export function apply(ctx, config) {
       try {
         const text = await body(request);
         const url = new URL(request.url, 'http://rdws.invalid');
+        if (
+          record.cap.purpose === 'browser' &&
+          text &&
+          (url.pathname === '/_rdws/api/session/prompt' ||
+            url.pathname === '/_rdws/api/session/follow')
+        )
+          await prepareActivation(
+            record,
+            url.pathname.slice('/_rdws/api/'.length),
+            JSON.parse(text).payload,
+            controller.signal,
+          );
         if (['fork', 'create'].includes(record.cap.purpose)) {
           const action = 'session/' + record.cap.purpose;
           let envelope;
@@ -283,7 +387,11 @@ export function apply(ctx, config) {
             envelope.method !== action ||
             !onlyKeys(envelope.payload, ['args']) ||
             !isRecord(envelope.payload.args) ||
-            !actionAllowed(record.cap, action, envelope.payload.args)
+            !actionAllowed(record.cap, action, envelope.payload.args) ||
+            !(await presetAllowed(record)) ||
+            !record.active ||
+            outdated(record.cap) ||
+            record.cap.expiresAt <= Date.now()
           ) {
             response.writeHead(403);
             response.end();
@@ -325,8 +433,15 @@ export function apply(ctx, config) {
   });
   const wire = ctx.typertGateway.wireStream;
   const mux = new RemoteStreamMuxServer(
-    (endpoint, payload, uplink, peer, control) =>
-      wire.open(endpoint, payload, uplink, peer, control.signal),
+    async (endpoint, payload, uplink, peer, control) => {
+      await prepareActivation(
+        peerRecords.get(peer),
+        endpoint,
+        payload,
+        control.signal,
+      );
+      return wire.open(endpoint, payload, uplink, peer, control.signal);
+    },
     wire.failure,
     { heartbeatIntervalMs: 5000, streamInboxBytes: 262144, compression: false },
   );

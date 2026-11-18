@@ -197,6 +197,9 @@ export const sessionOperation = pgTable(
       cwd: string;
       atSeq?: number;
       requestDigest?: string;
+      dispatchVersion?: 1;
+      agentPreset?: string | null;
+      rejection?: 'preset-unavailable' | 'preset-unapproved' | 'preset-paused';
     }>(),
     nativeSessionId: text('native_session_id'),
     ...timestamps,

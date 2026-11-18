@@ -24,6 +24,7 @@ export interface Grant {
   hostGeneration?: string;
   sourceSessionId?: string;
   atSeq?: number;
+  agentPreset?: string | null;
 }
 export function signGrant(
   key: string,
@@ -145,8 +146,9 @@ export function actionAllowed(
       grant.purpose === 'create' &&
       onlyKeys(args, ['request']) &&
       isRecord(args.request) &&
-      onlyKeys(args.request, ['workspaceId']) &&
-      args.request.workspaceId === grant.workspaceId
+      onlyKeys(args.request, ['workspaceId', 'agentPreset']) &&
+      args.request.workspaceId === grant.workspaceId &&
+      args.request.agentPreset === (grant.agentPreset ?? undefined)
     );
   if (grant.purpose !== 'browser') return false;
   if (globals.has(action))

@@ -173,7 +173,11 @@ test('requirement template recovery stays with the same command and the current 
     await reconcile.click();
     await expect(panel.getByText('模板绑定已保存。')).toBeVisible();
     expect(received[1]).toEqual(received[0]);
-    await expect(panel.getByText('当前会话尚未使用此配置。')).toBeVisible();
+    await expect(
+      panel.getByText(
+        '新建会话会核对绑定版本。已有会话和派生会话沿用原能力版本。',
+      ),
+    ).toBeVisible();
 
     await picker.selectOption(`${templateId}:2`);
     outcome = 'not-sent';

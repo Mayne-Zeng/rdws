@@ -18,8 +18,16 @@ import {
   signGrant,
   verifyGrant,
   bodyHash,
+  LEASE_MS,
   type Grant,
 } from '../bridge/access.ts';
+import {
+  capabilityRelease,
+  DemandPresets,
+  type PresetSelection,
+  type ReleasedCapability,
+} from './presets.ts';
+export { isDemandPreset } from './presets.ts';
 const req = createRequire(import.meta.url);
 export async function writeOwner(
   handle: Awaited<ReturnType<typeof open>>,
@@ -145,6 +153,8 @@ export class NativeWebHost {
   private lock?: Awaited<ReturnType<typeof open>>;
   readonly home: string;
   readonly audience: string;
+  readonly presets: DemandPresets;
+  private readonly releasedCapabilities: readonly ReleasedCapability[];
   demandRoot: string;
   private lockPath = '';
   private readyPath = '';
@@ -156,12 +166,19 @@ export class NativeWebHost {
     readonly runtimeHome: string,
     readonly configurationHome?: string,
     readonly projectId = 'poc',
+    release: readonly ReleasedCapability[] = capabilityRelease,
   ) {
     if (!validProjectId(projectId))
       throw new Error('Invalid Native project ID');
     this.home = join(runtimeHome, 'runtime', 'dsh', 'project-' + projectId);
     this.demandRoot = join(runtimeHome, 'projects', projectId, 'demands');
     this.audience = 'rdws:' + projectId;
+    this.releasedCapabilities = release.map((entry) => ({ ...entry }));
+    this.presets = new DemandPresets(
+      runtimeHome,
+      projectId,
+      this.releasedCapabilities,
+    );
   }
   async start() {
     if (this.closing || this.invalidation.signal.aborted)
@@ -358,6 +375,9 @@ export class NativeWebHost {
                   keyFile,
                   audience: this.audience,
                   demandRoot: this.demandRoot,
+                  presetRuntimeHome: root,
+                  projectId: this.projectId,
+                  releasedCapabilities: this.releasedCapabilities,
                   contextSource: this.contextSource,
                   contextGeneration: this.contextGeneration,
                   contextEvidenceFile: join(
@@ -501,14 +521,21 @@ export class NativeWebHost {
       throw error;
     }
   }
-  ticket(input: Omit<Grant, 'aud' | 'issuedAt' | 'expiresAt' | 'nonce'>) {
+  ticket(
+    input: Omit<Grant, 'aud' | 'issuedAt' | 'expiresAt' | 'nonce'>,
+    notAfter = Infinity,
+  ) {
     if (!this.key || !this.origin || this.closing)
       throw new Error('Native instance unavailable');
-    return signGrant(this.key, {
-      ...input,
-      aud: this.audience,
-      hostGeneration: this.contextGeneration,
-    });
+    const now = Date.now(),
+      lease = Math.min(LEASE_MS, notAfter - now);
+    if (lease <= 0) throw new Error('Native delegation expired');
+    return signGrant(
+      this.key,
+      { ...input, aud: this.audience, hostGeneration: this.contextGeneration },
+      now,
+      lease,
+    );
   }
   async control(
     operation: string,
@@ -532,6 +559,17 @@ export class NativeWebHost {
     });
     if (!response.ok) throw new Error('Native control unavailable');
     return response.json();
+  }
+  async preparePreset(requirementId: string, selection: PresetSelection) {
+    const definition = this.presets.definition(requirementId, selection);
+    await this.presets.publish(definition);
+    await this.ensurePreset(requirementId, definition.id);
+    return definition;
+  }
+  async ensurePreset(requirementId: string, id: string) {
+    await this.start();
+    const result = await this.control('preset.ensure', { requirementId, id });
+    if (result.id !== id) throw new Error('Native preset was not loaded');
   }
   async workspace(id: string, title: string, existingOnly = false) {
     await this.start();

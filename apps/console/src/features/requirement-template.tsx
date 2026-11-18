@@ -232,7 +232,7 @@ export function RequirementTemplate({
                 </p>
                 <p className="muted">
                   {current.binding.available
-                    ? '当前会话尚未使用此配置。'
+                    ? '新建会话会核对绑定版本。已有会话和派生会话沿用原能力版本。'
                     : '此版本的审核引用已失效。'}
                 </p>
               </>

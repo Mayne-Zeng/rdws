@@ -1528,20 +1528,17 @@ export function createBusiness(db: Database) {
   async function sessionTransaction<T>(
     who: Actor,
     id: string,
+    projectId: string,
     sourceId: string | undefined,
     work: (
       tx: Transaction,
       item: typeof schema.requirement.$inferSelect,
+      expiresAt: number,
     ) => Promise<T>,
   ) {
     return transaction(async (tx) => {
-      const [found] = await tx
-        .select({ projectId: schema.requirement.projectId })
-        .from(schema.requirement)
-        .where(eq(schema.requirement.id, id));
-      if (!found) businessError(404, '需求不存在');
-      await identity(tx, who, found.projectId, [], true);
-      const state = await scope(tx, who, id, true);
+      const auth = await identity(tx, who, projectId, [], true);
+      const state = await scope(tx, who, id, true, projectId);
       if (sourceId) {
         const [source] = await tx
           .select()
@@ -1556,7 +1553,11 @@ export function createBusiness(db: Database) {
           .for('share');
         if (!source) businessError(403, '只能派生本人在当前需求中的会话');
       }
-      return work(tx, state.item);
+      const expiresAt = auth.session.expiresAt.getTime();
+      if (expiresAt <= Date.now()) businessError(401, '登录已失效，请重新登录');
+      const result = await work(tx, state.item, expiresAt);
+      if (expiresAt <= Date.now()) businessError(401, '登录已失效，请重新登录');
+      return result;
     });
   }
   async function authorizeRequirement(
@@ -1732,6 +1733,51 @@ export function createBusiness(db: Database) {
       )
       .for('share');
     return active.length === references.length;
+  }
+  async function sessionTemplate(
+    tx: Transaction,
+    item: typeof schema.requirement.$inferSelect,
+  ) {
+    const binding = schema.requirementCapabilityBinding;
+    const revision = schema.capabilityTemplateRevision;
+    const [selection] = await tx
+      .transaction((read) =>
+        read
+          .select({
+            templateId: revision.templateId,
+            revision: revision.revision,
+            capabilities: revision.capabilities,
+          })
+          .from(binding)
+          .innerJoin(
+            revision,
+            and(
+              eq(revision.projectId, binding.projectId),
+              eq(revision.templateId, binding.templateId),
+              eq(revision.revision, binding.revision),
+            ),
+          )
+          .where(
+            and(
+              eq(binding.projectId, item.projectId),
+              eq(binding.requirementId, item.id),
+            ),
+          ),
+      )
+      .catch((error: unknown) => {
+        const failure = error as { code?: string; cause?: { code?: string } };
+        if ((failure.cause?.code ?? failure.code) === '42P01') return [];
+        throw error;
+      });
+    return selection
+      ? {
+          selection,
+          approved: await approvedTemplateReferences(
+            tx,
+            selection.capabilities,
+          ),
+        }
+      : undefined;
   }
   async function bindTemplate(
     who: Actor,
@@ -2246,6 +2292,8 @@ export function createBusiness(db: Database) {
     execute,
     read,
     sessionTransaction,
+    sessionTemplate,
+    approvedTemplateReferences,
     authorizeRequirement,
     editDetails,
     editPersonnel,

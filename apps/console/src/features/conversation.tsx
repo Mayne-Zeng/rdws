@@ -10,6 +10,7 @@ import type { SessionBinding } from '@deepseek-ai/dsh-api-session-controller/cli
 import { connectNative, type NativeRuntime } from '../lib/native.ts';
 import { authClient } from '../lib/auth.ts';
 import { Icon } from '../lib/ui.tsx';
+import { SessionModelStatus } from './session-model.tsx';
 import type {
   SessionHistoryPage,
   SessionOperationResult,
@@ -258,6 +259,7 @@ function SessionPanel({
           </Button>
         </form>
       )}
+      {binding && <SessionModelStatus binding={binding} runtime={runtime} />}
     </div>
   );
 }

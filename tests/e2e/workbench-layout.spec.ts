@@ -83,6 +83,9 @@ test('five real workbench entries preserve the Demo geometry and readable themes
         await expect(page.getByTestId('transcript')).toContainText(
           '会话已就绪',
         );
+        await expect(page.getByTestId('active-session-model')).toHaveText(
+          /^模型 · 实例默认 \S+ \/ \S+$/,
+        );
         const send = page.getByRole('button', {
           name: '发送消息',
           exact: true,

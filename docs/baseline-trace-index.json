@@ -1,0 +1,542 @@
+{
+  "version": 1,
+  "baseline": "T00-20261118",
+  "authority": "Referenced approved source documents remain authoritative; this index freezes reviewed atomic granularity and record identities, not task ownership or completion.",
+  "points": [
+    {
+      "id": "scope.poc",
+      "sources": ["I2", "D1"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "验收＝一个 workspace 下 ≥5 会话"
+      }
+    },
+    {
+      "id": "scope.test-system",
+      "sources": ["I2"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "完整测试 / Bug 链路"
+      }
+    },
+    {
+      "id": "scope.deployment",
+      "sources": ["I2", "D20"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "实际部署、部署批准"
+      }
+    },
+    {
+      "id": "scope.archive",
+      "sources": ["I2", "D6"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "归档导出轨迹摘要"
+      }
+    },
+    {
+      "id": "scope.tauri",
+      "sources": ["I2", "D10"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "Tauri 薄壳列为后续产品演进路线"
+      }
+    },
+    {
+      "id": "scope.ha",
+      "sources": ["I2", "D26"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "HA 迁移按独立项目处理"
+      }
+    },
+    {
+      "id": "scope.environment-automation",
+      "sources": ["I2"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "多环境自动编排"
+      }
+    },
+    {
+      "id": "business.stage",
+      "sources": ["I2-STATE", "I6-STAGE"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "允许跳转、回退并逐次留痕"
+      }
+    },
+    {
+      "id": "business.identity",
+      "sources": ["I2-AUTH"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "普通成员按需求参与关系读取"
+      }
+    },
+    {
+      "id": "business.task-assignment",
+      "sources": ["I3-TASK", "I6-TASK"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "子任务单一负责人"
+      }
+    },
+    {
+      "id": "execution.single-writer",
+      "sources": ["I3-WRITE"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "旧写任务及其子进程停稳后再交接"
+      }
+    },
+    {
+      "id": "context.current-facts",
+      "sources": ["I3-CONTEXT", "I6-CONTEXT"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "每个新推理步骤读取最新上下文"
+      }
+    },
+    {
+      "id": "delivery.immutable-snapshot",
+      "sources": ["I3-DELIVERY"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "交付快照不可变"
+      }
+    },
+    {
+      "id": "ui.native-composition",
+      "sources": ["I4-UI", "I6-UI"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "独立自绘业务界面"
+      }
+    },
+    {
+      "id": "runtime.platform-database",
+      "sources": ["I5-RUN", "D-DB"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "macOS 开发、Linux 单机最终验收"
+      }
+    },
+    {
+      "id": "business.command-order",
+      "sources": ["I6-COMMAND"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "所有业务按钮共用服务端鉴权、防重与短事务"
+      }
+    },
+    {
+      "id": "model.platform-lock",
+      "sources": ["D2"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "平台级强制锁定为关闭"
+      }
+    },
+    {
+      "id": "access.two-gates",
+      "sources": ["D3"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "第二道闸（RemoteAccessPolicy）定为 PoC 强制验收项"
+      }
+    },
+    {
+      "id": "runtime.project-instance",
+      "sources": ["D4"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "项目级实例 + 每需求 preset"
+      }
+    },
+    {
+      "id": "preset.requirement-binding",
+      "sources": ["D4", "D21"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "每需求 preset"
+      }
+    },
+    {
+      "id": "execution.local-isolation",
+      "sources": ["D5"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "OS 用户 / 目录权限 + DSH 自带 bwrap / Seatbelt"
+      }
+    },
+    {
+      "id": "execution.optional-container",
+      "sources": ["D5"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "双档可配置"
+      }
+    },
+    {
+      "id": "maintenance.repair",
+      "sources": ["D6"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "git worktree repair"
+      }
+    },
+    {
+      "id": "trace.authority",
+      "sources": ["D7"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "append-only JSONL"
+      }
+    },
+    {
+      "id": "delivery.gitlab-permissions",
+      "sources": ["D8"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "只 push 非保护的 rdws/*"
+      }
+    },
+    {
+      "id": "runtime.local-process",
+      "sources": ["D9"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "全本地、主机部署走本地文件系统"
+      }
+    },
+    {
+      "id": "runtime.typescript-boundary",
+      "sources": ["D11"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "全 TypeScript / Node 单栈"
+      }
+    },
+    {
+      "id": "history.expert-escalation",
+      "sources": ["D12"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "升级为 Tier 3"
+      }
+    },
+    {
+      "id": "layout.projects-worktrees",
+      "sources": ["D13", "D14", "D15", "D16"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "workspaces/ → projects/ 改名"
+      }
+    },
+    {
+      "id": "supply.pinned-version",
+      "sources": ["D13", "D14", "D15", "D16"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "锁定 DSH 0.2.2-rc.3"
+      }
+    },
+    {
+      "id": "capability.closed-market",
+      "sources": ["D13", "D14", "D15", "D16"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "禁用第三方社区插件市场"
+      }
+    },
+    {
+      "id": "ui.demo-status",
+      "sources": ["D17", "D18"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "探索稿"
+      }
+    },
+    {
+      "id": "model.layered-references",
+      "sources": ["D19"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "个人级只在允许集合内选本次会话的模型"
+      }
+    },
+    {
+      "id": "usage.quota",
+      "sources": ["D19"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "默认模型 + 配额"
+      }
+    },
+    {
+      "id": "interaction.platform-answer",
+      "sources": ["D20"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "平台作为 DSH 唯一 answer 客户端"
+      }
+    },
+    {
+      "id": "preset.future-sessions",
+      "sources": ["D21"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "preset 修改只影响之后创建的会话"
+      }
+    },
+    {
+      "id": "git.frozen-base",
+      "sources": ["D22"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "冻结 baseCommit + 显式按需同步"
+      }
+    },
+    {
+      "id": "git.explicit-sync",
+      "sources": ["D22"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "fetch + merge"
+      }
+    },
+    {
+      "id": "delivery.integration-sha",
+      "sources": ["D22", "I3-DELIVERY"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "cherry-pick 进环境分支"
+      }
+    },
+    {
+      "id": "git.source-mirror",
+      "sources": ["D23"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "GitLab 主仓才是事实源"
+      }
+    },
+    {
+      "id": "delivery.environment-revert",
+      "sources": ["D24"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "按映射表生成一组 revert MR"
+      }
+    },
+    {
+      "id": "runtime.pg-upper-bound",
+      "sources": ["D26"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "嵌入式 SQLite 不作为平台库"
+      }
+    },
+    {
+      "id": "risk.local-isolation",
+      "sources": ["R-A", "C1"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "用户未追认"
+      }
+    },
+    {
+      "id": "risk.model-egress",
+      "sources": ["R-B"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "模型请求本身仍携带源码片段、命令输出与文件内容"
+      }
+    },
+    {
+      "id": "execution.lease",
+      "sources": ["EXEC:需求级写锁"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "写锁带租约与过期释放"
+      }
+    },
+    {
+      "id": "workspace.header-cwd",
+      "sources": ["EXEC:会话-header-cwd"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "会话 header cwd 必须精确等于需求目录"
+      }
+    },
+    {
+      "id": "context.explicit-channel",
+      "sources": ["EXEC:需求上下文"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "不依赖 AGENTS.md 目录链"
+      }
+    },
+    {
+      "id": "identity.platform-roles",
+      "sources": ["EXEC:平台侧自建能力"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "三类平台角色、四类阶段角色"
+      }
+    },
+    {
+      "id": "credentials.separation",
+      "sources": ["EXEC:服务账号拆权"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "git push 凭据、模型网关凭据、审批代答凭据分离托管"
+      }
+    },
+    {
+      "id": "access.transport",
+      "sources": ["EXEC:BFF-补强"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "DSH 只绑 loopback"
+      }
+    },
+    {
+      "id": "failure.repair",
+      "sources": ["EXEC:故障路径"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "repair 失败即标记需求不可用并告警"
+      }
+    },
+    {
+      "id": "failure.revert-aggregation",
+      "sources": ["EXEC:故障路径"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "revert MR 被拒保持环境现状并上报"
+      }
+    },
+    {
+      "id": "git.baseline-signature",
+      "sources": ["EXEC:故障路径"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "syncer 校验基线 commit 签名"
+      }
+    },
+    {
+      "id": "supply.payload-notice",
+      "sources": ["EXEC:供应链-P0"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "发布包剔除 claude-code-mods 相关实验插件及 Claude Code 平台 payload"
+      }
+    },
+    {
+      "id": "supply.brand",
+      "sources": ["EXEC:品牌"],
+      "evidence": {
+        "file": "docs/00-decision-ledger.html",
+        "text": "不用作项目名"
+      }
+    },
+    {
+      "id": "ui.session-scope",
+      "sources": ["Q1", "Q5", "Q9"],
+      "evidence": {
+        "file": "docs/03-design-crosscheck-report.html",
+        "text": "会话浮层仍保持严格收敛"
+      }
+    },
+    {
+      "id": "ui.sync-scope",
+      "sources": ["Q2"],
+      "evidence": {
+        "file": "docs/03-design-crosscheck-report.html",
+        "text": "不再输出「同步主线」"
+      }
+    },
+    {
+      "id": "ui.demo-identity",
+      "sources": ["Q3"],
+      "evidence": {
+        "file": "docs/03-design-crosscheck-report.html",
+        "text": "默认演示身份经 Q3 决策定为 项目管理员"
+      }
+    },
+    {
+      "id": "ui.touch-target",
+      "sources": ["Q4"],
+      "evidence": {
+        "file": "docs/03-design-crosscheck-report.html",
+        "text": "交互控件 ≥40px，纯展示徽标不适用"
+      }
+    },
+    {
+      "id": "ui.session-information",
+      "sources": ["Q6"],
+      "evidence": {
+        "file": "docs/03-design-crosscheck-report.html",
+        "text": "tab 栏只留会话名 + 读/写 + 会话操作"
+      }
+    },
+    {
+      "id": "ui.quick-session",
+      "sources": ["Q7"],
+      "evidence": {
+        "file": "docs/03-design-crosscheck-report.html",
+        "text": "继承当前需求 preset + 当前会话模型"
+      }
+    },
+    {
+      "id": "ui.model-preset-fields",
+      "sources": ["Q8"],
+      "evidence": {
+        "file": "docs/03-design-crosscheck-report.html",
+        "text": "模板名写进 model 字段"
+      }
+    }
+  ],
+  "interfaces": [
+    "identity-project-runtime",
+    "business-commands",
+    "native-session-flow",
+    "requirement-context",
+    "source-mirror",
+    "demand-workspace",
+    "sandbox-execution",
+    "write-handoff",
+    "delivery-snapshot",
+    "gitlab-merge",
+    "environment-revert",
+    "provider-reference",
+    "preset-capability",
+    "usage-quota",
+    "journal-anchor",
+    "audit-events",
+    "runtime-maintenance"
+  ],
+  "nativeCapabilities": [
+    "session-flow",
+    "configuration-credentials",
+    "file-execution",
+    "stop-handoff",
+    "raw-journal"
+  ],
+  "gaps": [
+    "T00-G1",
+    "T00-G2",
+    "T00-G3",
+    "T00-G4",
+    "T00-G5",
+    "T00-G6",
+    "T00-G7",
+    "T00-G8",
+    "T00-G9",
+    "T00-G10",
+    "T00-G11"
+  ]
+}

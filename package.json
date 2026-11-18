@@ -20,6 +20,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "validate:baseline": "node scripts/validate-baseline.mjs",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "build": "tsc --noEmit && pnpm --filter @rdws/console build",

@@ -9,6 +9,7 @@ DSH 接入归 `dsh/`，`dsh/client` 承载原生浏览器运行时适配，业�
 ## 任务阅读入口
 
 - 选择或继续研发任务：先读 [开发任务清单](docs/05-development-backlog.md)，按前置依赖和协调登记领取；完成一项即同步状态与验收证据，再推进依赖任务。
+- 修改清单、设计追溯或正式视图映射：核对 [T00 基线](docs/02-directory-and-engineering-design.html#t00-baseline-20261118)，运行 `pnpm validate:baseline` 校验来源覆盖、主责、视图和依赖。
 - 改范围、权限或数据模型：读 [决策台账当前基线](docs/00-decision-ledger.html#implementation-20261117)。
 - 改目录、DSH 或运行配置：读 [工程实施基线](docs/02-directory-and-engineering-design.html#implementation-20261117)。
 - 改界面：读 [设计基线](docs/04-design-baseline.html)，复用 TDesign 与 RDWS 主题令牌。

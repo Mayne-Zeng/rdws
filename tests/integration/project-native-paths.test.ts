@@ -11,6 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { test, expect } from 'vitest';
 import { NativeWebHost, projectNativeConfiguration } from '@rdws/dsh/web';
 
@@ -49,13 +50,27 @@ test('native registration accepts a project profile and refuses linked runtime b
   }
 });
 
-test('a registered project exposes its model catalog without granting general configuration access', async () => {
+test('a native session model choice survives restart without changing other sessions or the project default', async () => {
   const root = await mkdtemp(
     join(await realpath(tmpdir()), 'rdws-project-model-'),
   );
   const configuration = join(root, 'config/projects/team-b/dsh');
   const profile = join(configuration, 'profiles/rdws');
-  const host = new NativeWebHost(root, configuration, 'team-b');
+  const patchPath = join(profile, 'cordis.patch.yml');
+  const providerPatch = {
+    id: 'llm-pi-ai',
+    config: {
+      providers: {
+        'rdws-glm': {
+          api: 'openai-completions',
+          baseURL: 'http://127.0.0.1:9/',
+          apiKeyEnv: 'FIXTURE_MODEL',
+          models: [{ id: 'project-fixture-model' }, { id: 'other-model' }],
+        },
+      },
+    },
+  };
+  let host = new NativeWebHost(root, configuration, 'team-b');
   try {
     await mkdir(profile, { recursive: true, mode: 0o700 });
     await writeFile(
@@ -63,28 +78,9 @@ test('a registered project exposes its model catalog without granting general co
       JSON.stringify({ version: 1, refs: { FIXTURE_MODEL: 'fixture-only' } }),
       { mode: 0o600 },
     );
-    await writeFile(
-      join(profile, 'cordis.patch.yml'),
-      JSON.stringify([
-        {
-          id: 'llm-pi-ai',
-          config: {
-            providers: {
-              'rdws-glm': {
-                api: 'openai-completions',
-                baseURL: 'http://127.0.0.1:9/',
-                apiKeyEnv: 'FIXTURE_MODEL',
-                models: [
-                  { id: 'project-fixture-model' },
-                  { id: 'other-model' },
-                ],
-              },
-            },
-          },
-        },
-      ]),
-      { mode: 0o600 },
-    );
+    await writeFile(patchPath, JSON.stringify([providerPatch]), {
+      mode: 0o600,
+    });
     expect(await projectNativeConfiguration(root, 'team-b')).toBe(
       configuration,
     );
@@ -136,14 +132,45 @@ test('a registered project exposes its model catalog without granting general co
       expect(response.status).toBe(200);
       return (await response.json()).result;
     }
-    const created = await callNative(
-      'session/create',
-      { request: { workspaceId: workspace.workspaceId } },
-      'create',
-    );
-    expect(created.ok).toBe(true);
-    const sessionId = created.value.sessionId as string;
-    expect(typeof sessionId).toBe('string');
+    async function createSession() {
+      const created = await callNative(
+        'session/create',
+        { request: { workspaceId: workspace.workspaceId } },
+        'create',
+      );
+      expect(created.ok).toBe(true);
+      const id = created.value.sessionId as string;
+      expect(typeof id).toBe('string');
+      return id;
+    }
+    async function readSelection(sessionId: string) {
+      const projections = await callNative(
+        'session/projections',
+        { request: { sessionId } },
+        'browser',
+        sessionId,
+      );
+      expect(projections.ok).toBe(true);
+      expect(projections.value.kind).toBe('sequenced');
+      return projections.value.values.modelSelection?.next ?? null;
+    }
+    async function readDefault(sessionId: string) {
+      const catalog = await callNative(
+        'session/modelCatalog',
+        {},
+        'browser',
+        sessionId,
+      );
+      expect(catalog.ok).toBe(true);
+      return catalog.value.default;
+    }
+    const sessionId = await createSession();
+    const otherSessionId = await createSession();
+    const defaultModel = {
+      provider: 'rdws-glm',
+      model: 'project-fixture-model',
+    };
+    const selectedModel = { provider: 'rdws-glm', model: 'other-model' };
     const catalog = await callNative(
       'session/modelCatalog',
       {},
@@ -151,10 +178,7 @@ test('a registered project exposes its model catalog without granting general co
       sessionId,
     );
     expect(catalog.ok).toBe(true);
-    expect(catalog.value.default).toEqual({
-      provider: 'rdws-glm',
-      model: 'project-fixture-model',
-    });
+    expect(catalog.value.default).toEqual(defaultModel);
     expect(catalog.value.groups).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -179,10 +203,44 @@ test('a registered project exposes its model catalog without granting general co
       expect(denied.ok, method).toBe(false);
       expect(denied.error.code, method).toBe('remote-access/denied');
     }
-    expect(
-      (await callNative('session/modelCatalog', {}, 'browser', sessionId)).value
-        .default.model,
-    ).toBe('project-fixture-model');
+    expect(await readDefault(sessionId)).toEqual(defaultModel);
+    expect(await readSelection(sessionId)).toBeNull();
+    expect(await readSelection(otherSessionId)).toBeNull();
+
+    await host.close();
+    await writeFile(
+      patchPath,
+      JSON.stringify([
+        providerPatch,
+        {
+          insert: [
+            {
+              id: 'test-native-model-selection',
+              name: fileURLToPath(
+                new URL(
+                  '../fixtures/native-model-selection.mjs',
+                  import.meta.url,
+                ),
+              ),
+              config: { sessionId, selection: selectedModel },
+            },
+          ],
+        },
+      ]),
+    );
+    host = new NativeWebHost(root, configuration, 'team-b');
+    await host.start();
+    await expect.poll(() => readSelection(sessionId)).toEqual(selectedModel);
+    expect(await readSelection(otherSessionId)).toBeNull();
+    expect(await readDefault(sessionId)).toEqual(defaultModel);
+
+    await host.close();
+    await writeFile(patchPath, JSON.stringify([providerPatch]));
+    host = new NativeWebHost(root, configuration, 'team-b');
+    await host.start();
+    expect(await readSelection(sessionId)).toEqual(selectedModel);
+    expect(await readSelection(otherSessionId)).toBeNull();
+    expect(await readDefault(sessionId)).toEqual(defaultModel);
   } finally {
     await host.close();
     await rm(root, { recursive: true, force: true });

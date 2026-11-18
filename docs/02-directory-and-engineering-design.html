@@ -614,6 +614,11 @@
 
   <p>检查点复核了安装包对应实现、侧路拒绝、目录数据范围及临时运行空间的复现入口。非独立自检通过。本轮 <code>pnpm check</code> 通过（16 文件／104 项测试、类型、lint、格式和构建），<code>pnpm validate:baseline</code> 通过（29 任务、62 个原子追溯点、16 个视图）。</p>
 
+  <h4 id="t13-session-model-evidence-20261118">11.16.1 原生会话选模持久化验证</h4>
+  <p>临时项目中的两个会话初始均无个人选择。第二次启动借助仅测试 Profile 装载的夹具，对目标会话调用公开 <code>sessionController.resolveAgent</code>，用 <code>llm.resolveCallConfig</code> 核验所选路由，再调用 <code>agent.model.select</code>。浏览器授权通过 <code>session/projections</code> 读回目标的 <code>modelSelection.next</code>，另一会话仍无个人选择，目录的实例默认值保持原值。移除夹具后第三次冷启动，原生读取结果一致。验证使用合成供应商模型，范围为原生选择持久化与作用域隔离。</p>
+  <p>该路径已具备正式接线的原生证据。后续需以当前登录和本人会话为准核对项目配置、允许模型与会话绑定，拒绝原生浏览器直接配置，并核验选择与推理并发及允许集合变化。此前浏览器目录可读、设置／凭据／选模拒绝仍由同一用例覆盖。T13 的配置管理界面、授权接线与真实推理验收另行交付。</p>
+  <p>已复核夹具仅由临时 Profile 装载，冷读阶段移除了测试注入，验证覆盖同实例两会话和实例默认选择。<code>pnpm test tests/integration/project-native-paths.test.ts</code> 通过（2 项，4.19s）；<code>pnpm check</code> 通过（16 文件／104 项，含类型、lint、格式与构建）；<code>pnpm validate:baseline</code> 通过。</p>
+
   <h2 id="s0"><span class="num">0</span>评审结论</h2>
   <div class="verdict">
     <div class="vtitle">总体判定</div>

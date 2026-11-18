@@ -86,7 +86,7 @@ test('tasks, assignments and button stages follow the Demo workspace', async ({
   await expect(page.getByLabel('调整阶段', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await expect(
-    page.getByRole('heading', { name: '进入你的工作台', exact: true }),
+    page.getByRole('heading', { name: '登录工作台', exact: true }),
   ).toBeVisible();
   await login('lead');
   await page.getByRole('button', { name: title, exact: true }).click();
@@ -166,7 +166,7 @@ test('tasks, assignments and button stages follow the Demo workspace', async ({
 
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await expect(
-    page.getByRole('heading', { name: '进入你的工作台', exact: true }),
+    page.getByRole('heading', { name: '登录工作台', exact: true }),
   ).toBeVisible();
   await login('dev');
   await page.getByRole('button', { name: title, exact: true }).click();

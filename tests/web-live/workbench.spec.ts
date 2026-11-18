@@ -57,9 +57,9 @@ test('real native Web session and streaming', async ({ page }) => {
       );
   });
   await page.goto('/');
-  await expect(
-    page.getByRole('heading', { name: '进入你的工作台' }),
-  ).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole('heading', { name: '登录工作台' })).toBeVisible({
+    timeout: 10000,
+  });
   await page.getByLabel('账号', { exact: true }).fill(manager.username);
   await page.getByLabel('密码', { exact: true }).fill(manager.password);
   await page.getByRole('button', { name: '登录', exact: true }).click();

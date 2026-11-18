@@ -1,9 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { runtimeHome } from '../../scripts/env.mjs';
 for (const colorScheme of ['light', 'dark'] as const) {
   test(`preset account login and logout (${colorScheme})`, async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
     await page.emulateMedia({ colorScheme });
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
@@ -14,16 +16,22 @@ for (const colorScheme of ['light', 'dark'] as const) {
       ),
     );
     const lead = accounts.find((a) => a.username === 'lead')!;
+    const photo = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname.endsWith('/login-studio.png') &&
+        response.ok(),
+    );
     await page.goto('/');
+    await photo;
     await expect(
-      page.getByRole('heading', { name: '进入你的工作台' }),
+      page.getByRole('heading', { name: '登录工作台' }),
     ).toBeVisible();
     const placeholderContrast = await page
       .getByLabel('账号', { exact: true })
       .evaluate((el) => {
         const values = (s: string) => s.match(/[\d.]+/g)!.map(Number);
         const fg = values(getComputedStyle(el, '::placeholder').color),
-          bg = values(getComputedStyle(el.parentElement!).backgroundColor);
+          bg = values(getComputedStyle(el).backgroundColor);
         const alpha = fg[3] ?? 1;
         const composed = fg
           .slice(0, 3)
@@ -41,14 +49,32 @@ for (const colorScheme of ['light', 'dark'] as const) {
           (Math.min(lum(composed), lum(bg)) + 0.05)
         );
       });
+    const login = page.locator('.login-screen');
+    expect(await login.evaluate((el) => getComputedStyle(el).colorScheme)).toBe(
+      'dark',
+    );
+    const form = page.getByRole('region', { name: '登录工作台', exact: true });
+    expect((await form.boundingBox())!.x).toBeGreaterThan(720);
+    expect(
+      await form.evaluate((el) => getComputedStyle(el).backgroundColor),
+    ).toBe('rgba(0, 0, 0, 0)');
+    await expect(page.getByRole('button', { name: /切换.*主题/ })).toHaveCount(
+      0,
+    );
+    await expect(page.getByLabel('账号', { exact: true })).toBeEnabled();
     expect(placeholderContrast).toBeGreaterThanOrEqual(4.5);
     await page.screenshot({ path: `test-results/login-${colorScheme}.png` });
     await page.getByLabel('账号', { exact: true }).fill(lead.username);
     await page.getByLabel('密码', { exact: true }).fill(lead.password);
-    await page.getByRole('button', { name: '登录', exact: true }).click();
+    await page.getByLabel('密码', { exact: true }).press('Enter');
     await expect(
       page.getByRole('heading', { name: '需求管理', exact: true }),
     ).toBeVisible();
+    await expect(page.locator('html')).toHaveAttribute(
+      'theme-mode',
+      colorScheme,
+    );
+    await expect(login).toHaveCount(0);
     await page.reload();
     await expect(
       page.getByRole('heading', { name: '需求管理', exact: true }),
@@ -113,8 +139,120 @@ for (const colorScheme of ['light', 'dark'] as const) {
     expect(contrast).toBeGreaterThanOrEqual(4.5);
     await page.getByRole('button', { name: '退出登录' }).click();
     await expect(
-      page.getByRole('heading', { name: '进入你的工作台' }),
+      page.getByRole('heading', { name: '登录工作台' }),
     ).toBeVisible();
     expect(errors).toEqual([]);
   });
 }
+
+test('mobile fixed-dark login guards real requests and exposes validation states', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ colorScheme: 'light' });
+  let releaseSession!: () => void;
+  let releaseLogin!: () => void;
+  const sessionGate = new Promise<void>((resolve) => {
+    releaseSession = resolve;
+  });
+  const loginGate = new Promise<void>((resolve) => {
+    releaseLogin = resolve;
+  });
+  let requests = 0;
+  let firstSession = true;
+  await page.route('**/api/auth/get-session', async (route) => {
+    if (firstSession) {
+      firstSession = false;
+      await sessionGate;
+    }
+    await route.continue();
+  });
+  await page.route('**/api/auth/sign-in/username', async (route) => {
+    requests++;
+    if (requests === 1) {
+      await loginGate;
+      await route.continue();
+    } else {
+      await route.fulfill({
+        status: 503,
+        json: { message: 'Synthetic login outage' },
+      });
+    }
+  });
+  try {
+    await page.goto('/');
+    const account = page.getByLabel('账号', { exact: true });
+    const password = page.getByLabel('密码', { exact: true });
+    await expect(page.getByRole('status')).toHaveText('正在读取登录状态…');
+    await expect(page.getByRole('heading', { name: '登录工作台' })).toHaveCount(
+      0,
+    );
+    await expect(account).toHaveCount(0);
+    releaseSession();
+    const login = page.getByRole('button', { name: '登录', exact: true });
+    await expect(login).toBeEnabled();
+    expect(
+      await page
+        .locator('.login-screen')
+        .evaluate((el) => getComputedStyle(el).colorScheme),
+    ).toBe('dark');
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    expect((await login.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await page.screenshot({ path: 'test-results/login-mobile-dark.png' });
+
+    await login.click();
+    await expect(account).toBeFocused();
+    await expect(account).toHaveAttribute('aria-invalid', 'true');
+    await expect(password).toHaveAttribute('aria-invalid', 'true');
+    await expect(page.getByText('请输入账号。', { exact: true })).toBeVisible();
+    expect(requests).toBe(0);
+
+    await account.fill('unknown_' + randomUUID().slice(0, 8));
+    await password.fill('fixture-not-an-account-password');
+    await page
+      .getByRole('button', { name: '显示密码', exact: true })
+      .press('Enter');
+    await expect(password).toHaveAttribute('type', 'text');
+    await page
+      .getByRole('button', { name: '隐藏密码', exact: true })
+      .press('Enter');
+    await expect(password).toHaveAttribute('type', 'password');
+
+    const rejected = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === '/api/auth/sign-in/username' &&
+        response.status() === 401,
+    );
+    await login.click();
+    await expect(page.getByRole('button', { name: '登录中…' })).toBeDisabled();
+    await expect(account).toBeDisabled();
+    await expect(password).toBeDisabled();
+    await expect(
+      page.getByRole('button', { name: '显示密码', exact: true }),
+    ).toBeDisabled();
+    await page
+      .locator('.login-form')
+      .evaluate((form) => (form as HTMLFormElement).requestSubmit());
+    expect(requests).toBe(1);
+    releaseLogin();
+    await rejected;
+    await expect(page.getByRole('alert')).toHaveText(
+      '登录失败，请检查账号与密码。',
+    );
+    await expect(password).toBeFocused();
+    await expect(login).toBeEnabled();
+
+    await login.click();
+    await expect(page.getByRole('alert')).toHaveText(
+      '暂时无法连接登录服务，请稍后重试。',
+    );
+    expect(requests).toBe(2);
+  } finally {
+    releaseSession();
+    releaseLogin();
+  }
+});

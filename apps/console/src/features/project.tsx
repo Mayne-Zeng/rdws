@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Loading } from 'tdesign-react';
@@ -36,7 +36,61 @@ export function ProjectWorkspace({
     ? (current as View)
     : 'requirements';
   const [mobile, setMobile] = useState(false),
-    [filter, setFilter] = useState('');
+    [filter, setFilter] = useState(''),
+    [protectedForm, setProtectedForm] = useState(false),
+    [smallScreen, setSmallScreen] = useState(
+      () => window.matchMedia('(max-width: 620px)').matches,
+    );
+  const rail = useRef<HTMLElement>(null),
+    menu = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 620px)');
+    const update = () => {
+      setSmallScreen(query.matches);
+      if (!query.matches) setMobile(false);
+    };
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+  useEffect(() => {
+    if (!mobile || !smallScreen) return;
+    const element = rail.current!;
+    const controls = () =>
+      [
+        ...element.querySelectorAll<HTMLElement>(
+          'a[href], button, input, select',
+        ),
+      ].filter(
+        (el) =>
+          !el.matches(':disabled, [aria-disabled="true"]') &&
+          el.getClientRects().length,
+      );
+    controls()[0]?.focus();
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setMobile(false);
+      } else if (event.key === 'Tab') {
+        const items = controls(),
+          first = items[0],
+          last = items.at(-1);
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+    };
+    element.addEventListener('keydown', keydown);
+    return () => {
+      element.removeEventListener('keydown', keydown);
+      if (window.matchMedia('(max-width: 620px)').matches)
+        menu.current?.focus();
+      else element.querySelector<HTMLElement>('.nav-item')?.focus();
+    };
+  }, [mobile, smallScreen]);
   const client = useQueryClient();
   const requirements = useQuery({
     queryKey: ['requirements', project.id],
@@ -48,6 +102,7 @@ export function ProjectWorkspace({
     refetchInterval: 2000,
   });
   function navigate(next: View, id = selected) {
+    if (protectedForm) return;
     setSearch({
       project: project.id,
       view: next,
@@ -62,11 +117,31 @@ export function ProjectWorkspace({
     requirements.data?.requirements.filter((r) =>
       r.title.toLocaleLowerCase().includes(filter.toLocaleLowerCase()),
     ) ?? [];
+  const activeView = view === 'requirements' ? 'overview' : view;
+  const tabs = [
+    { view: 'chat', label: '对话', icon: 'chat' },
+    { view: 'overview', label: '需求档案', icon: 'grid' },
+    { view: 'context', label: '上下文', icon: 'layers' },
+  ] as const;
   return (
     <main className={'shell workspace-shell' + (mobile ? ' rail-open' : '')}>
-      <aside className="rail">
+      <aside
+        ref={rail}
+        id="project-rail"
+        className="rail"
+        aria-label="项目侧栏"
+        inert={smallScreen && !mobile}
+      >
         <div className="rail-head">
-          <a href="/" className="brand">
+          <a
+            href="/"
+            className="brand"
+            aria-label="RDWS 首页"
+            aria-disabled={protectedForm || undefined}
+            onClick={(event) => {
+              if (protectedForm) event.preventDefault();
+            }}
+          >
             <span className="brand-mark">
               <Icon name="layers" />
             </span>
@@ -74,21 +149,36 @@ export function ProjectWorkspace({
             <span>研发工作台</span>
           </a>
           {requirements.data?.canCreate && (
-            <Button block onClick={() => navigate('create', '')}>
+            <Button
+              tag="button"
+              block
+              aria-label="新建需求"
+              disabled={protectedForm}
+              onClick={() => navigate('create', '')}
+            >
               <Icon name="plus" />
               <span>新建需求</span>
             </Button>
           )}
+          <button
+            className="rail-close icon-button"
+            aria-label="关闭导航"
+            onClick={() => setMobile(false)}
+          >
+            <Icon name="menu" />
+          </button>
         </div>
         <nav aria-label="项目导航" className="rail-nav">
           <button
+            aria-label="需求管理"
+            disabled={protectedForm}
             className={'nav-item' + (view === 'requirements' ? ' active' : '')}
             onClick={() => navigate('requirements', '')}
           >
             <Icon name="grid" />
             <span>需求管理</span>
             <span className="count">
-              {requirements.data?.requirements.length ?? 0}
+              {requirements.data?.requirements.length ?? '—'}
             </span>
           </button>
         </nav>
@@ -102,7 +192,9 @@ export function ProjectWorkspace({
           </div>
           {projects.length > 1 && (
             <select
+              disabled={protectedForm}
               aria-label="切换项目"
+              title={project.name}
               value={project.id}
               onChange={(e) => {
                 setSearch({ project: e.target.value, view: 'requirements' });
@@ -119,7 +211,7 @@ export function ProjectWorkspace({
         </div>
         <div className="tree-heading">
           <span>当前需求</span>
-          <span>{requirements.data?.requirements.length ?? 0}</span>
+          <span>{requirements.data?.requirements.length ?? '—'}</span>
         </div>
         <label className="tree-search">
           <span className="sr-only">搜索需求</span>
@@ -133,6 +225,7 @@ export function ProjectWorkspace({
           {filtered.map((r, i) => (
             <button
               key={r.id}
+              disabled={protectedForm}
               aria-label={r.title}
               className={
                 'demand-item' +
@@ -154,7 +247,15 @@ export function ProjectWorkspace({
               </span>
             </button>
           ))}
-          {!filtered.length && !requirements.isPending && (
+          {requirements.isPending && (
+            <p className="rail-empty" role="status">
+              正在读取需求…
+            </p>
+          )}
+          {requirements.isError && (
+            <p className="rail-empty">需求列表暂不可用，请在工作区重试。</p>
+          )}
+          {!filtered.length && requirements.isSuccess && (
             <p className="rail-empty">
               {filter ? '没有匹配的需求' : '暂无可访问需求'}
             </p>
@@ -169,28 +270,36 @@ export function ProjectWorkspace({
             </small>
           </div>
           <Button
+            tag="button"
             variant="text"
             size="small"
             onClick={logout}
             loading={logoutBusy}
             aria-label="退出登录"
+            title="退出登录"
           >
-            退出登录
+            <span className="logout-icon">
+              <Icon name="arrow" />
+            </span>
+            <span className="logout-label">退出登录</span>
           </Button>
         </div>
       </aside>
       {mobile && (
-        <button
+        <div
           className="rail-scrim"
-          aria-label="关闭导航"
+          aria-hidden="true"
           onClick={() => setMobile(false)}
         />
       )}
-      <div className="workspace-main">
+      <div className="workspace-main" inert={mobile && smallScreen}>
         <header className="topbar">
           <button
+            ref={menu}
             className="mobile-menu icon-button"
             aria-label="打开导航"
+            aria-expanded={mobile}
+            aria-controls="project-rail"
             onClick={() => setMobile(!mobile)}
           >
             <Icon name="menu" />
@@ -208,7 +317,9 @@ export function ProjectWorkspace({
                     : '项目空间'}
               </span>
             </div>
-            <div className="top-title">{summary?.title ?? '需求管理'}</div>
+            <div className="top-title">
+              {view === 'create' ? '新建需求' : (summary?.title ?? '需求管理')}
+            </div>
           </div>
           <span className="pill local-badge">
             <span className="status-dot" />
@@ -217,32 +328,47 @@ export function ProjectWorkspace({
         </header>
         {selected && view !== 'create' && (
           <div className="workspace-tabs">
-            <div role="tablist" aria-label="工作区视图">
-              <button
-                role="tab"
-                aria-selected={view === 'chat'}
-                onClick={() => navigate('chat')}
-              >
-                <Icon name="chat" />
-                对话
-              </button>
-              <span className="tab-divider" />
-              <button
-                role="tab"
-                aria-selected={view === 'overview'}
-                onClick={() => navigate('overview')}
-              >
-                <Icon name="grid" />
-                需求档案
-              </button>
-              <button
-                role="tab"
-                aria-selected={view === 'context'}
-                onClick={() => navigate('context')}
-              >
-                <Icon name="layers" />
-                上下文
-              </button>
+            <div
+              role="tablist"
+              aria-label="工作区视图"
+              onKeyDown={(event) => {
+                const focused = (event.target as HTMLElement).closest(
+                  '[role="tab"]',
+                )?.id;
+                const index = tabs.findIndex(
+                  (tab) => 'view-' + tab.view === focused,
+                );
+                if (index < 0) return;
+                const next =
+                  event.key === 'Home'
+                    ? 0
+                    : event.key === 'End'
+                      ? tabs.length - 1
+                      : event.key === 'ArrowRight'
+                        ? (index + 1) % tabs.length
+                        : event.key === 'ArrowLeft'
+                          ? (index + tabs.length - 1) % tabs.length
+                          : -1;
+                if (next < 0) return;
+                event.preventDefault();
+                navigate(tabs[next]!.view);
+                document.getElementById('view-' + tabs[next]!.view)?.focus();
+              }}
+            >
+              {tabs.map((tab) => (
+                <button
+                  key={tab.view}
+                  id={'view-' + tab.view}
+                  role="tab"
+                  aria-selected={activeView === tab.view}
+                  aria-controls="workspace-panel"
+                  tabIndex={activeView === tab.view ? 0 : -1}
+                  onClick={() => navigate(tab.view)}
+                >
+                  <Icon name={tab.icon} />
+                  {tab.label}
+                </button>
+              ))}
             </div>
             <span className="scope-label">
               {view === 'chat' ? '会话视图' : '需求级'}
@@ -251,20 +377,45 @@ export function ProjectWorkspace({
         )}
         <div className="workspace-scroll">
           {error && <Alert theme="error" message={error} />}
-          <div className="content-width">
+          <div
+            className="content-width"
+            id="workspace-panel"
+            role={selected && view !== 'create' ? 'tabpanel' : undefined}
+            aria-labelledby={
+              selected && view !== 'create' ? 'view-' + activeView : undefined
+            }
+            tabIndex={selected && view !== 'create' ? 0 : undefined}
+          >
             {requirements.isError && (
-              <Alert theme="error" message={requirements.error.message} />
+              <div className="inline-feedback" role="alert">
+                <Alert theme="error" message={requirements.error.message} />
+                <Button
+                  tag="button"
+                  variant="outline"
+                  loading={requirements.isFetching}
+                  onClick={() => void requirements.refetch()}
+                >
+                  重试读取需求列表
+                </Button>
+              </div>
             )}
             {view === 'create' ? (
               <RequirementForm
                 key={project.id}
                 project={project}
+                onProtectedChange={setProtectedForm}
                 onClose={() => navigate('requirements', '')}
                 onCreated={async (id) => {
                   void client.invalidateQueries({
                     queryKey: ['requirements', project.id],
                   });
-                  navigate('overview', id);
+                  setProtectedForm(false);
+                  setSearch({
+                    project: project.id,
+                    view: 'overview',
+                    requirement: id,
+                  });
+                  setMobile(false);
                 }}
               />
             ) : selected ? (
@@ -278,9 +429,9 @@ export function ProjectWorkspace({
               <>
                 <div className="page-heading">
                   <div>
-                    <h1>{project.name}</h1>
+                    <h1>需求管理</h1>
                     <p className="muted">
-                      按需求组织研发进展，让每次协作都有清楚的上下文。
+                      {project.name} · 按需求查看进展、分派与会话。
                     </p>
                   </div>
                   {requirements.data?.canCreate && (
@@ -292,16 +443,36 @@ export function ProjectWorkspace({
                     </Button>
                   )}
                 </div>
+                <div className="list-toolbar">
+                  <label htmlFor="requirement-filter">筛选需求列表</label>
+                  <input
+                    id="requirement-filter"
+                    value={filter}
+                    onChange={(event) => setFilter(event.target.value)}
+                    placeholder="按需求标题筛选"
+                  />
+                  {filter && (
+                    <Button
+                      tag="button"
+                      variant="text"
+                      onClick={() => setFilter('')}
+                    >
+                      清除筛选
+                    </Button>
+                  )}
+                </div>
                 <section className="list-panel">
                   <div className="panel-heading">
                     <h2>需求列表</h2>
                     <span className="muted">
-                      {requirements.data?.requirements.length ?? 0} 项
+                      {requirements.data
+                        ? `${filtered.length} / ${requirements.data.requirements.length} 项`
+                        : '—'}
                     </span>
                   </div>
                   {requirements.isPending ? (
                     <Loading text="正在读取需求" />
-                  ) : filtered.length ? (
+                  ) : requirements.isError ? null : filtered.length ? (
                     <div className="requirement-rows">
                       {filtered.map((r) => (
                         <button
@@ -324,8 +495,12 @@ export function ProjectWorkspace({
                   ) : (
                     <div className="empty-state">
                       <Icon name="folder" />
-                      <h3>从一个需求开始</h3>
-                      <p>需求创建后，子任务、分派和会话会集中在这里。</p>
+                      <h3>{filter ? '没有匹配的需求' : '从一个需求开始'}</h3>
+                      <p>
+                        {filter
+                          ? '调整或清除筛选条件，查看其他需求。'
+                          : '需求创建后，子任务、分派和会话会集中在这里。'}
+                      </p>
                     </div>
                   )}
                 </section>

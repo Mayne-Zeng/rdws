@@ -46,9 +46,13 @@ for (const colorScheme of ['light', 'dark'] as const) {
     await page.getByLabel('账号', { exact: true }).fill(lead.username);
     await page.getByLabel('密码', { exact: true }).fill(lead.password);
     await page.getByRole('button', { name: '登录', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'RDWS PoC' })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: '需求管理', exact: true }),
+    ).toBeVisible();
     await page.reload();
-    await expect(page.getByRole('heading', { name: 'RDWS PoC' })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: '需求管理', exact: true }),
+    ).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 });
     expect(
       await page.evaluate(

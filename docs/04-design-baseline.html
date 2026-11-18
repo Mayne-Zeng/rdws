@@ -6,7 +6,7 @@
 <title>RDWS · 设计基线与交接规格 v2</title>
 <style>
   :root{--brand:#0E7490;--brand-dark:#0B596E;--brand-soft:#E6F3F6;--brand-line:#B9DEE6;
-    --ink:#1C2530;--ink-2:#43505E;--ink-3:#6B7885;--line:#E2E7EB;--bg:#F5F7F8;--paper:#FFF;
+    --ink:#1C2530;--ink-2:#43505E;--ink-3:#596875;--line:#E2E7EB;--bg:#F5F7F8;--paper:#FFF;
     --red:#B3373A;--red-bg:#FCEDEC;--amber:#9A6410;--amber-bg:#FDF4E3;--green:#24735A;--green-bg:#EAF5F0;--gray-bg:#F0F3F5}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.72 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}
@@ -31,7 +31,7 @@
   .danger{background:var(--red-bg);border:1px solid #F0CECD;border-left:3px solid var(--red);padding:12px 16px;font-size:13px;color:#8A2C2F;border-radius:0 3px 3px 0;margin:14px 0}
   table{width:100%;border-collapse:collapse;margin:12px 0;background:var(--paper);border:1px solid var(--line);font-size:12.5px}
   th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
-  th{background:#F0F6F7;color:var(--brand-dark);font-weight:700;font-size:11.5px}
+  th{background:#F0F6F7;color:var(--brand-dark);font-weight:700;font-size:12px}
   tr:last-child td{border-bottom:none}
   td.num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
   .pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:3px;white-space:nowrap}
@@ -43,9 +43,9 @@
   .kpi div{background:var(--paper);border:1px solid var(--line);border-radius:4px;padding:12px 14px}
   .kpi b{display:block;font-size:22px;color:var(--brand);line-height:1.3;font-variant-numeric:tabular-nums}
   .kpi span{font-size:11px;color:var(--ink-3)}
-  .src{font-size:11.5px;color:var(--ink-3)}
+  .src{font-size:12px;color:var(--ink-3)}
   .foot{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-3)}
-  @media(max-width:720px){.toc{columns:1}h1{font-size:22px}.wrap{padding:0 16px 60px}table{font-size:11.5px}th,td{padding:7px}.kpi{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:720px){.toc{columns:1}h1{font-size:22px}.wrap{padding:0 16px 60px}table{font-size:12px}th,td{padding:7px}.kpi{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
 <body>
@@ -83,6 +83,11 @@
     <div><b>16 / 16</b><span>视图宽度与栅格一致</span></div>
     <div><b>0</b><span>JS 异常 / 外链 / 页面溢出</span></div>
   </div>
+
+  <h3 id="t01-current-20261118">T01 正式工作台对齐（2026-11-18）</h3>
+  <p>本轮对齐工作台外壳、需求列表／新建、需求档案／子任务、对话／上下文五个真实入口。沿用下文令牌、字阶、圆角、图标、960px 内容宽与 24px 留白；桌面顶栏收至 54px，小屏保留 72px。品牌浅色为 Light #F1F8FA / Dark #102A33；TDesign 输入框仅保留组件边框，禁用操作使用原生 button 语义。</p>
+  <p>列表筛选在折叠侧栏后仍可用，加载／失败／空／筛选无结果分别呈现；读取失败提供原位重试。移动导航关闭后离屏内容不可聚焦，打开后约束焦点并支持 Escape，关闭／换屏恢复焦点；工作区页签支持方向键、Home／End、单一 Tab 入口和面板关联。新建需求忙碌或结果未知时冻结内容与页内导航，保留原请求核对；首次确定拒绝可修正，未知后的 403 不能解除保护，退出登录仍可用。刷新／浏览器前进后退／离页恢复未纳入本轮。</p>
+  <p>工程事实、回归证据与审阅记录见 <a href="02-directory-and-engineering-design.html#t01-plan-20261118">工程 §11.12</a>，进度见 <a href="05-development-backlog.md">研发清单 T01</a>。本轮已有能力内部验证已完成：pnpm check、15 项 E2E、12 项真实 Native 和日常走查通过，独立交付复审 APPROVE；Demo 中历史阶段审批、写工具和未建视图不构成本轮新增入口。用户首次视觉验收保持待确认，下文旧 Demo 的 16 视图 PASS 不作正式产品全量验收证据。</p>
 
   <h2 id="s1"><span class="num">1</span>一页式设计基线</h2>
   <h3>1.1 色彩令牌（明 / 暗双主题实测值）</h3>

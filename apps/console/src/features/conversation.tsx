@@ -22,7 +22,13 @@ function text(content: unknown): string {
     .map((part) => part.text ?? '')
     .join('');
 }
-function Transcript({ binding }: { binding: SessionBinding }) {
+function Transcript({
+  binding,
+  own,
+}: {
+  binding: SessionBinding;
+  own: boolean;
+}) {
   const source = binding.eventSource;
   const snapshot = useSyncExternalStore(
     source.subscribe.bind(source),
@@ -43,7 +49,7 @@ function Transcript({ binding }: { binding: SessionBinding }) {
       const message = data.message as { content?: unknown } | undefined;
       const body = text(message?.content ?? data.content);
       if (body)
-        rows.push({ id: 'user-' + event.seq, role: '你', body, live: false });
+        rows.push({ id: 'user-' + event.seq, role: 'user', body, live: false });
     }
     if (event.type === 'assistant/message') {
       const message = data.message as { content?: unknown } | undefined;
@@ -51,7 +57,7 @@ function Transcript({ binding }: { binding: SessionBinding }) {
       if (body)
         rows.push({
           id: 'assistant-' + event.seq,
-          role: '助手',
+          role: 'assistant',
           body,
           live: false,
         });
@@ -63,7 +69,7 @@ function Transcript({ binding }: { binding: SessionBinding }) {
       const key = String(entry.event.data.attemptId);
       let row = live.get(key);
       if (!row) {
-        row = { id: key, role: '助手', body: '', live: true };
+        row = { id: key, role: 'assistant', body: '', live: true };
         live.set(key, row);
         rows.push(row);
       }
@@ -77,12 +83,12 @@ function Transcript({ binding }: { binding: SessionBinding }) {
       )}
       {rows.map((row) => (
         <div
-          className={'message ' + (row.role === '你' ? 'from-user' : '')}
+          className={'message ' + (row.role === 'user' ? 'from-user' : '')}
           key={row.id}
           data-live={row.live ? 'true' : 'false'}
         >
           <span>
-            {row.role}
+            {row.role === 'user' ? (own ? '你' : '用户') : '助手'}
             {row.live ? ' · 正在生成' : ''}
           </span>
           <div>{row.body}</div>
@@ -217,13 +223,17 @@ function SessionPanel({
       </div>
       {error && <Alert theme="error" message={error} />}
       {retryMessage && (
-        <Button variant="text" onClick={() => setInput(retryMessage)}>
+        <Button
+          tag="button"
+          variant="text"
+          onClick={() => setInput(retryMessage)}
+        >
           重新填入未执行消息
         </Button>
       )}
       <div className="conversation-body">
         {binding ? (
-          <Transcript binding={binding} />
+          <Transcript binding={binding} own={own} />
         ) : (
           <Loading text="正在读取会话" />
         )}
@@ -239,6 +249,7 @@ function SessionPanel({
             placeholder="围绕当前需求提问"
           />
           <Button
+            tag="button"
             type="submit"
             loading={busy}
             disabled={!binding || !input.trim() || generating}
@@ -308,7 +319,11 @@ function History({ runtime, id }: { runtime: NativeRuntime; id: string }) {
       {error && <Alert theme="error" message={error} />}
       <div className="session-actions">
         {(history?.hasMore || error) && (
-          <Button onClick={() => void load(history)} loading={busy}>
+          <Button
+            tag="button"
+            onClick={() => void load(history)}
+            loading={busy}
+          >
             {error ? '重试读取历史' : '加载更早事件'}
           </Button>
         )}
@@ -505,6 +520,7 @@ export function Conversation({ requirementId }: { requirementId: string }) {
           {sessions.map((session, index) => (
             <div className="session-row" key={session.id}>
               <Button
+                tag="button"
                 variant={selected === session.id ? 'base' : 'text'}
                 onClick={() => {
                   setSelected(session.id);
@@ -516,6 +532,7 @@ export function Conversation({ requirementId }: { requirementId: string }) {
                 {session.sourceSessionId ? ' · 派生' : ''}
               </Button>
               <Button
+                tag="button"
                 className="session-replay"
                 variant="text"
                 shape="square"
@@ -545,6 +562,7 @@ export function Conversation({ requirementId }: { requirementId: string }) {
                 </Button>
               )}
               <Button
+                tag="button"
                 variant="text"
                 onClick={() => setReplay((value) => !value)}
               >

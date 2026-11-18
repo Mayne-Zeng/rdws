@@ -352,6 +352,12 @@ test('five real sessions support owned fork, passive replay and current context'
         })
       ).filter((p) => p.endsWith('.jsonl.zstd')).length,
     ).toBe(artifactsBefore);
+    await login('manager');
+    await page.goto(`/?project=poc&requirement=${id}&view=chat`);
+    await page.getByRole('button', { name: '会话 1', exact: true }).click();
+    await expect(page.locator('.from-user > span').first()).toHaveText('用户');
+    await expect(page.getByLabel('消息', { exact: true })).toHaveCount(0);
+    expect(await requestCount(root, sessionIds)).toBe(callsBeforeReplay);
     expect(errors).toEqual([]);
     await mkdir(join(runtimeHome, 'state/exports'), { recursive: true });
     await writeFile(

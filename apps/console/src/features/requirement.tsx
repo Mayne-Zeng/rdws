@@ -83,7 +83,19 @@ export function RequirementPage({
   }
   if (detail.isPending) return <Loading text="正在读取需求档案" />;
   if (detail.isError)
-    return <Alert theme="error" message={detail.error.message} />;
+    return (
+      <div className="inline-feedback" role="alert">
+        <Alert theme="error" message={detail.error.message} />
+        <Button
+          tag="button"
+          variant="outline"
+          loading={detail.isFetching}
+          onClick={() => void detail.refetch()}
+        >
+          重试读取需求档案
+        </Button>
+      </div>
+    );
   const data = detail.data,
     r = data.requirement,
     names = new Map(data.participants.map((p) => [p.id, p.name])),
@@ -156,7 +168,7 @@ export function RequirementPage({
               ))}
             </select>
             {next && (
-              <Button onClick={() => stage(next)} loading={busy}>
+              <Button tag="button" onClick={() => stage(next)} loading={busy}>
                 进入{stageLabels[next]}
                 <Icon name="arrow" />
               </Button>
@@ -169,6 +181,7 @@ export function RequirementPage({
           <Alert theme="error" message={error} />
           {retry.current && (
             <Button
+              tag="button"
               variant="outline"
               onClick={() => void mutate(retry.current!)}
               loading={busy}
@@ -299,6 +312,7 @@ export function RequirementPage({
               </div>
               {data.permissions.canManageTasks && (
                 <Button
+                  tag="button"
                   variant="outline"
                   onClick={() => setEditing('new')}
                   disabled={busy}
@@ -353,6 +367,7 @@ export function RequirementPage({
                   )}
                   {data.permissions.canManageTasks && (
                     <Button
+                      tag="button"
                       variant="text"
                       aria-label={'编辑子任务 ' + t.title}
                       onClick={() => setEditing(t)}
@@ -462,7 +477,7 @@ function TaskForm({
   }
   return (
     <section className="inline-panel">
-      <Button variant="text" onClick={onClose} disabled={busy}>
+      <Button tag="button" variant="text" onClick={onClose} disabled={busy}>
         返回需求档案
       </Button>
       <div className="page-heading">
@@ -515,20 +530,31 @@ function TaskForm({
         {error && (
           <div className="inline-feedback">
             <Alert theme="error" message={error} />
-            <Button variant="outline" onClick={onRetry} loading={busy}>
+            <Button
+              tag="button"
+              variant="outline"
+              onClick={onRetry}
+              loading={busy}
+            >
               重试原操作
             </Button>
           </div>
         )}
         <div className="form-actions">
           <Button
+            tag="button"
             type="submit"
             loading={busy}
             disabled={!title.trim() || !assigneeId || uncertain}
           >
             保存子任务
           </Button>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
+          <Button
+            tag="button"
+            variant="outline"
+            onClick={onClose}
+            disabled={busy}
+          >
             取消
           </Button>
         </div>

@@ -16,6 +16,20 @@
         "files": ["docs/00-decision-ledger.html"],
         "createdAt": "2026-11-18T03:35:32.616Z",
         "reason": "Agent triage: established decision-ledger header, verdict, code and semantic warning/error/success borders are intentional documentation markers; CSS is byte-identical to HEAD and current edits only add approved implementation content."
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": ["docs/04-design-baseline.html"],
+        "createdAt": "2026-11-18T07:23:24.154Z",
+        "reason": "Agent triage: unchanged historical handoff header and semantic verdict/warning/success/error border markers from f568733 are intentional documentation hierarchy; T01 changes current UI status and document text legibility, preserving these markers."
+      },
+      {
+        "rule": "wide-tracking",
+        "value": "*",
+        "files": ["docs/04-design-baseline.html"],
+        "createdAt": "2026-11-18T07:23:24.180Z",
+        "reason": "Agent triage: 0.18em applies only to the short uppercase RDWS DESIGN HANDOFF label (.kicker), not body prose; this is the detector rule stated exception for short uppercase labels."
       }
     ]
   }

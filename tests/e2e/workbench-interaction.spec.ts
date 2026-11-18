@@ -114,10 +114,26 @@ for (const failure of ['abort', 'invalid-json'] as const)
     ).toBeDisabled();
     await expect(page.getByLabel('切换项目')).toBeDisabled();
     await page.setViewportSize({ width: 820, height: 900 });
+    const createEntry = page.getByRole('button', {
+      name: '新建需求',
+      exact: true,
+    });
+    await expect(createEntry).toBeDisabled();
     await expect(page.getByLabel('切换项目')).toBeVisible();
     await expect(
       page.getByRole('button', { name: '退出登录', exact: true }),
     ).toBeVisible();
+
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.getByRole('button', { name: '打开导航', exact: true }).click();
+    await expect(createEntry).toBeDisabled();
+    await expect(page.getByLabel('切换项目')).toBeVisible();
+    await expect(page.locator('.project-metrics')).toBeHidden();
+    await createEntry.evaluate((element) =>
+      (element as HTMLButtonElement).focus(),
+    );
+    await expect(createEntry).not.toBeFocused();
+    await page.keyboard.press('Escape');
     await page.setViewportSize({ width: 1440, height: 900 });
     await expect(
       page.getByRole('button', { name: '退出登录', exact: true }),
@@ -375,7 +391,18 @@ test('failed queries offer recovery without claiming an empty project and filter
     else await route.continue();
   });
   await filter.fill(requirement.title);
-  await page.locator('.requirement-row').click();
+  const list = page.getByRole('table', { name: '需求列表', exact: true });
+  await expect(list.getByRole('columnheader')).toHaveText([
+    '编号',
+    '需求',
+    '阶段',
+  ]);
+  const open = list.getByRole('button', {
+    name: '查看需求 ' + requirement.title,
+    exact: true,
+  });
+  await open.focus();
+  await page.keyboard.press('Enter');
   await expect(
     page.getByRole('button', { name: '重试读取需求档案', exact: true }),
   ).toBeVisible();

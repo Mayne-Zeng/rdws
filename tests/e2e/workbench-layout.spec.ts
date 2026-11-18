@@ -48,7 +48,7 @@ test('five real workbench entries preserve the Demo geometry and readable themes
   expect(session.status()).toBe(200);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await mkdir('.impeccable/review/t01-final', { recursive: true });
+  await mkdir('.impeccable/review/t01-rollout', { recursive: true });
   for (const colorScheme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme });
     for (const view of [
@@ -135,6 +135,30 @@ test('five real workbench entries preserve the Demo geometry and readable themes
           measurements.workspaceOverflow,
           `${view}/${colorScheme}/${width} workspace`,
         ).toBe(false);
+        if (view === 'requirements') {
+          if (width === 390)
+            await page
+              .getByRole('button', { name: '打开导航', exact: true })
+              .click();
+          const newRequirement = page.getByRole('button', {
+            name: '新建需求',
+            exact: true,
+          });
+          await expect(newRequirement).toHaveCount(1);
+          await expect(newRequirement).toBeEnabled();
+          if (width === 390) await page.keyboard.press('Escape');
+        }
+        if (view === 'chat' || view === 'overview' || view === 'context') {
+          const scope =
+            width >= 821
+              ? page.locator('.workspace-scope')
+              : page.locator('.scope-label');
+          await expect(scope).toBeVisible();
+          await expect(scope).toContainText(
+            view === 'chat' ? '会话视图' : '需求级',
+          );
+          if (width >= 821) await expect(scope).toContainText('会话为只读分析');
+        }
         if (width === 820)
           await expect(
             page.getByRole('button', { name: '退出登录', exact: true }),
@@ -163,7 +187,7 @@ test('five real workbench entries preserve the Demo geometry and readable themes
               );
           return [
             ...document.querySelectorAll<HTMLElement>(
-              '.content-width .muted, .prose-text, .detail-grid dd, .requirement-row small, .composer label, input[placeholder], textarea[placeholder]',
+              '.content-width .muted, .prose-text, .detail-grid dd, .requirement-row small, .composer label, .workspace-scope span, .requirement-table th, input[placeholder], textarea[placeholder]',
             ),
           ]
             .filter(
@@ -231,7 +255,7 @@ test('five real workbench entries preserve the Demo geometry and readable themes
           el.scrollTop = 0;
         });
         await page.screenshot({
-          path: `.impeccable/review/t01-final/${view}-${colorScheme}-${width}.png`,
+          path: `.impeccable/review/t01-rollout/${view}-${colorScheme}-${width}.png`,
           animations: 'disabled',
         });
       }

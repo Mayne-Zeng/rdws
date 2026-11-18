@@ -101,7 +101,7 @@ export function RequirementForm({
     }
   }
   return (
-    <section className="inline-panel">
+    <section className="inline-panel requirement-editor">
       <Button
         tag="button"
         variant="text"
@@ -110,7 +110,7 @@ export function RequirementForm({
       >
         返回需求列表
       </Button>
-      <div className="page-heading">
+      <div className="page-heading core-page-heading">
         <div>
           <h1>新建需求</h1>
           <p className="muted">

@@ -14,15 +14,7 @@ import { Icon, api, roleLabels } from '../lib/ui.tsx';
 import { Conversation } from './conversation.tsx';
 import type { View } from './project.tsx';
 const stages = Object.keys(stageLabels) as Stage[];
-export function RequirementPage({
-  id,
-  view,
-  onView,
-}: {
-  id: string;
-  view: View;
-  onView: (view: View, id?: string) => void;
-}) {
+export function RequirementPage({ id, view }: { id: string; view: View }) {
   const client = useQueryClient();
   const detail = useQuery({
     queryKey: ['requirement', id],
@@ -140,11 +132,37 @@ export function RequirementPage({
         }}
       />
     );
+  const overview = view !== 'chat' && view !== 'context';
   return (
     <>
-      <div className="page-heading">
+      {overview && (
+        <div className="page-heading core-page-heading">
+          <div>
+            <h1>需求档案</h1>
+            <p className="muted">
+              查看需求阶段、验收标准、成员分派和最近活动。
+            </p>
+          </div>
+        </div>
+      )}
+      <div
+        className={
+          overview
+            ? 'requirement-summary-card'
+            : 'page-heading core-page-heading'
+        }
+      >
         <div>
-          <h1>{r.title}</h1>
+          {overview ? (
+            <>
+              <code className="record-id" title={r.id}>
+                {r.id.slice(0, 8)}
+              </code>
+              <h2>{r.title}</h2>
+            </>
+          ) : (
+            <h1>{r.title}</h1>
+          )}
           <div className="heading-meta">
             <span className="pill brand-pill" data-testid="current-stage">
               {stageLabels[r.stage]}
@@ -198,62 +216,80 @@ export function RequirementPage({
         </p>
       )}
       {view === 'chat' ? (
-        <>
-          <div className="context-strip">
-            <span>
-              <Icon name="layers" />
-              当前需求 · {stageLabels[r.stage]}
-            </span>
-            <button onClick={() => onView('overview')}>
-              查看档案与阶段操作
-              <Icon name="arrow" />
-            </button>
-          </div>
-          <Conversation requirementId={id} />
-        </>
+        <Conversation requirementId={id} />
       ) : view === 'context' ? (
         <section className="context-page" data-testid="context-summary">
-          <div className="section-heading">
-            <h2>当前需求上下文</h2>
-            <span className="pill">只读快照</span>
-          </div>
-          <p className="muted">
-            每个新的推理步骤都会读取当前业务信息，已开始的回复不会被改写。
+          <p className="muted context-explanation">
+            每个新推理步骤读取当前业务信息；已开始的回复沿用原上下文。
           </p>
-          <div className="info-panel">
-            <dl className="detail-grid">
-              <dt>当前阶段</dt>
-              <dd>{stageLabels[r.stage]}</dd>
-              <dt>开发负责人</dt>
-              <dd>{names.get(r.leadId)}</dd>
-              <dt>工作区能力</dt>
-              <dd>只读分析</dd>
-              <dt>需求描述</dt>
-              <dd className="prose-text">{r.description || '尚未填写'}</dd>
-              <dt>验收标准</dt>
-              <dd className="prose-text">{r.acceptance || '尚未填写'}</dd>
-            </dl>
+          <div className="context-grid">
+            <section className="info-panel">
+              <div className="panel-heading">
+                <h2>当前需求上下文</h2>
+                <span className="pill">只读快照</span>
+              </div>
+              <dl className="detail-grid">
+                <dt>需求描述</dt>
+                <dd className="prose-text">{r.description || '尚未填写'}</dd>
+                <dt>验收标准</dt>
+                <dd className="prose-text">{r.acceptance || '尚未填写'}</dd>
+              </dl>
+            </section>
+            <section className="info-panel">
+              <div className="panel-heading">
+                <h2>分派与工作区</h2>
+              </div>
+              <dl className="detail-grid">
+                <dt>当前阶段</dt>
+                <dd>{stageLabels[r.stage]}</dd>
+                <dt>开发负责人</dt>
+                <dd>{names.get(r.leadId) ?? '未命名成员'}</dd>
+                <dt>工作区能力</dt>
+                <dd>只读分析</dd>
+              </dl>
+            </section>
           </div>
-          <div className="section-heading">
-            <h2>子任务与当前分派</h2>
-            <span className="muted">{data.tasks.length} 项</span>
-          </div>
-          {data.tasks.map((t) => (
-            <div key={t.id} className="context-task">
-              <strong>{t.title}</strong>
-              <span>
-                {names.get(t.assigneeId)} · {taskStatusLabels[t.status]}
-              </span>
+          <section className="document-section info-panel context-tasks">
+            <div className="panel-heading">
+              <h2>子任务与当前分派</h2>
+              <span className="muted">{data.tasks.length} 项</span>
             </div>
-          ))}
-          {!data.tasks.length && <p className="muted">暂无子任务。</p>}
+            {data.tasks.map((t) => (
+              <div key={t.id} className="context-task">
+                <strong>{t.title}</strong>
+                <span>
+                  {names.get(t.assigneeId)} · {taskStatusLabels[t.status]}
+                </span>
+              </div>
+            ))}
+            {!data.tasks.length && (
+              <p className="muted context-empty">暂无子任务。</p>
+            )}
+          </section>
         </section>
       ) : (
         <>
           <section className="flow-panel">
             <div className="panel-heading">
               <h2>主线流程</h2>
-              <span className="muted">当前 · {stageLabels[r.stage]}</span>
+              <span className="flow-title">需求研发流程</span>
+              <span
+                className="flow-position"
+                aria-label={
+                  '当前阶段位置，第 ' +
+                  (stages.indexOf(r.stage) + 1) +
+                  ' 步，共 ' +
+                  stages.length +
+                  ' 步'
+                }
+              >
+                {stages.indexOf(r.stage) + 1} / {stages.length}
+                <progress
+                  aria-hidden="true"
+                  value={stages.indexOf(r.stage) + 1}
+                  max={stages.length}
+                />
+              </span>
             </div>
             <ol className="flow-track">
               {stages.map((s, i) => (
@@ -283,7 +319,11 @@ export function RequirementPage({
           <section className="document-section">
             <h2>基本信息</h2>
             <div className="info-panel">
-              <dl className="detail-grid">
+              <dl className="detail-grid requirement-facts">
+                <dt>开发负责人</dt>
+                <dd>{names.get(r.leadId) ?? '未命名成员'}</dd>
+                <dt>当前阶段</dt>
+                <dd>{stageLabels[r.stage]}</dd>
                 <dt>需求说明</dt>
                 <dd className="prose-text">{r.description || '尚未填写'}</dd>
                 <dt>验收标准</dt>

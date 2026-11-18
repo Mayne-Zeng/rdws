@@ -143,12 +143,58 @@ export function ProjectWorkspace({
   const demandView =
     !!selected && view !== 'create' && view !== 'repos' && view !== 'members';
   const showTabs = demandView && projectMatches && !!summary;
+  const scopeLabel = view === 'chat' ? '会话视图' : '需求级';
   const activeView = view === 'requirements' ? 'overview' : view;
   const tabs = [
     { view: 'chat', label: '对话', icon: 'chat' },
     { view: 'overview', label: '需求档案', icon: 'grid' },
     { view: 'context', label: '上下文', icon: 'layers' },
   ] as const;
+  const projectCard = (
+    <div className="project-card">
+      <span className="project-mark">
+        <Icon name="folder" />
+      </span>
+      <div>
+        <strong>{project.name}</strong>
+        <span>{project.roles.map((r) => roleLabels[r] ?? r).join(' / ')}</span>
+      </div>
+      {projects.length > 1 && (
+        <select
+          disabled={protectedForm}
+          aria-label="切换项目"
+          title={project.name}
+          value={project.id}
+          onChange={(e) => {
+            setSearch({ project: e.target.value, view: 'requirements' });
+            setMobile(false);
+          }}
+        >
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      )}
+      <div className="project-metrics">
+        <span>
+          <strong>{requirements.data?.requirements.length ?? '—'}</strong>需求
+        </span>
+        <span>
+          <strong>
+            {requirements.data?.requirements.filter(
+              (item) => item.stage === 'assignment',
+            ).length ?? '—'}
+          </strong>
+          指派阶段
+        </span>
+        <span>
+          <strong>{project.roles.length}</strong>我的角色
+        </span>
+      </div>
+    </div>
+  );
   if (!projectMatches)
     return (
       <main className="shell centered">
@@ -182,7 +228,7 @@ export function ProjectWorkspace({
               <Icon name="layers" />
             </span>
             <strong>RDWS</strong>
-            <span>研发工作台</span>
+            <span>产研一体化工作区</span>
           </a>
           {requirements.data?.canCreate && (
             <Button
@@ -204,7 +250,9 @@ export function ProjectWorkspace({
             <Icon name="menu" />
           </button>
         </div>
+        {projectCard}
         <nav aria-label="项目导航" className="rail-nav">
+          <p className="nav-heading">项目管理</p>
           <button
             aria-label="需求管理"
             disabled={protectedForm}
@@ -250,36 +298,21 @@ export function ProjectWorkspace({
             </button>
           )}
         </nav>
-        <div className="project-card">
-          <Icon name="folder" />
-          <div>
-            <strong>{project.name}</strong>
-            <span>
-              {project.roles.map((r) => roleLabels[r] ?? r).join(' / ')}
-            </span>
-          </div>
-          {projects.length > 1 && (
-            <select
-              disabled={protectedForm}
-              aria-label="切换项目"
-              title={project.name}
-              value={project.id}
-              onChange={(e) => {
-                setSearch({ project: e.target.value, view: 'requirements' });
-                setMobile(false);
-              }}
-            >
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
         <div className="tree-heading">
-          <span>当前需求</span>
-          <span>{requirements.data?.requirements.length ?? '—'}</span>
+          <span>需求 / 工作区</span>
+          {requirements.data?.canCreate ? (
+            <button
+              className="tree-create icon-button"
+              aria-label="新建需求"
+              title="新建需求"
+              disabled={protectedForm}
+              onClick={() => navigate('create', '')}
+            >
+              <Icon name="plus" />
+            </button>
+          ) : (
+            <span>{requirements.data?.requirements.length ?? '—'}</span>
+          )}
         </div>
         <label className="tree-search">
           <span className="sr-only">搜索需求</span>
@@ -290,10 +323,17 @@ export function ProjectWorkspace({
           />
         </label>
         <div className="rail-scroll">
-          {filtered.map((r, i) => (
+          {filtered.length > 0 && (
+            <div className="tree-group">
+              <span className="status-dot" />
+              可访问需求<span>{filtered.length}</span>
+            </div>
+          )}
+          {filtered.map((r) => (
             <button
               key={r.id}
               disabled={protectedForm}
+              aria-current={showTabs && r.id === selected ? 'page' : undefined}
               aria-label={r.title}
               className={
                 'demand-item' +
@@ -308,10 +348,7 @@ export function ProjectWorkspace({
               </span>
               <span className="demand-text">
                 <strong>{r.title}</strong>
-                <small>
-                  {stageLabels[r.stage]}
-                  <span className="tree-dot">·</span>需求 {i + 1}
-                </small>
+                <small>{stageLabels[r.stage]}</small>
               </span>
             </button>
           ))}
@@ -401,6 +438,22 @@ export function ProjectWorkspace({
           </span>
         </header>
         {showTabs && (
+          <div className="workspace-scope">
+            <Icon name="eye" />
+            <strong>{scopeLabel}</strong>
+            <span>当前需求下的会话为只读分析</span>
+            {view === 'chat' ? (
+              <button onClick={() => navigate('overview')}>
+                查看档案与阶段操作
+              </button>
+            ) : view === 'context' ? (
+              <button onClick={() => navigate('overview')}>查看需求档案</button>
+            ) : (
+              <button onClick={() => navigate('context')}>查看上下文</button>
+            )}
+          </div>
+        )}
+        {showTabs && (
           <div className="workspace-tabs">
             <div
               role="tablist"
@@ -444,9 +497,7 @@ export function ProjectWorkspace({
                 </button>
               ))}
             </div>
-            <span className="scope-label">
-              {view === 'chat' ? '会话视图' : '需求级'}
-            </span>
+            <span className="scope-label">{scopeLabel}</span>
           </div>
         )}
         <div className="workspace-scroll">
@@ -500,12 +551,7 @@ export function ProjectWorkspace({
               />
             ) : demandView ? (
               showTabs ? (
-                <RequirementPage
-                  key={selected}
-                  id={selected}
-                  view={view}
-                  onView={navigate}
-                />
+                <RequirementPage key={selected} id={selected} view={view} />
               ) : requirements.isPending ? (
                 <Loading text="正在核对需求归属" />
               ) : (
@@ -524,7 +570,7 @@ export function ProjectWorkspace({
               )
             ) : (
               <>
-                <div className="page-heading">
+                <div className="page-heading core-page-heading">
                   <div>
                     <h1>需求管理</h1>
                     <p className="muted">
@@ -532,10 +578,8 @@ export function ProjectWorkspace({
                     </p>
                   </div>
                   {requirements.data?.canCreate && (
-                    <Button
-                      variant="outline"
-                      onClick={() => navigate('create', '')}
-                    >
+                    <Button tag="button" onClick={() => navigate('create', '')}>
+                      <Icon name="plus" />
                       创建需求
                     </Button>
                   )}
@@ -570,25 +614,51 @@ export function ProjectWorkspace({
                   {requirements.isPending ? (
                     <Loading text="正在读取需求" />
                   ) : requirements.isError ? null : filtered.length ? (
-                    <div className="requirement-rows">
-                      {filtered.map((r) => (
-                        <button
-                          key={r.id}
-                          onClick={() => navigate('overview', r.id)}
-                          className="requirement-row"
-                        >
-                          <Icon name="file" />
-                          <span>
-                            <strong>{r.title}</strong>
-                            <small>{r.description || '尚未填写需求说明'}</small>
-                          </span>
-                          <span className="pill brand-pill">
-                            {stageLabels[r.stage]}
-                          </span>
-                          <Icon name="arrow" />
-                        </button>
-                      ))}
-                    </div>
+                    <table className="requirement-table" aria-label="需求列表">
+                      <colgroup>
+                        <col className="requirement-id-column" />
+                        <col />
+                        <col className="requirement-stage-column" />
+                      </colgroup>
+                      <thead>
+                        <tr>
+                          <th scope="col">编号</th>
+                          <th scope="col">需求</th>
+                          <th scope="col">阶段</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filtered.map((r) => (
+                          <tr key={r.id} className="requirement-row">
+                            <td>
+                              <code className="record-id" title={r.id}>
+                                {r.id.slice(0, 8)}
+                              </code>
+                            </td>
+                            <td>
+                              <button
+                                className="requirement-open"
+                                aria-label={'查看需求 ' + r.title}
+                                onClick={() => navigate('overview', r.id)}
+                              >
+                                <Icon name="file" />
+                                <span>
+                                  <strong>{r.title}</strong>
+                                  <small>
+                                    {r.description || '尚未填写需求说明'}
+                                  </small>
+                                </span>
+                              </button>
+                            </td>
+                            <td>
+                              <span className="pill brand-pill">
+                                {stageLabels[r.stage]}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   ) : (
                     <div className="empty-state">
                       <Icon name="folder" />

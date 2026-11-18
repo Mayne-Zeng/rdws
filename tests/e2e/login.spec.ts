@@ -53,6 +53,15 @@ for (const colorScheme of ['light', 'dark'] as const) {
     await expect(
       page.getByRole('heading', { name: '需求管理', exact: true }),
     ).toBeVisible();
+    await expect(page.locator('.nav-item .count').first()).toHaveText(/^\d+$/);
+    const newRequirement = page.getByRole('button', {
+      name: '新建需求',
+      exact: true,
+    });
+    await page.setViewportSize({ width: 1440, height: 844 });
+    await expect(newRequirement).toHaveCount(0);
+    await page.setViewportSize({ width: 820, height: 844 });
+    await expect(newRequirement).toHaveCount(0);
     await page.setViewportSize({ width: 390, height: 844 });
     expect(
       await page.evaluate(
@@ -63,6 +72,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
       path: `test-results/workbench-${colorScheme}.png`,
     });
     await page.getByRole('button', { name: '打开导航', exact: true }).click();
+    await expect(newRequirement).toHaveCount(0);
     const contrast = await page
       .getByRole('button', { name: '退出登录' })
       .evaluate((button) => {

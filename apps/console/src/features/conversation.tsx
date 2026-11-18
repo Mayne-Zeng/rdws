@@ -493,7 +493,7 @@ export function Conversation({ requirementId }: { requirementId: string }) {
   return (
     <section className="sessions-region">
       <div className="title-row">
-        <h3>会话工作区</h3>
+        <h2>会话工作区</h2>
         <Button
           tag="button"
           onClick={() => void create()}
@@ -522,6 +522,7 @@ export function Conversation({ requirementId }: { requirementId: string }) {
               <Button
                 tag="button"
                 variant={selected === session.id ? 'base' : 'text'}
+                aria-current={selected === session.id ? 'true' : undefined}
                 onClick={() => {
                   setSelected(session.id);
                   setReplay(false);

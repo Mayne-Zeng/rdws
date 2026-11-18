@@ -192,6 +192,107 @@ async function fixture(host = new Host()) {
     });
   return { app, id, source, cookie, post, host };
 }
+test('the model catalog forwards available models without exposing Native diagnostics', async () => {
+  const { app, id, cookie, host } = await fixture();
+  const diagnostic = 'synthetic-private-provider-diagnostic';
+  const rpcId = randomUUID();
+  const model = { id: 'test-model', name: 'Test model' };
+  const catalog = {
+    default: { provider: 'available', model: model.id },
+    groups: [{ id: 'available', name: 'Available', models: [model] }],
+    routableProviders: ['available'],
+    failures: [{ id: 'unavailable', name: 'Unavailable', message: diagnostic }],
+  };
+  host.ticket = () => 'synthetic-catalog-ticket';
+  async function requestCatalog(response: Response) {
+    host.fetch = async () => response;
+    return app.inject({
+      method: 'POST',
+      url: `/api/dsh/${id}/native/api/session/modelCatalog`,
+      headers: {
+        cookie,
+        origin: process.env.RDWS_ORIGIN!,
+        'x-rdws-client-generation': randomUUID(),
+      },
+      payload: {
+        type: 'client-request',
+        rpcId,
+        method: 'session/modelCatalog',
+        payload: { args: {} },
+      },
+    });
+  }
+  const envelope = { type: 'server-response', rpcId };
+  try {
+    const partial = await requestCatalog(
+      Response.json(
+        { ...envelope, result: { ok: true, value: catalog } },
+        { headers: { 'x-native-diagnostic': diagnostic } },
+      ),
+    );
+    expect(partial.statusCode).toBe(200);
+    expect(partial.body).not.toContain(diagnostic);
+    expect(partial.headers['x-native-diagnostic']).toBeUndefined();
+    expect(partial.headers['cache-control']).toBe('no-store');
+    expect(partial.json()).toEqual({
+      ...envelope,
+      result: {
+        ok: true,
+        value: {
+          ...catalog,
+          failures: [
+            {
+              id: 'unavailable',
+              name: 'Unavailable',
+              message: '供应商模型目录暂不可用',
+            },
+          ],
+        },
+      },
+    });
+
+    const failure = await requestCatalog(
+      Response.json({
+        ...envelope,
+        result: {
+          ok: false,
+          error: {
+            code: 'gateway/internal',
+            message: diagnostic,
+            details: { diagnostic },
+          },
+        },
+      }),
+    );
+    expect(failure.statusCode).toBe(200);
+    expect(failure.json()).toEqual({
+      ...envelope,
+      result: {
+        ok: false,
+        error: { code: 'gateway/internal', message: '模型目录暂不可用' },
+      },
+    });
+
+    for (const status of [200, 502]) {
+      const malformed = await requestCatalog(
+        new Response(diagnostic, { status }),
+      );
+      expect(malformed.statusCode).toBe(503);
+      expect(malformed.body).not.toContain(diagnostic);
+    }
+    const mismatched = await requestCatalog(
+      Response.json({
+        ...envelope,
+        rpcId: randomUUID(),
+        result: { ok: true, value: catalog },
+      }),
+    );
+    expect(mismatched.statusCode).toBe(503);
+    expect(mismatched.body).not.toContain(diagnostic);
+  } finally {
+    await app.close();
+  }
+});
 test('one create command survives concurrent retry and returns the same Native id', async () => {
   const f = await fixture();
   try {

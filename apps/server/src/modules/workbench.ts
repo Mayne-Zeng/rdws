@@ -52,6 +52,69 @@ type Auth = ReturnType<typeof createAuth>;
 function fail(statusCode: number, message: string): never {
   throw Object.assign(new Error(message), { statusCode });
 }
+async function publicModelCatalog(response: Response, rpcId: unknown) {
+  const message = '模型目录暂不可用';
+  if (!response.ok || typeof rpcId !== 'string') fail(503, message);
+  const incoming: unknown = await response.json().catch(() => undefined);
+  if (
+    !isRecord(incoming) ||
+    incoming.type !== 'server-response' ||
+    incoming.rpcId !== rpcId ||
+    !isRecord(incoming.result)
+  )
+    fail(503, message);
+
+  const envelope = { type: 'server-response', rpcId };
+  const options = { headers: { 'cache-control': 'no-store' } };
+  const { result } = incoming;
+  if (result.ok === false) {
+    return Response.json(
+      {
+        ...envelope,
+        result: { ok: false, error: { code: 'gateway/internal', message } },
+      },
+      options,
+    );
+  }
+  const catalog = result.value;
+  if (
+    result.ok !== true ||
+    !isRecord(catalog) ||
+    !isRecord(catalog.default) ||
+    !Array.isArray(catalog.groups) ||
+    !Array.isArray(catalog.routableProviders) ||
+    !Array.isArray(catalog.failures)
+  )
+    fail(503, message);
+  const failures = catalog.failures.map((failure: unknown) => {
+    if (
+      !isRecord(failure) ||
+      typeof failure.id !== 'string' ||
+      typeof failure.name !== 'string'
+    )
+      fail(503, message);
+    return {
+      id: failure.id,
+      name: failure.name,
+      message: '供应商模型目录暂不可用',
+    };
+  });
+  return Response.json(
+    {
+      ...envelope,
+      result: {
+        ok: true,
+        value: {
+          default: catalog.default,
+          groups: catalog.groups,
+          routableProviders: catalog.routableProviders,
+          failures,
+        },
+      },
+    },
+    options,
+  );
+}
 class PendingAuthority extends Error {
   readonly statusCode = 401;
   readonly publicMessage = '当前权限正在变更，请刷新后重试';
@@ -1259,7 +1322,7 @@ export async function registerWorkbench(
           await access(request.headers, id);
           if (stale(scope)) fail(401, '授权已变化');
         }
-        const response = await native.fetch(path, token, {
+        let response = await native.fetch(path, token, {
           method: request.method,
           signal: transfer.controller.signal,
           ...(request.method === 'POST'
@@ -1269,6 +1332,12 @@ export async function registerWorkbench(
               }
             : {}),
         });
+        if (request.method === 'POST' && path === '/api/session/modelCatalog') {
+          response = await publicModelCatalog(
+            response,
+            (request.body as { rpcId?: unknown }).rpcId,
+          );
+        }
         reply.code(response.status);
         for (const [key, value] of response.headers)
           if (

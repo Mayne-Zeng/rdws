@@ -166,6 +166,7 @@
   - 前置：T03；已核实所需原生公开配置接口。
   - 来源：D2、D19；台账模型配置权威。
   - 当前证据：[原生授权核查](02-directory-and-engineering-design.html#t13-native-evidence-20261118)及[会话选模验证](02-directory-and-engineering-design.html#t13-session-model-evidence-20261118)。通过 Host 公共会话能力写入原生选择，目标会话冷启动后仍能读取，另一会话与实例默认值保持原值。普通浏览器授权继续拒绝配置读取和直接选模。分层配置与用户选模入口待接线。
+  - 已交付子项：[模型目录响应脱敏](02-directory-and-engineering-design.html#t13-catalog-boundary-20261118)。BFF 保留正常目录及可用模型，供应商故障使用稳定提示，原生诊断保留在服务端边界内。
 
 - [ ] **T14 · 能力白名单与模板**
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。

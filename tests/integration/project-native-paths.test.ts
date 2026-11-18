@@ -16,6 +16,7 @@ import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from 'vitest';
 import { NativeWebHost, projectNativeConfiguration } from '@rdws/dsh/web';
+import { forkBoundary, sessionRpc } from '@rdws/dsh/sessions';
 import { ContextRuns } from '../../apps/server/src/modules/runtime-context.ts';
 
 test('native registration accepts a project profile and refuses linked runtime boot inputs', async () => {
@@ -53,7 +54,7 @@ test('native registration accepts a project profile and refuses linked runtime b
   }
 });
 
-test('a flushed native model choice survives restart and pi-ai checks each physical dispatch', async () => {
+test('native model choices survive restarts, reach actual dispatch, and can enter a blocked fork prefix', async () => {
   const root = await mkdtemp(
     join(await realpath(tmpdir()), 'rdws-project-model-'),
   );
@@ -62,6 +63,16 @@ test('a flushed native model choice survives restart and pi-ai checks each physi
   const patchPath = join(profile, 'cordis.patch.yml');
   const checkpoint = join(root, 'selection-checkpoint.json');
   const requirementId = randomUUID();
+  const queuedSelectionId = randomUUID();
+  const blockedSelectionId = randomUUID();
+  let denyContextFor = '';
+  let deniedContextReads = 0;
+  let pauseProviderFor = '';
+  let providerPaused = false;
+  let releaseProvider!: () => void;
+  const providerPause = new Promise<void>(
+    (resolve) => (releaseProvider = resolve),
+  );
   const providerHits: { id: string | undefined; model: string }[] = [];
   const settled = new Set<string>();
   const dispatches: {
@@ -125,10 +136,21 @@ test('a flushed native model choice survives restart and pi-ai checks each physi
         response.writeHead(404).end();
         return;
       }
+      const id = request.headers['x-rdws-fixture-dispatch'] as
+        string | undefined;
       providerHits.push({
-        id: request.headers['x-rdws-fixture-dispatch'] as string | undefined,
+        id,
         model: input.model,
       });
+      const intent = dispatches.find((call) => call.id === id);
+      if (
+        intent?.sessionId === pauseProviderFor &&
+        !intent.purpose &&
+        !providerPaused
+      ) {
+        providerPaused = true;
+        await providerPause;
+      }
       if (rateLimitNextMain && input.model === 'project-fixture-model') {
         rateLimitNextMain = false;
         response.writeHead(429, { 'content-type': 'application/json' });
@@ -187,10 +209,16 @@ test('a flushed native model choice survives restart and pi-ai checks each physi
     runs = new ContextRuns(
       native.contextGeneration,
       (token) => native.verifyContext(token),
-      async () => ({
-        snapshot: { requirementId, contextVersion: 1 },
-        digest: 'fixture-context',
-      }),
+      async (_who, _requirementId, sessionId) => {
+        if (sessionId === denyContextFor) {
+          deniedContextReads++;
+          throw new Error('Fixture authorization revoked');
+        }
+        return {
+          snapshot: { requirementId, contextVersion: 1 },
+          digest: 'fixture-context',
+        };
+      },
       () => false,
     );
     native.configureContext(`${base}/context`, base);
@@ -388,14 +416,13 @@ test('a flushed native model choice survives restart and pi-ai checks each physi
     expect(await readSelection(otherSessionId)).toBeNull();
     expect(await readDefault(sessionId)).toEqual(defaultModel);
 
-    async function send(sessionId: string) {
+    async function send(sessionId: string, requestId = randomUUID()) {
       const ticket = host.ticket({
         ...identity,
         purpose: 'browser',
         readSessionIds: [sessionId],
         ownSessionIds: [sessionId],
       });
-      const requestId = randomUUID();
       const binding = runs.admit(
         identity,
         requirementId,
@@ -524,6 +551,19 @@ test('a flushed native model choice survives restart and pi-ai checks each physi
                 ),
               ),
               config: { origin: base },
+            },
+            {
+              id: 'test-native-claim-selection',
+              name: fileURLToPath(
+                new URL(
+                  '../fixtures/native-claim-selection.mjs',
+                  import.meta.url,
+                ),
+              ),
+              config: {
+                requestIds: [queuedSelectionId, blockedSelectionId],
+                selection: selectedModel,
+              },
             },
           ],
         },
@@ -656,8 +696,88 @@ test('a flushed native model choice survives restart and pi-ai checks each physi
     expect(received).toEqual(expect.arrayContaining(approved));
     for (const { id } of dispatches.filter((call) => !call.allowed))
       expect(received.some((hit) => hit.id === id)).toBe(false);
+
+    function mainModels(id: string) {
+      const ids = new Set(
+        dispatches
+          .filter((call) => call.sessionId === id && !call.purpose)
+          .map((call) => call.id),
+      );
+      return providerHits
+        .filter((hit) => hit.id && ids.has(hit.id))
+        .map((hit) => hit.model);
+    }
+    const queued = await createSession();
+    pauseProviderFor = queued;
+    await send(queued);
+    await expect.poll(() => providerPaused).toBe(true);
+    await send(queued, queuedSelectionId);
+    expect(await readSelection(queued)).toEqual(defaultModel);
+    expect(mainModels(queued)).toEqual([defaultModel.model]);
+    releaseProvider();
+    await expect
+      .poll(
+        async () =>
+          (await sessionRecords(queued)).filter(
+            ({ event }) =>
+              event.type === 'turn/end' &&
+              event.data.reason?.kind === 'completed',
+          ).length,
+      )
+      .toBe(2);
+    expect(mainModels(queued)).toEqual([
+      defaultModel.model,
+      selectedModel.model,
+    ]);
+    expect(await readSelection(queued, 'lastUsed')).toEqual(selectedModel);
+
+    const blocked = await createSession();
+    await send(blocked);
+    await expect.poll(() => hasReply(blocked)).toBe(true);
+    await expect.poll(() => providerTitle(queued)).toBe(true);
+    await expect.poll(() => providerTitle(blocked)).toBe(true);
+    await expect
+      .poll(() => dispatches.every((call) => settled.has(call.id)))
+      .toBe(true);
+    const beforeRejection = providerHits.length;
+    denyContextFor = blocked;
+    await send(blocked, blockedSelectionId);
+    await expect
+      .poll(
+        async () =>
+          (await sessionRecords(blocked)).findLast(
+            ({ event }) => event.type === 'turn/end',
+          )?.event.data.reason?.kind,
+      )
+      .toBe('blocked');
+    expect(deniedContextReads).toBe(1);
+    expect(mainModels(blocked)).toEqual([defaultModel.model]);
+    expect(await readSelection(blocked)).toEqual(selectedModel);
+    expect(await readSelection(blocked, 'lastUsed')).toEqual(defaultModel);
+    expect(providerHits).toHaveLength(beforeRejection);
+    const source = {
+      ...identity,
+      purpose: 'browser' as const,
+      readSessionIds: [blocked],
+      ownSessionIds: [blocked],
+    };
+    const atSeq = await forkBoundary(host, source, blocked);
+    expect(atSeq).toEqual(expect.any(Number));
+    const nativeFork = await sessionRpc(
+      host,
+      { ...source, purpose: 'fork', sourceSessionId: blocked, atSeq },
+      'session/fork',
+      { sessionId: blocked, atSeq, allowMigration: false },
+    );
+    expect(nativeFork).toMatchObject({ sessionId: expect.any(String) });
+    const { sessionId: child } = nativeFork as { sessionId: string };
+    expect(child).not.toBe(blocked);
+    expect(await readSelection(child)).toEqual(selectedModel);
+    expect(await readSelection(child, 'lastUsed')).toEqual(defaultModel);
+    expect(providerHits).toHaveLength(beforeRejection);
   } finally {
     releaseRetry();
+    releaseProvider();
     await Promise.all([
       host.close(),
       new Promise<void>((resolve) => fixture.close(() => resolve())),

@@ -603,6 +603,17 @@
   <p>交付首轮审阅发现 2 项 P2 和 1 项 P3。定点用例先复现小屏入口 36px、折叠侧栏入口缺识别标题和切页焦点未接管。修复后新增入口使用 40px 小屏令牌，折叠态以独立图标和悬停名称区分，键盘进入后标题接管焦点。定点浏览器回归 7 项通过（9.5s）。独立交付复审 APPROVE，三项均关闭。Impeccable 对修改的产品与设计文档扫描主发现 0。</p>
   <p>最终 pnpm check 通过（16 文件／104 项测试、类型、lint、格式和构建），pnpm test:e2e 通过（23 项，36.7s），pnpm validate:baseline 通过（29 任务、62 个原子追溯点、16 个视图）。证据覆盖本地 Web 登录、设计系统与工作台回归。与代码同批本地提交，T20 保留用户侧视觉待验收。</p>
 
+  <h3 id="t13-native-evidence-20261118">11.16 T13 原生配置与选模接线核查</h3>
+  <p>依据 D2、D19、Q8 和 T00-G6，针对锁定的 DSH 0.2.2-rc.3 核对安装源码和现有 RDWS 组装。独立参考源码修订与 <code>dsh/upstream/manifest.json</code> 的 reviewedSourceCommit 一致。当前启动仍要求项目 Profile 中已有 <code>rdws-glm</code> 路由，并在缺失默认模型时从该路由首个模型初始化。现有 BFF 和 Native Policy 对浏览器会话使用同一行动允许表，配置接口和选模仍受阻止。</p>
+  <p><code>tests/integration/project-native-paths.test.ts</code> 复用临时项目 Profile 和凭据夹具。启动真实锁定版本的 Native Host，创建独立测试目录及空会话，以合成非 owner 浏览器身份读出实际模型目录和实例默认值。凭据夹具值未出现在目录响应中。该身份的 <code>settings/describe</code>、<code>credentials/describe</code> 与本人会话 <code>session/selectModel</code> 均返回 <code>remote-access/denied</code>，再次读取的默认模型相同。验证在临时目录完成，未调用模型或使用开发实例的供应商配置。<code>pnpm test tests/integration/project-native-paths.test.ts</code> 通过，1 文件／2 项。</p>
+  <ul>
+    <li>当前 npm 包的 <code>session-controller/src/commands.ts</code> 先令会话选择模型，再异步调用 <code>agentDefaultModel.saveSelection</code>。原生默认模型服务在存在配置编辑器时会写入其配置项。因此直接开放此 RPC 会引入实例默认值写入路径，无法作为 D19 个人会话专属入口。后续候选为使用受控 Host 能力调用原生会话模型选择服务，实证所选会话生效、另一会话与实例默认值稳定，覆盖拒绝后及冷启动。</li>
+    <li><code>settings/describe</code> 提供命名空间及脱敏值，<code>credentials/describe</code> 投影配置状态、来源、可写性及可选掩码。原生 <code>session/modelCatalog</code> 取实例注册表，成功项包含模型元数据，失败项可含供应商异常文本。T13 接线需按当前平台、项目和本人会话授权投影允许集合，对普通 DTO 收敛失败信息，并将设置命名空间和凭据写操作限制在专用授权面。</li>
+    <li>T13 仍需交付分层界面、配置读写授权、平台锁定与真实原生接线。本轮证据确认现有拒绝边界和后续必须验证的行为。工作台、DSH 启动配置及模型权限均保持当前契约。</li>
+  </ul>
+
+  <p>检查点复核了安装包对应实现、侧路拒绝、目录数据范围及临时运行空间的复现入口。非独立自检通过。本轮 <code>pnpm check</code> 通过（16 文件／104 项测试、类型、lint、格式和构建），<code>pnpm validate:baseline</code> 通过（29 任务、62 个原子追溯点、16 个视图）。</p>
+
   <h2 id="s0"><span class="num">0</span>评审结论</h2>
   <div class="verdict">
     <div class="vtitle">总体判定</div>

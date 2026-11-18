@@ -10,6 +10,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { test, expect } from 'vitest';
 import { NativeWebHost, projectNativeConfiguration } from '@rdws/dsh/web';
 
@@ -48,7 +49,7 @@ test('native registration accepts a project profile and refuses linked runtime b
   }
 });
 
-test('a project without a default model uses its own registered provider in the boot overlay', async () => {
+test('a registered project exposes its model catalog without granting general configuration access', async () => {
   const root = await mkdtemp(
     join(await realpath(tmpdir()), 'rdws-project-model-'),
   );
@@ -73,7 +74,10 @@ test('a project without a default model uses its own registered provider in the 
                 api: 'openai-completions',
                 baseURL: 'http://127.0.0.1:9/',
                 apiKeyEnv: 'FIXTURE_MODEL',
-                models: [{ id: 'project-fixture-model' }],
+                models: [
+                  { id: 'project-fixture-model' },
+                  { id: 'other-model' },
+                ],
               },
             },
           },
@@ -94,6 +98,91 @@ test('a project without a default model uses its own registered provider in the 
     expect(
       overlay.find((row) => row.id === 'agent-default-model')?.config,
     ).toEqual({ provider: 'rdws-glm', model: 'project-fixture-model' });
+
+    const requirementId = randomUUID();
+    const workspace = await host.workspace(
+      requirementId,
+      'Model scope fixture',
+    );
+    const identity = {
+      userId: randomUUID(),
+      authSessionId: randomUUID(),
+      requirementId,
+      ...workspace,
+    };
+    async function callNative(
+      method: string,
+      args: Record<string, unknown>,
+      purpose: 'browser' | 'create',
+      sessionId?: string,
+    ) {
+      const grant = {
+        ...identity,
+        purpose,
+        ...(sessionId
+          ? { readSessionIds: [sessionId], ownSessionIds: [sessionId] }
+          : {}),
+      };
+      const response = await host.fetch(`/api/${method}`, grant, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'client-request',
+          rpcId: randomUUID(),
+          method,
+          payload: { args },
+        }),
+      });
+      expect(response.status).toBe(200);
+      return (await response.json()).result;
+    }
+    const created = await callNative(
+      'session/create',
+      { request: { workspaceId: workspace.workspaceId } },
+      'create',
+    );
+    expect(created.ok).toBe(true);
+    const sessionId = created.value.sessionId as string;
+    expect(typeof sessionId).toBe('string');
+    const catalog = await callNative(
+      'session/modelCatalog',
+      {},
+      'browser',
+      sessionId,
+    );
+    expect(catalog.ok).toBe(true);
+    expect(catalog.value.default).toEqual({
+      provider: 'rdws-glm',
+      model: 'project-fixture-model',
+    });
+    expect(catalog.value.groups).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'rdws-glm',
+          models: expect.arrayContaining([
+            expect.objectContaining({ id: 'project-fixture-model' }),
+            expect.objectContaining({ id: 'other-model' }),
+          ]),
+        }),
+      ]),
+    );
+    expect(JSON.stringify(catalog).includes('fixture-only')).toBe(false);
+    for (const [method, args] of [
+      ['settings/describe', {}],
+      ['credentials/describe', { refs: ['FIXTURE_MODEL'] }],
+      [
+        'session/selectModel',
+        { request: { sessionId, provider: 'rdws-glm', model: 'other-model' } },
+      ],
+    ] as const) {
+      const denied = await callNative(method, args, 'browser', sessionId);
+      expect(denied.ok, method).toBe(false);
+      expect(denied.error.code, method).toBe('remote-access/denied');
+    }
+    expect(
+      (await callNative('session/modelCatalog', {}, 'browser', sessionId)).value
+        .default.model,
+    ).toBe('project-fixture-model');
   } finally {
     await host.close();
     await rm(root, { recursive: true, force: true });

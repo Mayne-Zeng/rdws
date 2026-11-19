@@ -36,6 +36,7 @@ import {
   type ReleasedCapability,
 } from './presets.ts';
 export { isDemandPreset } from './presets.ts';
+export type { ModelCarrierRequest } from '../bridge/model-carrier.ts';
 const req = createRequire(import.meta.url);
 export async function writeOwner(
   handle: Awaited<ReturnType<typeof open>>,

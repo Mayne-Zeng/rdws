@@ -12,6 +12,27 @@ import { createSessionOperations } from './session-operations.ts';
 type Business = ReturnType<typeof createBusiness>;
 type Database = Parameters<typeof createSessionOperations>[0];
 
+export function createProjectContextReader(
+  business: Pick<Business, 'readWithDeadline'>,
+) {
+  let activeReads = 0;
+  return async (
+    project: string,
+    ...args: Parameters<Business['readWithDeadline']>
+  ) => {
+    if (activeReads >= 4) businessError(503, '需求上下文暂时繁忙');
+    activeReads++;
+    try {
+      const { detail, validBefore } = await business.readWithDeadline(...args);
+      if (detail.requirement.projectId !== project)
+        businessError(403, '运行归属与项目不匹配');
+      return { value: contextSnapshot(detail), validBefore };
+    } finally {
+      activeReads--;
+    }
+  };
+}
+
 export function createProjectRuntimes(
   root: string,
   testConfiguration: string | undefined,
@@ -30,7 +51,7 @@ export function createProjectRuntimes(
   const pending = new Map<string, Promise<ProjectRuntime>>();
   const live = new Map<string, ProjectRuntime>();
   let closing = false;
-  let activeContextReads = 0;
+  const readContext = createProjectContextReader(business);
   function register(native: NativeWebHost) {
     const project = native.projectId;
     const runtime = {
@@ -39,23 +60,7 @@ export function createProjectRuntimes(
       runs: new ContextRuns(
         native.contextGeneration,
         (token) => native.verifyContext(token),
-        async (who, id, sessionId, relatedActors) => {
-          if (activeContextReads >= 4) businessError(503, '需求上下文暂时繁忙');
-          activeContextReads++;
-          try {
-            const { detail, validBefore } = await business.readWithDeadline(
-              who,
-              id,
-              sessionId,
-              relatedActors,
-            );
-            if (detail.requirement.projectId !== project)
-              businessError(403, '运行归属与项目不匹配');
-            return { value: contextSnapshot(detail), validBefore };
-          } finally {
-            activeContextReads--;
-          }
-        },
+        (...args) => readContext(project, ...args),
         (id, userId, requirementId) =>
           closingLogin(id, userId, project, requirementId),
       ),

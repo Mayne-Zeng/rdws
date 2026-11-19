@@ -4,7 +4,9 @@ import { signGrant, bodyHash } from '../../bridge/access.ts';
 export function installContext(ctx, config, key, route, requestContext) {
   const authorized = new Map(),
     agents = new WeakMap(),
-    earlyInsertions = new WeakMap();
+    earlyInsertions = new WeakMap(),
+    modelSteps = new Map();
+  let modelSequence = 0;
   const lookup = (r) => r.sessionId + ':' + r.requestId + ':' + r.peerNonce;
   const inboxInputs = (agent) => [
     ...agent.inbox.nextStep,
@@ -194,6 +196,26 @@ export function installContext(ctx, config, key, route, requestContext) {
     });
     return requestContext(body, token, signal);
   }
+  function closeModelStep(record) {
+    if (!record || modelSteps.get(record.body.sessionId) !== record) return;
+    modelSteps.delete(record.body.sessionId);
+    record.signal.removeEventListener('abort', record.close);
+    void service('model-step-release', record.body).catch(() => {});
+  }
+  function closeAgentModelStep(agent) {
+    const record = modelSteps.get(String(agent.session.id));
+    if (record?.agent === agent) closeModelStep(record);
+  }
+  function currentModelStep(record) {
+    return (
+      modelSteps.get(record.body.sessionId) === record &&
+      !record.signal.aborted &&
+      record.runs.every(
+        (run) =>
+          authorized.get(lookup(run)) === run && run.expiresAt > Date.now(),
+      )
+    );
+  }
   function release(state) {
     if (!state?.binding) return;
     const binding = state.binding;
@@ -240,6 +262,7 @@ export function installContext(ctx, config, key, route, requestContext) {
   ctx.on(
     'agent/disposed',
     ({ agent }) => {
+      closeAgentModelStep(agent);
       release(agents.get(agent));
       agents.delete(agent);
       earlyInsertions.delete(agent);
@@ -252,6 +275,7 @@ export function installContext(ctx, config, key, route, requestContext) {
     'agent/status',
     ({ agent, status }) => {
       if (status === 'idle') {
+        closeAgentModelStep(agent);
         release(agents.get(agent));
         for (const run of authorized.values())
           if (run.sessionId === String(agent.session.id) && run.claimed)
@@ -260,9 +284,25 @@ export function installContext(ctx, config, key, route, requestContext) {
     },
     { global: true },
   );
+  if (config.modelRoutes)
+    ctx.on(
+      'session/event',
+      (session, event) => {
+        if (event.type !== 'step/end') return;
+        const record = modelSteps.get(String(session.id));
+        if (
+          record?.agent.session === session &&
+          record.body.turn === event.data.turn &&
+          record.body.modelStep.step === event.data.step
+        )
+          closeModelStep(record);
+      },
+      { global: true },
+    );
   ctx.on(
     'agent/pre-step',
-    async ({ agent, turn, step, signal }, next) => {
+    async ({ agent, turn, step, signal, modelSelection }, next) => {
+      closeAgentModelStep(agent);
       const decision = await next();
       if (decision.kind === 'reject' || signal.aborted) return decision;
       let state = agents.get(agent);
@@ -270,6 +310,7 @@ export function installContext(ctx, config, key, route, requestContext) {
         state = { generation: randomUUID() };
         agents.set(agent, state);
       }
+      let record;
       try {
         const prompts = decision.messages.filter((m) =>
           ['user', 'retry'].includes(m.source?.kind),
@@ -317,15 +358,47 @@ export function installContext(ctx, config, key, route, requestContext) {
           ...bindings.at(-1),
           relatedRuns: bindings.slice(0, -1),
         };
-        const { snapshot, digest } = await service(
+        if (config.modelRoutes) {
+          const modelStep = {
+            sequence: ++modelSequence,
+            step,
+            noteId: randomUUID(),
+            provider: modelSelection.provider,
+            model: modelSelection.model,
+          };
+          record = {
+            agent,
+            body: { ...state.binding, modelStep },
+            signal,
+            runs: bindings.map((binding) => authorized.get(lookup(binding))),
+            close: () => closeModelStep(record),
+          };
+          if (record.runs.some((run) => !run))
+            throw new Error('Unbound model step');
+          closeModelStep(modelSteps.get(record.body.sessionId));
+          modelSteps.set(record.body.sessionId, record);
+          signal.addEventListener('abort', record.close, { once: true });
+        }
+        const { snapshot, digest, modelBindingId } = await service(
           'context-read',
-          state.binding,
+          record?.body ?? state.binding,
           signal,
         );
+        if (record) {
+          if (
+            !currentModelStep(record) ||
+            typeof modelBindingId !== 'string' ||
+            !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(
+              modelBindingId,
+            )
+          )
+            throw new Error('Invalid model step response');
+          record.bindingId = modelBindingId;
+        }
         if (signal.aborted || bindings.some((r) => !authorized.has(lookup(r))))
           return { kind: 'reject' };
         const note = Object.freeze({
-          id: randomUUID(),
+          id: record?.body.modelStep.noteId ?? randomUUID(),
           role: 'user',
           source: {
             kind: 'rdws-context',
@@ -348,6 +421,7 @@ export function installContext(ctx, config, key, route, requestContext) {
         });
         return { ...decision, messages: [...decision.messages, note] };
       } catch {
+        closeModelStep(record);
         for (const m of decision.messages) {
           const source = m.source;
           if (!source?.rpcId) continue;
@@ -428,13 +502,29 @@ export function installContext(ctx, config, key, route, requestContext) {
     },
     { global: true },
   );
-  return (authSessionId, requirementId, cutoff) => {
-    for (const [id, run] of authorized)
+  return {
+    revoke(authSessionId, requirementId, cutoff) {
+      for (const [id, run] of authorized)
+        if (
+          run.authSessionId === authSessionId &&
+          run.admittedAt <= cutoff &&
+          (!requirementId || run.requirementId === requirementId)
+        )
+          authorized.delete(id);
+    },
+    modelBindingFor(options) {
+      const record = modelSteps.get(options.sessionId);
+      if (!record?.bindingId || !currentModelStep(record)) return;
+      const { noteId, provider, model } = record.body.modelStep;
+      const note = options.messages.findLast(
+        (m) => m.source?.kind === 'rdws-context',
+      );
       if (
-        run.authSessionId === authSessionId &&
-        run.admittedAt <= cutoff &&
-        (!requirementId || run.requirementId === requirementId)
+        note?.id === noteId &&
+        options.provider === provider &&
+        options.model === model
       )
-        authorized.delete(id);
+        return record.bindingId;
+    },
   };
 }

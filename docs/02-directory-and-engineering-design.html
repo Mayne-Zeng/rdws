@@ -891,6 +891,18 @@
   <p>独立交付二版复审 APPROVE。协议修订前，第四类端点和 <code>Connection</code> 所指定的逐跳报头两项实证失败。其后将路由限制到三类端点路径并拒绝裸 <code>?</code> 与 <code>#</code>，在 HTTP/2 编码前双向剥离所指定的逐跳头。定点追加由真实签名就绪延伸到写完临时就绪文件时中断，最终临时文件、就绪文件与项目锁全部清零，业务回调为零。补审后聚焦两文件 8 项全部通过。</p>
   <p>最终 <code>caffeinate -i pnpm check</code> 返回 0（36 文件、209 项通过、1 项平台条件跳过，类型、lint、格式与构建通过），构建仍提示主包体积。<code>caffeinate -i pnpm test:e2e</code> 返回 0（40 项），<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>feat: add inherited Native model transport</code>。BFF 配置与注入仍只接受 direct 和 paused，后续逐次授权和撤权定序仍为产品启用的硬准入。</p>
 
+  <h4 id="t13-native-model-attempt-authority-20261119">11.16.23 模型尝试的真实步骤绑定与逐次复验</h4>
+  <p>Change / R3，基线 <code>18cc566</code>。§11.16.17 的逐次校验先覆盖锁定 Agent 主步骤及其各 HTTP 尝试。独立 DSH 事实表明，pre-step 的 modelSelection 在该步骤固定，主请求取本步上下文消息。标题走独立 prepareCall 并记录 messageSeqs，须沿独立证据授权。本阶段维持 BFF 仅支持 direct 与 paused；在真实受限 Host 接入既有 ContextRuns 与受信的合成选模策略和回调作实证。实际供应商不可撤回写入、部署启用与其他用途授权仍待交付。</p>
+  <ol>
+    <li>仅在受信拥有者配置内部选择策略时，现有签名 context-read 接受本代单调序号、本步序号、Note ID 与实际 modelSelection。父端验证批次的原登录、Agent 代次、turn 与 relatedRuns；在首次异步业务读取前同步预留位置和废止旧模型步骤。拒绝同代低序和同 Agent 同位次换 nonce。新步失败也保持旧步失效，迟到读回按预留引用拒绝。真实 <code>step/end</code> 或 turn signal 取消时，Native 立即清本地可用绑定，并用签名释放回复前已知的精确序号、Note 和步骤身份。父端以已接收的释放为栅栏，过期释放不能清较新步骤。整 run 的退出、撤权、丢弃和重启语义继续保留。</li>
+    <li>真实权限读取复用原 Actor 批次、归属检查与既有读取预算。受信策略提供本运行实际生效的修订、provider/model、目标表与同步当前性守卫。待生效的下次选择按其原规格，在线停用或移出仍会失效。父端使用不可预测绑定 ID 关联本代会话中当前步骤。ID 仅经专用 IPC/FD 通道传递，正常业务上下文消息和持久 Native 日志继续使用独立 Note。Native 从锁版 Agent-loop 自身依赖解析同模块的 <code>isAgentLoopRequest</code>，仅在真实主循环对象、当前 Note 与原运行均匹配时附带绑定。拒绝同 Note/同会话/无用途的非主循环调用、独立标题与其他用途。共享上传的尝试仍沿原发起者及实际 Fetch.signal，后来的等待者不继承其授权。</li>
+    <li>父级拒绝错误绑定、会话、路线及模型。通过同步 checks 后先认领 attemptId 再等任何复验，每步上限 128。实际回调前同一同步段检查捕获 Host/载体当前性、原批次仍活跃、撤权、最早期限、有效请求 signal，以及选模策略观察的有效修订和路由守卫。通过后直接调用所属进程的回调，不返回可在以后使用的授权结果。实际供应商不可撤回写入仍有自己的定序验收；本轮只验证至回调交付。</li>
+    <li>真实锁定 Agent、独立测试 PostgreSQL 中原 Actor/需求/会话记录、实际 FD4 授权器及合成策略和供应商提供主步骤实证。验证真实同一步收到供应商 429 后重试，同一绑定对应不同 attemptId，分别进行 PG 权限及选模复验并核对回调和供应商计数。验证同 Note 的手工独立流和真实标题回调拒绝，检查供应商请求头、正文和原生历史均无私有绑定。定点覆盖过期、撤权副登录、冷代、错误用途和选模、路由变更、续步替换、新步拒绝后的旧请求、迟到读取/释放、并发重复尝试。令授权读取挂起，等待选模变更或父端已接收关闭/替换而后放行，确认旧回调零到达。验证 Host 守卫。复跑定点、<code>pnpm check</code>、<code>pnpm test:e2e</code> 与基线。BFF 开关与注入仍拒绝 mediated，无部署、迁移、生产依赖或真实供应商调用。</li>
+  </ol>
+  <p>方案独立复审 A/B 均 APPROVE。锁定版 Native、继承通道和隔离 PostgreSQL 实测同一步在 429 后用第二个尝试 ID 成功。每次请求均重查原登录、需求、会话和选模，供应商共收到两次授权调用。独立标题及携带相同 Note 的独立流被拒绝。供应商头与正文、会话事件和 Native 运行文件均无私有绑定。定点回归 5 文件、35 项通过，覆盖回复前释放、重复尝试、旧步骤／Agent 迟到、冷代、撤权、到期、Host 失效和选模变化。实际外发与撤权定序、其他用途授权及 BFF 启用仍按 §11.16.17 交付。</p>
+  <p>独立交付首审 APPROVE_WITH_CHANGES。现有 direct 与隔离受限 Host 复用 PostgreSQL 归属检查及共享读取预算，实际项目错配时供应商零新增。已复现 FD4 流同步关闭早于 close 事件的窗口，修订即时检查流状态并传播取消，保留原有回压、客户端取消及邻流。实际继承通道挂起复验时关闭，供应商零新增。定点反例覆盖载体报头和编码后的私有调用元数据。二轮独立复审 APPROVE，两项 P1 及证据缺口均已关闭。</p>
+  <p>最终 <code>caffeinate -i pnpm check</code> 返回 0（38 文件、224 项通过，1 项按平台跳过，类型、lint、格式及构建通过）。构建仍提示主包体积。<code>caffeinate -i pnpm test:e2e</code> 返回 0（40 项），<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>feat: bind Native model attempts to authorized steps</code>。回退沿 BFF 已有 direct／paused 启动模式，当前改动没有数据库迁移。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

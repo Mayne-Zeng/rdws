@@ -28,6 +28,8 @@ BFF 到本代 Native Web 的 HTTP 和 WebSocket 使用进程就绪时选定的�
 
 内部受限 Host 可经继承 FD 4 将实际模型请求与读取取消交给所属进程的受信回调。双方核对本代握手，并从启动时冻结的路由映射选择目标。该通道使用内存流、受限并发和固定故障信息，本代活性失效时终止模型流。BFF 的配置和注入仍只接受 direct 和 paused。模型通道的关联字段与业务授权分开，实际外发以 T13 逐次授权与撤权定序验收为准。 [通道验收](docs/02-directory-and-engineering-design.html#t13-native-inherited-model-carrier-20261119)
 
+内部验证环境已对真实 Agent 主步骤和每次 HTTP 重试复验原登录批次、需求、会话、有效选模修订及目标路由。父端在受信回调前检查 Host、运行、步骤和请求仍然有效。真实标题及携带相同上下文 Note 的独立请求均被拒绝。生产供应商网络写入与撤权的定序仍待单独验收。 [逐次授权验证](docs/02-directory-and-engineering-design.html#t13-native-model-attempt-authority-20261119)
+
 停用与恢复写入账号代次，登录会话保存发行时的代次。数据库在插入时定序，业务读取和执行检查当前代次。旧登录不会在恢复后重新有效。单项目成员变动对该账号的同项目会话和连接生效。通知失败保留 BFF 截止与 Native 短租约两层不同的证据，已获准的外部请求可能完成。
 
 Native 浏览器传输随页面打开时的登录固定。BFF 在准备工作区前核对 bootstrap 的观察登录，随后对 HTTP 和 WebSocket 核对 Cookie、实际需求归属及原绑定。WebSocket 升级前的授权代次贯穿上游 Peer 建立和后续流量。重连轮换短租约代次时沿用原绑定。原 Cookie 仍有效的连接按其原登录鉴权，撤权时关闭。旧页面发现换登录后释放连接，原草稿仅在当前文档内存保留，当前账号相同且需求授权读回后可复制。 [验收证据](docs/02-directory-and-engineering-design.html#t13-native-login-binding-evidence-20261119)

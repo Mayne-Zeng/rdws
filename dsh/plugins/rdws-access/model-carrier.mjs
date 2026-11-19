@@ -1,12 +1,28 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { Socket } from 'node:net';
 import {
   openModelCarrier,
   snapshotModelRoutes,
 } from '../../bridge/model-carrier.ts';
 
-export function installModelCarrier(ctx, generation, configuredRoutes) {
+export function installModelCarrier(
+  ctx,
+  generation,
+  configuredRoutes,
+  modelBindingFor,
+) {
+  const fromProfile = createRequire(import.meta.url);
+  const fromNative = createRequire(
+    fromProfile.resolve('@deepseek-ai/dsh/package.json'),
+  );
+  const fromAgentLoop = createRequire(
+    fromNative.resolve('@deepseek-ai/dsh-agent-loop/package.json'),
+  );
+  const { isAgentLoopRequest } = fromAgentLoop('@deepseek-ai/dsh-llm');
+  if (typeof isAgentLoopRequest !== 'function')
+    throw new Error('Native model identity unavailable');
   const targets = new Map(
     [...snapshotModelRoutes(configuredRoutes)].map(([id, url]) => [url, id]),
   );
@@ -44,6 +60,10 @@ export function installModelCarrier(ctx, generation, configuredRoutes) {
         model: options.model,
         sessionId: options.sessionId,
         purpose: options.purpose,
+        bindingId:
+          options.purpose === undefined && isAgentLoopRequest(options)
+            ? modelBindingFor(options)
+            : undefined,
       };
       const stream = calls.run(call, () => next()[Symbol.asyncIterator]());
       try {

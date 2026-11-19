@@ -159,15 +159,20 @@ export function apply(ctx, config) {
   }
   const context = openContextIpc(config.contextGeneration);
   ctx.effect(() => context.close);
-  if (config.modelRoutes)
-    installModelCarrier(ctx, config.contextGeneration, config.modelRoutes);
-  const revokeContext = installContext(
+  const contextBinding = installContext(
     ctx,
     config,
     key,
     route,
     context.request,
   );
+  if (config.modelRoutes)
+    installModelCarrier(
+      ctx,
+      config.contextGeneration,
+      config.modelRoutes,
+      contextBinding.modelBindingFor,
+    );
   const presets = installPresets(ctx, config, route);
   route('health', () => ({
     ready: true,
@@ -323,7 +328,7 @@ export function apply(ctx, config) {
     const cutoff = Math.max(revoked.get(id) ?? 0, input.before);
     revoked.set(id, cutoff);
     if (input.invalidateRuns !== false)
-      revokeContext(input.authSessionId, input.requirementId, cutoff);
+      contextBinding.revoke(input.authSessionId, input.requirementId, cutoff);
     const timer = setTimeout(() => {
       if (revoked.get(id) === cutoff) revoked.delete(id);
     }, LEASE_MS + 2000);

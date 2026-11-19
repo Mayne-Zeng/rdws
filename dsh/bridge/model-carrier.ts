@@ -56,6 +56,7 @@ export interface ModelCarrierCall {
   model: string;
   sessionId?: string;
   purpose?: string;
+  bindingId?: string;
 }
 export interface ModelCarrierRequest {
   routeId: string;
@@ -65,6 +66,7 @@ export interface ModelCarrierRequest {
   headers: Headers;
   body: ReadableStream<Uint8Array>;
   signal: AbortSignal;
+  isCurrent(): boolean;
 }
 export interface NativeModelTransport {
   routes: Readonly<Record<string, string>>;
@@ -149,7 +151,9 @@ function decodeCall(raw: unknown): ModelCarrierCall | undefined {
       !named(value.provider) ||
       !named(value.model) ||
       (value.sessionId !== undefined && !named(value.sessionId)) ||
-      (value.purpose !== undefined && !named(value.purpose))
+      (value.purpose !== undefined && !named(value.purpose)) ||
+      (value.bindingId !== undefined &&
+        (typeof value.bindingId !== 'string' || !uuid.test(value.bindingId)))
     )
       return;
     return {
@@ -158,13 +162,14 @@ function decodeCall(raw: unknown): ModelCarrierCall | undefined {
       model: value.model as string,
       sessionId: value.sessionId as string | undefined,
       purpose: value.purpose as string | undefined,
+      bindingId: value.bindingId as string | undefined,
     };
   } catch {
     return;
   }
 }
 
-function bodyOf(stream: Http2Stream) {
+function bodyOf(stream: Readable) {
   return Readable.toWeb(stream, {
     strategy: {
       highWaterMark: stream.readableHighWaterMark,
@@ -282,7 +287,15 @@ export function serveModelCarrier(
       return;
     }
     const controller = new AbortController();
-    stream.once('close', () => controller.abort());
+    const abort = () => controller.abort();
+    stream.once('aborted', abort);
+    stream.once('close', abort);
+    const isCurrent = () =>
+      !stream.closed &&
+      !stream.destroyed &&
+      !controller.signal.aborted &&
+      ready() &&
+      current();
     active++;
     void (async () => {
       try {
@@ -292,10 +305,16 @@ export function serveModelCarrier(
           attemptId,
           call,
           headers: incomingHeaders(headers),
-          body: bodyOf(stream),
+          body: bodyOf(
+            Readable.from(stream, {
+              objectMode: false,
+              highWaterMark: stream.readableHighWaterMark,
+            }),
+          ),
           signal: controller.signal,
+          isCurrent,
         });
-        if (controller.signal.aborted || !ready() || !current()) {
+        if (!isCurrent()) {
           await response.body?.cancel();
           transportFailure(stream, constants.NGHTTP2_CANCEL);
           return;

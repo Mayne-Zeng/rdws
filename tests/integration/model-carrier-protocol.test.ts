@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { connect as connectHttp2, type OutgoingHttpHeaders } from 'node:http2';
+import {
+  connect as connectHttp2,
+  constants,
+  type OutgoingHttpHeaders,
+  type ServerHttp2Stream,
+} from 'node:http2';
 import { createConnection, createServer, type Socket } from 'node:net';
 import { expect, test, vi } from 'vitest';
 import {
@@ -8,6 +13,25 @@ import {
   serveModelCarrier,
   snapshotModelRoutes,
 } from '../../dsh/bridge/model-carrier.ts';
+
+const streamObserver = vi.hoisted(() => ({
+  observe: undefined as ((stream: ServerHttp2Stream) => void) | undefined,
+}));
+vi.mock('node:http2', async (importOriginal) => {
+  const http2 = await importOriginal<typeof import('node:http2')>();
+  return {
+    ...http2,
+    performServerHandshake: (
+      ...args: Parameters<typeof http2.performServerHandshake>
+    ) => {
+      const session = http2.performServerHandshake(...args);
+      session.on('stream', (stream, headers) => {
+        if (headers[':method'] === 'POST') streamObserver.observe?.(stream);
+      });
+      return session;
+    },
+  };
+});
 
 const authority = 'rdws-model-carrier.invalid';
 const routes = snapshotModelRoutes({ files: 'http://127.0.0.1:1/v1/files' });
@@ -227,6 +251,66 @@ test('reading and canceling a model reply signals its callback and preserves a c
       'Native model carrier unavailable',
     );
   } finally {
+    client.close();
+    server.close();
+    sockets.close();
+  }
+});
+
+test('closing the carrier stream fences the request before its close event', async () => {
+  const sockets = await endpoints();
+  let received: ServerHttp2Stream | undefined;
+  let handled: (() => boolean) | undefined;
+  let aborted = false;
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  streamObserver.observe = (stream) => {
+    received = stream;
+  };
+  const server = serveModelCarrier(
+    sockets.server,
+    'generation',
+    routes,
+    async (request) => {
+      request.signal.addEventListener(
+        'abort',
+        () => {
+          aborted = true;
+        },
+        {
+          once: true,
+        },
+      );
+      handled = request.isCurrent;
+      await gate;
+      return new Response();
+    },
+    () => true,
+  );
+  const client = openModelCarrier(sockets.client, 'generation');
+  try {
+    await client.ready;
+    const pending = client
+      .fetch('files', message(), input())
+      .catch((error) => error);
+    await expect.poll(() => Boolean(received && handled)).toBe(true);
+    const stream = received!;
+    const isCurrent = handled!;
+    expect(isCurrent()).toBe(true);
+    let currentWhenAborted: boolean | undefined;
+    stream.prependOnceListener('aborted', () => {
+      currentWhenAborted = isCurrent();
+    });
+    stream.close(constants.NGHTTP2_CANCEL);
+    expect(currentWhenAborted).toBe(false);
+    expect(aborted).toBe(true);
+    finish();
+    expect(await pending).toBeInstanceOf(Error);
+  } finally {
+    finish();
+    streamObserver.observe = undefined;
     client.close();
     server.close();
     sockets.close();

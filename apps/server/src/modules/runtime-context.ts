@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { bodyHash, isRecord, type Grant } from '@rdws/dsh/access';
+import type { ModelCarrierRequest } from '@rdws/dsh/web';
 import {
   businessError,
   digestOf,
@@ -97,9 +98,59 @@ type Run = RunBinding & {
   turn?: number;
   submitted?: boolean;
 };
+type EffectiveModel = {
+  provider: string;
+  model: string;
+  revision: string;
+  routes: Readonly<Record<string, string>>;
+  isCurrent(): boolean;
+};
+type StepMarker = {
+  sequence: number;
+  step: number;
+  noteId: string;
+  provider: string;
+  model: string;
+};
+type ModelStep = {
+  id: string;
+  stamp: StepMarker;
+  batch: Run[];
+  agentGeneration: string;
+  turn: number;
+  closed: boolean;
+  selection?: EffectiveModel;
+  attempts: Set<string>;
+};
+const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+const invalidModel = () => businessError(403, '当前模型尝试未获授权');
+function parseStepMarker(input: unknown): StepMarker {
+  const positive = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+  const named = (value: unknown): value is string =>
+    typeof value === 'string' && value.length > 0 && value.length <= 160;
+  if (
+    !isRecord(input) ||
+    !positive(input.sequence) ||
+    !positive(input.step) ||
+    typeof input.noteId !== 'string' ||
+    !uuid.test(input.noteId) ||
+    !named(input.provider) ||
+    !named(input.model)
+  )
+    return invalidModel();
+  return {
+    sequence: input.sequence,
+    step: input.step,
+    noteId: input.noteId,
+    provider: input.provider,
+    model: input.model,
+  };
+}
 export class ContextRuns {
   private runs = new Map<string, Run>();
   private nonces = new Map<string, number>();
+  private modelSteps = new Map<string, ModelStep>();
   constructor(
     readonly generation: string,
     private verify: (token: unknown) => Grant | undefined,
@@ -114,6 +165,11 @@ export class ContextRuns {
       userId: string,
       requirementId: string,
     ) => boolean,
+    private selectModel?: (
+      who: Actor,
+      requirementId: string,
+      sessionId: string,
+    ) => Promise<EffectiveModel | undefined>,
   ) {}
   admit(
     who: Actor,
@@ -130,7 +186,7 @@ export class ContextRuns {
       businessError(403, '当前运行身份无效');
     const now = Date.now();
     for (const [id, run] of this.runs)
-      if (run.expiresAt <= now) this.runs.delete(id);
+      if (run.expiresAt <= now) this.discard(id);
     const old = [...this.runs.values()].find(
       (r) => r.sessionId === sessionId && r.requestId === requestId,
     );
@@ -174,7 +230,7 @@ export class ContextRuns {
         r.who.authSessionId === authSessionId &&
         (!requirementId || r.requirementId === requirementId)
       )
-        this.runs.delete(id);
+        this.discard(id);
   }
   revokeUser(userId: string, requirementId?: string) {
     for (const [id, r] of this.runs)
@@ -182,14 +238,23 @@ export class ContextRuns {
         r.who.userId === userId &&
         (!requirementId || r.requirementId === requirementId)
       )
-        this.runs.delete(id);
+        this.discard(id);
   }
   clear() {
     this.runs.clear();
     this.nonces.clear();
+    this.modelSteps.clear();
   }
   discard(runId: string) {
+    const run = this.runs.get(runId);
     this.runs.delete(runId);
+    if (!run) return;
+    const step = this.modelSteps.get(run.sessionId);
+    if (step?.batch.includes(run)) {
+      step.closed = true;
+      if (step.batch.every((member) => this.runs.get(member.runId) !== member))
+        this.modelSteps.delete(run.sessionId);
+    }
   }
   submitted(runId: string) {
     const run = this.runs.get(runId);
@@ -202,7 +267,81 @@ export class ContextRuns {
   }
   reconcile(candidates: string[], active: string[]) {
     const keep = new Set(active);
-    for (const id of candidates) if (!keep.has(id)) this.runs.delete(id);
+    for (const id of candidates) if (!keep.has(id)) this.discard(id);
+  }
+  private current(batch: readonly Run[]) {
+    const now = Date.now();
+    return batch.every(
+      (run) =>
+        this.runs.get(run.runId) === run &&
+        run.expiresAt > now &&
+        !this.closing(run.who.authSessionId, run.who.userId, run.requirementId),
+    );
+  }
+  async authorizeModelAttempt<T>(
+    request: Pick<
+      ModelCarrierRequest,
+      'routeId' | 'destination' | 'attemptId' | 'call' | 'signal' | 'isCurrent'
+    >,
+    send: () => T,
+  ): Promise<T> {
+    const { call, attemptId, routeId, destination, signal } = request;
+    const step =
+      typeof call.sessionId === 'string'
+        ? this.modelSteps.get(call.sessionId)
+        : undefined;
+    const selection = step?.selection;
+    if (
+      !step ||
+      step.closed ||
+      !selection ||
+      !this.selectModel ||
+      !request.isCurrent() ||
+      signal.aborted ||
+      call.purpose !== undefined ||
+      call.bindingId !== step.id ||
+      call.provider !== selection.provider ||
+      call.model !== selection.model ||
+      !Object.hasOwn(selection.routes, routeId) ||
+      selection.routes[routeId] !== destination ||
+      !uuid.test(attemptId) ||
+      step.attempts.has(attemptId) ||
+      step.attempts.size >= 128 ||
+      !selection.isCurrent() ||
+      !this.current(step.batch)
+    )
+      return invalidModel();
+    step.attempts.add(attemptId);
+    const run = step.batch[0]!;
+    const { validBefore } = await this.read(
+      run.who,
+      run.requirementId,
+      run.sessionId,
+      step.batch.slice(1).map(({ who }) => who),
+    );
+    const fresh = await this.selectModel(
+      run.who,
+      run.requirementId,
+      run.sessionId,
+    );
+    if (
+      !fresh ||
+      fresh.revision !== selection.revision ||
+      fresh.provider !== selection.provider ||
+      fresh.model !== selection.model ||
+      !Object.hasOwn(fresh.routes, routeId) ||
+      fresh.routes[routeId] !== destination ||
+      !fresh.isCurrent() ||
+      !selection.isCurrent() ||
+      !request.isCurrent() ||
+      signal.aborted ||
+      this.modelSteps.get(run.sessionId) !== step ||
+      step.closed ||
+      !this.current(step.batch) ||
+      !(validBefore > Date.now())
+    )
+      return invalidModel();
+    return send();
   }
   async handle(
     input: unknown,
@@ -216,7 +355,9 @@ export class ContextRuns {
     if (
       !cap ||
       cap.purpose !== 'service' ||
-      !['context-read', 'context-release'].includes(cap.operation ?? '') ||
+      !['context-read', 'context-release', 'model-step-release'].includes(
+        cap.operation ?? '',
+      ) ||
       cap.hostGeneration !== this.generation ||
       !isRecord(input) ||
       cap.bodyHash !== bodyHash(input) ||
@@ -231,6 +372,24 @@ export class ContextRuns {
     ];
     if (inputs.length > 16 || inputs.some((i) => !isRecord(i)))
       businessError(403, '运行批次无效');
+    if (cap.operation === 'model-step-release') {
+      const stamp = parseStepMarker(input.modelStep);
+      const current =
+        typeof input.sessionId === 'string'
+          ? this.modelSteps.get(input.sessionId)
+          : undefined;
+      if (
+        current &&
+        current.batch[0]?.runId === input.runId &&
+        current.agentGeneration === input.agentGeneration &&
+        current.turn === input.turn &&
+        bodyHash(current.stamp) === bodyHash(stamp)
+      )
+        current.closed = true;
+      const result = { released: true };
+      reply?.(result, cap.expiresAt);
+      return result;
+    }
     if (cap.operation === 'context-release') {
       for (const binding of inputs) {
         const existing = this.runs.get(String(binding.runId));
@@ -240,7 +399,7 @@ export class ContextRuns {
             ([key, value]) => binding[key] === value,
           )
         )
-          this.runs.delete(existing.runId);
+          this.discard(existing.runId);
       }
       const result = { released: true };
       reply?.(result, cap.expiresAt);
@@ -296,6 +455,32 @@ export class ContextRuns {
       r.agentGeneration = String(input.agentGeneration);
       r.turn = Number(input.turn);
     }
+    let modelStep: ModelStep | undefined;
+    if (input.modelStep !== undefined) {
+      const stamp = parseStepMarker(input.modelStep);
+      const previous = this.modelSteps.get(run.sessionId);
+      if (
+        !this.selectModel ||
+        new Set(batch).size !== batch.length ||
+        (previous &&
+          (stamp.sequence <= previous.stamp.sequence ||
+            (previous.agentGeneration === input.agentGeneration &&
+              (Number(input.turn) < previous.turn ||
+                (input.turn === previous.turn &&
+                  stamp.step <= previous.stamp.step)))))
+      )
+        return invalidModel();
+      modelStep = {
+        id: randomUUID(),
+        stamp,
+        batch,
+        agentGeneration: String(input.agentGeneration),
+        turn: Number(input.turn),
+        closed: false,
+        attempts: new Set(),
+      };
+      this.modelSteps.set(run.sessionId, modelStep);
+    }
     const { value, validBefore: loginExpiresAt } = await this.read(
       run.who,
       run.requirementId,
@@ -307,16 +492,30 @@ export class ContextRuns {
       cap.expiresAt,
       ...batch.map((r) => r.expiresAt),
     );
-    if (
-      !(validBefore > Date.now()) ||
-      batch.some(
-        (r) =>
-          this.runs.get(r.runId) !== r ||
-          this.closing(r.who.authSessionId, r.who.userId, r.requirementId),
-      )
-    )
+    const selected =
+      modelStep &&
+      (await this.selectModel!(run.who, run.requirementId, run.sessionId));
+    if (!(validBefore > Date.now()) || !this.current(batch))
       businessError(403, '当前运行绑定已失效');
-    reply?.(value, validBefore);
-    return value;
+    let result = value;
+    if (modelStep) {
+      if (
+        !selected ||
+        !selected.isCurrent() ||
+        selected.provider !== modelStep.stamp.provider ||
+        selected.model !== modelStep.stamp.model ||
+        this.modelSteps.get(run.sessionId) !== modelStep ||
+        modelStep.closed ||
+        !isRecord(value)
+      )
+        return invalidModel();
+      modelStep.selection = {
+        ...selected,
+        routes: Object.freeze({ ...selected.routes }),
+      };
+      result = { ...value, modelBindingId: modelStep.id };
+    }
+    reply?.(result, validBefore);
+    return result;
   }
 }

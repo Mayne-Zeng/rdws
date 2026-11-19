@@ -10,7 +10,15 @@ import {
   publicSessionSummary,
   publicFields,
 } from './session-view.ts';
+import {
+  modelFailure,
+  publicAssistantFrame,
+  publicAssistantRecords,
+  publicHistory,
+  publicHistoryEntry,
+} from './history-view.ts';
 export { parseRemoteStreamClientMessage, parseRemoteStreamServerMessage };
+export { publicModelCatalogValue } from './model-catalog-view.ts';
 
 export function createNativeStreamState() {
   return { active: new Map<string, string>(), used: new Set<string>() };
@@ -48,7 +56,6 @@ export function authorizeStreamFrame(
   return frame;
 }
 
-const modelFailure = '本轮模型请求失败，请稍后重试。';
 const sessionFailure = '会话请求暂不可用，请稍后重试。';
 const publicFailureCodes = new Set([
   'gateway/arguments-invalid',
@@ -73,56 +80,6 @@ function publicRemoteFailure(code: unknown) {
     message: sessionFailure,
     details: {},
   };
-}
-
-function projectChunk(record: unknown) {
-  if (
-    !isRecord(record) ||
-    record.type !== 'chunk' ||
-    !isRecord(record.chunk) ||
-    record.chunk.type !== 'finish' ||
-    !isRecord(record.chunk.reason)
-  )
-    return;
-  const { kind } = record.chunk.reason;
-  if (kind === 'error' || kind === 'aborted') {
-    record.chunk = {
-      type: 'finish',
-      reason: {
-        kind,
-        failure: {
-          code: 'UNKNOWN',
-          message: kind === 'aborted' ? '模型请求已中止。' : modelFailure,
-        },
-      },
-    };
-  }
-}
-
-function projectEntry(entry: unknown) {
-  if (!isRecord(entry) || entry.type !== 'event' || !isRecord(entry.event))
-    return;
-  const { type, data } = entry.event;
-  if (!isRecord(data)) return;
-  if (
-    type === 'turn/end' &&
-    isRecord(data.reason) &&
-    data.reason.kind === 'error'
-  ) {
-    data.reason = {
-      kind: 'error',
-      error: { code: 'UNKNOWN', message: modelFailure },
-    };
-  }
-  if (type === 'llm/retry') {
-    data.failure = { code: 'UNKNOWN', message: modelFailure };
-  }
-  if (
-    (type === 'assistant/attempt' || type === 'assistant/message') &&
-    Array.isArray(data.stream)
-  ) {
-    data.stream.forEach(projectChunk);
-  }
 }
 
 function projectSessionEmit(value: Record<string, unknown>) {
@@ -158,16 +115,17 @@ function projectSessionEmit(value: Record<string, unknown>) {
 
 function projectFollow(value: Record<string, unknown>) {
   if (value.type === 'snapshot') {
-    if (!Array.isArray(value.records) || !isRecord(value.header)) return;
-    value.records.forEach(projectEntry);
+    const records = publicHistory(value.records);
+    if (!records || !isRecord(value.header))
+      throw new Error('Invalid history snapshot');
     const baseline = isRecord(value.assistantStream)
       ? value.assistantStream
       : undefined;
     const attempt = isRecord(baseline?.activeAttempt)
       ? baseline.activeAttempt
       : undefined;
-    if (attempt && Array.isArray(attempt.stream))
-      attempt.stream.forEach(projectChunk);
+    const stream = attempt && publicAssistantRecords(attempt.stream);
+    if (attempt && !stream) throw new Error('Invalid assistant baseline');
     return {
       ...publicFields(value, {
         type: ['snapshot'],
@@ -185,7 +143,7 @@ function projectFollow(value: Record<string, unknown>) {
         delegationDepth: 'integer',
         agentPreset: 'text',
       }),
-      records: value.records,
+      records,
       projections: publicProjectionBaseline(value.projections),
       assistantStream: baseline && {
         ...publicFields(baseline, { revision: 'integer' }),
@@ -197,18 +155,20 @@ function projectFollow(value: Record<string, unknown>) {
             startedAfterSeq: 'integer',
             nextIndex: 'integer',
           }),
-          stream: Array.isArray(attempt.stream) ? attempt.stream : [],
+          stream,
         },
       },
     };
   }
-  if (value.type === 'assistant-stream' && isRecord(value.frame)) {
-    projectChunk(value.frame);
-    return { type: 'assistant-stream', frame: value.frame };
+  if (value.type === 'assistant-stream') {
+    const frame = publicAssistantFrame(value.frame);
+    if (!frame) throw new Error('Invalid assistant stream frame');
+    return { type: 'assistant-stream', frame };
   }
   if (value.type === 'event') {
-    projectEntry(value);
-    return { type: 'event', event: value.event };
+    const entry = publicHistoryEntry(value);
+    if (!entry) throw new Error('Invalid history event');
+    return entry;
   }
 }
 
@@ -307,14 +267,16 @@ export function publicNativeSessionResponse(
       let { value } = result;
       switch (method) {
         case '/api/session/page':
-        case '/api/session/events':
-          if (!isRecord(value) || !Array.isArray(value.records)) return;
-          value.records.forEach(projectEntry);
+        case '/api/session/events': {
+          if (!isRecord(value)) return;
+          const records = publicHistory(value.records);
+          if (!records) return;
           value = {
             ...publicFields(value, { cursor: 'integer', hasMore: 'flag' }),
-            records: value.records,
+            records,
           };
           break;
+        }
         case '/api/session/state':
           value = publicSessionState(value);
           if (value === undefined) return;

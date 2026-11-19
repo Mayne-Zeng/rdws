@@ -4,8 +4,12 @@ import { fromNodeHeaders } from 'better-auth/node';
 import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import { acquireAuthority, connectDatabase, releaseAuthority } from '@rdws/db';
 import { Health } from '@rdws/contracts';
-import { resolveNativeModelEgress } from '@rdws/dsh/web';
+import {
+  assertModelCarrierDiagnostics,
+  resolveNativeModelEgress,
+} from '@rdws/dsh/web';
 import { registerWorkbench } from './modules/workbench.ts';
+import { mainModelPolicy } from './modules/model-egress-policy.ts';
 import {
   createAuth,
   logoutRevocationHeader,
@@ -20,6 +24,7 @@ export function buildApp(options: {
   nativeRuntimeRoot?: string;
   nativeProfiles?: ReadonlyMap<string, string>;
   authorityTicket?: string;
+  mainModelPolicy?: unknown;
 }) {
   const modelEgress = resolveNativeModelEgress(
     process.env.RDWS_NATIVE_MODEL_EGRESS,
@@ -29,9 +34,25 @@ export function buildApp(options: {
       'Native Host model egress does not match BFF configuration',
     );
   const ticket = options.authorityTicket;
+  const mediated = modelEgress === 'mediated';
+  if (
+    mediated &&
+    (options.nativeHost || !ticket || process.version !== 'v24.20.0')
+  )
+    throw new Error(
+      'Mediated Native egress requires an owned runtime on Node v24.20.0',
+    );
+  if (mediated !== (options.mainModelPolicy !== undefined))
+    throw new Error(
+      'Mediated Native egress policy and mode must be set together',
+    );
+  const policy = mediated
+    ? mainModelPolicy(options.mainModelPolicy)
+    : undefined;
+  if (mediated) assertModelCarrierDiagnostics();
   if (
     ticket !== undefined &&
-    (modelEgress !== 'paused' || !/^[0-9a-f]{64}$/.test(ticket))
+    (modelEgress === 'direct' || !/^[0-9a-f]{64}$/.test(ticket))
   )
     throw new Error('Invalid database authority startup ticket');
   const proof =
@@ -52,9 +73,11 @@ export function buildApp(options: {
   app.addHook('onReady', async () => {
     authority = await acquireAuthority(
       database.pool,
-      modelEgress === 'paused',
+      modelEgress !== 'direct',
       ticket,
     );
+    if (mediated && !authority)
+      throw new Error('Mediated Native database ownership was not confirmed');
   });
   app.addHook('onClose', () => database.pool.end());
   app.addHook('onRequest', async (request, reply) => {
@@ -126,6 +149,7 @@ export function buildApp(options: {
       options.nativeRuntimeRoot,
       options.nativeProfiles,
       modelEgress,
+      policy,
     );
   });
   app.setErrorHandler((error: FastifyError, _request, reply) => {

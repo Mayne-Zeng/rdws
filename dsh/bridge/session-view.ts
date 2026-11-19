@@ -3,6 +3,8 @@ import { isRecord } from './access.ts';
 const fieldTypes = {
   text: (value: unknown) => typeof value === 'string',
   integer: (value: unknown) => Number.isSafeInteger(value),
+  finite: (value: unknown) =>
+    typeof value === 'number' && Number.isFinite(value),
   nullableInteger: (value: unknown) =>
     value === null || Number.isSafeInteger(value),
   flag: (value: unknown) => typeof value === 'boolean',
@@ -26,7 +28,7 @@ export function publicFields(
 
 const mediaTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
-function publicContent(value: unknown) {
+export function publicContent(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value.filter(isRecord).flatMap<Record<string, unknown>>((part) => {
     if (part.type === 'text')
@@ -138,7 +140,7 @@ function modelChoice(value: unknown) {
     });
 }
 
-function inboxList(value: unknown) {
+export function inboxList(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value.filter(isRecord).flatMap((message) => {
     if (
@@ -147,11 +149,21 @@ function inboxList(value: unknown) {
       !isRecord(message.source)
     )
       return [];
-    const source = publicFields(message.source, {
-      kind: ['user', 'retry', 'context', 'model-selection'],
-      rpcId: 'text',
-      clientTimeZone: 'text',
-    });
+    const { kind } = message.source;
+    const source =
+      kind === 'user' || kind === 'retry'
+        ? {
+            kind,
+            ...publicFields(message.source, {
+              rpcId: 'text',
+              clientTimeZone: 'text',
+            }),
+          }
+        : {
+            kind: publicFields(message.source, {
+              kind: ['context', 'model-selection'],
+            }).kind,
+          };
     if (source.kind === undefined) return [];
     return [
       {

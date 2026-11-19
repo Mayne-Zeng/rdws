@@ -179,6 +179,13 @@ export class ContextRuns {
       requirementId: string,
       sessionId: string,
     ) => Promise<EffectiveModel | undefined>,
+    private lockModelAuthority?: <T>(
+      who: Actor,
+      requirementId: string,
+      sessionId: string,
+      relatedActors: Actor[],
+      write: (validBefore: number) => T,
+    ) => Promise<T>,
   ) {}
   admit(
     who: Actor,
@@ -347,39 +354,48 @@ export class ContextRuns {
       return invalidModel();
     step.attempts.add(attemptId);
     const run = step.batch[0]!;
-    const { validBefore } = await this.read(
-      run.who,
-      run.requirementId,
-      run.sessionId,
-      step.batch.slice(1).map(({ who }) => who),
-    );
+    const related = step.batch.slice(1).map(({ who }) => who);
+    const shared = this.lockModelAuthority
+      ? undefined
+      : await this.read(run.who, run.requirementId, run.sessionId, related);
     const fresh = await this.selectModel(
       run.who,
       run.requirementId,
       run.sessionId,
     );
-    if (
-      !fresh ||
-      fresh.revision !== selection.revision ||
-      fresh.provider !== selection.provider ||
-      fresh.model !== selection.model ||
-      !Object.hasOwn(fresh.routes, routeId) ||
-      fresh.routes[routeId] !== destination ||
-      !fresh.isCurrent() ||
-      !selection.isCurrent() ||
-      !request.isCurrent() ||
-      signal.aborted ||
-      this.modelSteps.get(run.sessionId) !== step ||
-      step.closed ||
-      step.wireAttempt !== undefined ||
-      !this.current(step.batch) ||
-      !(validBefore > Date.now())
-    )
-      return invalidModel();
-    return send(
-      step,
-      Math.min(validBefore, ...step.batch.map(({ expiresAt }) => expiresAt)),
-    );
+    const finalize = (validBefore: number) => {
+      if (
+        !fresh ||
+        fresh.revision !== selection.revision ||
+        fresh.provider !== selection.provider ||
+        fresh.model !== selection.model ||
+        !Object.hasOwn(fresh.routes, routeId) ||
+        fresh.routes[routeId] !== destination ||
+        !fresh.isCurrent() ||
+        !selection.isCurrent() ||
+        !request.isCurrent() ||
+        signal.aborted ||
+        this.modelSteps.get(run.sessionId) !== step ||
+        step.closed ||
+        step.wireAttempt !== undefined ||
+        !this.current(step.batch) ||
+        !(validBefore > Date.now())
+      )
+        return invalidModel();
+      return send(
+        step,
+        Math.min(validBefore, ...step.batch.map(({ expiresAt }) => expiresAt)),
+      );
+    };
+    if (this.lockModelAuthority)
+      return this.lockModelAuthority(
+        run.who,
+        run.requirementId,
+        run.sessionId,
+        related,
+        finalize,
+      );
+    return finalize(shared!.validBefore);
   }
   async handle(
     input: unknown,

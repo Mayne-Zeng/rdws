@@ -24,13 +24,13 @@ Native 上下文读和释放沿正式 Host 启动时继承的子进程 IPC，按
 
 BFF 到本代 Native Web 的 HTTP 和 WebSocket 使用进程就绪时选定的环回地址直连。HTTP 校验完整 origin 后才写出签票，上游 WebSocket 禁用重定向。签名就绪、读取和跟随可在 BFF 启用全局代理时通过本机通道完成。 [验收证据](docs/02-directory-and-engineering-design.html#t13-native-loopback-direct-20261119)
 
-BFF 按实际获准的 Native 流端点投影浏览器会话状态、列表、选模、队列及会话通知。连接内的流 ID 不复用，取消和终态后的迟到帧不转发。公开错误保留已知代码并统一消息与详情。历史扩展事件与模型目录字段仍按 R-05 跟踪。 [范围与证据](docs/02-directory-and-engineering-design.html#t13-egress-projection-plan)
+BFF 按获准的 Native 流端点投影浏览器会话状态、列表、选模、队列、历史与通知。连接内的流 ID 不复用，取消和终态后的迟到帧不转发。公开错误保留已知代码并统一消息与详情。未公开的历史扩展以保留序号的空记录投影，已公开的需求快照保留正文与必要版本字段。模型目录递归核验公开字段。原始历史和派生位置继续由 Native 管理。 [范围与证据](docs/02-directory-and-engineering-design.html#t13-main-bff-egress)
 
 在 macOS 启动 BFF 时可显式将正式 Web Host 设为 `paused`。新 Native 子进程的主动网络连接由 Seatbelt 拒绝，保留本机 Web 入站与继承 IPC。BFF 在核对真实登录、本人会话、请求身份和租约后，于认领前拒绝发送。沙箱失败会阻止启动。切换或回退前要求停止旧 BFF、Native 及独立 SDK；后续统一模型出口与逐次授权按 T13 的独立验收交付。 [暂停与恢复](docs/02-directory-and-engineering-design.html#t13-native-model-egress-pause-20261119)
 
-内部受限 Host 可经继承 FD 4 将实际模型请求与读取取消交给所属进程的受信回调。双方核对本代握手，并从启动时冻结的路由映射选择目标。该通道使用内存流、受限并发和固定故障信息，本代活性失效时终止模型流。BFF 的配置和注入仍只接受 direct 和 paused。模型通道的关联字段与业务授权分开，实际外发以 T13 逐次授权与撤权定序验收为准。 [通道验收](docs/02-directory-and-engineering-design.html#t13-native-inherited-model-carrier-20261119)
+受限 Host 可经继承 FD 4 将实际模型请求与读取取消交给父进程。受管 BFF 按一代冻结的文本主推理策略接线，启动拒绝可观察原始载体的诊断配置。运行账户只加载受信进程代码，运行期间不得动态附加载体诊断订阅。Native 继续管理供应商凭据。 [通道和接线范围](docs/02-directory-and-engineering-design.html#t13-main-bff-egress)
 
-内部验证环境已对真实 Agent 主步骤和每次 HTTP 重试复验原登录批次、需求、会话、有效选模修订及目标路由。父端在受信回调前检查 Host、运行、步骤和请求仍然有效。真实标题及携带相同上下文 Note 的独立请求均被拒绝。生产供应商网络写入与撤权的定序仍待单独验收。 [逐次授权验证](docs/02-directory-and-engineering-design.html#t13-native-model-attempt-authority-20261119)
+正式 BFF 的受管主推理对原登录批次、权限与本人会话采取持锁复核，并在同一同步段提交 TLS 首段。已提交的原连接允许完成。关停须先排空载体、在途事务与供应商 TCP，再释放数据库所有者。运行中维持同库受管位，DBA 确认停稳后方可变更。独立标题、附件接线及具名部署验收继续跟踪。 [逐次授权与定序](docs/02-directory-and-engineering-design.html#t13-main-bff-egress)
 
 主推理 TLS 1.3 转发在锁定的 macOS Node 24.20.0 环境完成回环验收。受信回调在同一同步段复核授权与最早期限，提交加密首段。步骤中只有明确零写入或完整验证的供应商 429 可开放下一次写入。转发先检查 HTTP 诊断与 TLS keylog，回归用合成标记检查性能记录、输出和运行产物。正式供应商接线及部署诊断仍待验收。 [TLS 转发验证](docs/02-directory-and-engineering-design.html#t13-tls13-first-write-20261119)
 

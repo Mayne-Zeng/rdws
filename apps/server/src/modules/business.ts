@@ -1379,6 +1379,50 @@ export function createBusiness(db: Database) {
       { isolationLevel: 'read committed' },
     );
   }
+  async function withModelAuthority<T>(
+    who: Actor,
+    projectId: string,
+    requirementId: string,
+    sessionId: string,
+    relatedActors: Actor[],
+    write: (validBefore: number) => T,
+  ): Promise<T> {
+    const deadline = Date.now() + 1800;
+    return db.transaction(
+      async (tx) => {
+        await tx.execute(sql`set local transaction_timeout='2400ms'`);
+        await tx.execute(sql`set local statement_timeout='950ms'`);
+        await tx.execute(sql`set local lock_timeout='650ms'`);
+        await tx.execute(sql`update ${schema.session} set id = id where false`);
+        let validBefore = deadline;
+        const actors = [who, ...relatedActors].sort((a, b) =>
+          a.authSessionId.localeCompare(b.authSessionId),
+        );
+        for (const actor of actors) {
+          if (actor.userId !== who.userId) businessError(403, '批次身份不匹配');
+          const { session } = await identity(tx, actor, projectId, [], true);
+          validBefore = Math.min(validBefore, session.expiresAt.getTime());
+        }
+        await scope(tx, who, requirementId, true, projectId);
+        const [owned] = await tx
+          .select({ id: schema.nativeSession.id })
+          .from(schema.nativeSession)
+          .where(
+            and(
+              eq(schema.nativeSession.id, sessionId),
+              eq(schema.nativeSession.requirementId, requirementId),
+              eq(schema.nativeSession.ownerId, who.userId),
+            ),
+          )
+          .for('share');
+        if (!owned || validBefore <= Date.now())
+          businessError(403, '当前运行身份无效');
+        return write(validBefore);
+      },
+      { isolationLevel: 'read committed' },
+    );
+  }
+
   async function readWithDeadline(
     who: Actor,
     id: string,
@@ -2336,6 +2380,7 @@ export function createBusiness(db: Database) {
     execute,
     read,
     readWithDeadline,
+    withModelAuthority,
     sessionTransaction,
     sessionTemplate,
     approvedTemplateReferences,

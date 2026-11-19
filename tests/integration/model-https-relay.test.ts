@@ -239,28 +239,40 @@ test
     const abort = new AbortController();
     const input = attempt(tap.destination, modelBody, abort.signal);
     let entered = false;
+    let settled = false;
+    let resumeAuthorization!: () => void;
+    const pendingAuthorization = new Promise<void>((resolve) => {
+      resumeAuthorization = resolve;
+    });
     try {
-      await expect(
-        relay(input, async (write) => {
-          await tap.tlsReady;
-          entered = true;
-          await setImmediate();
-          expect(tap.received()).toBe(0);
-          if (cause === 'revoked') input.isCurrent = () => false;
-          if (cause === 'canceled') abort.abort();
-          const outcome = write(
-            cause === 'expired' ? Date.now() - 1 : Infinity,
-          );
-          expect(outcome).toBe('not-sent');
-          if (cause === 'canceled') await new Promise<never>(() => {});
-          return { outcome, accept429() {} };
-        }),
-      ).rejects.toThrow(errorMessage);
+      const running = relay(input, async (write) => {
+        await tap.tlsReady;
+        entered = true;
+        await setImmediate();
+        expect(tap.received()).toBe(0);
+        if (cause === 'revoked') input.isCurrent = () => false;
+        if (cause === 'canceled') abort.abort();
+        const outcome = write(cause === 'expired' ? Date.now() - 1 : Infinity);
+        expect(outcome).toBe('not-sent');
+        if (cause === 'canceled') await pendingAuthorization;
+        return { outcome, accept429() {} };
+      });
+      const observed = running.catch((error: unknown) => {
+        settled = true;
+        return error;
+      });
+      if (cause === 'canceled') {
+        await expect.poll(tap.senderClosed).toBe(true);
+        expect(settled).toBe(false);
+        resumeAuthorization();
+      }
+      expect(await observed).toMatchObject({ message: errorMessage });
       expect(entered).toBe(true);
       await expect.poll(tap.senderClosed).toBe(true);
       expect(tap.received()).toBe(0);
       expect(requests).toBe(0);
     } finally {
+      resumeAuthorization();
       await Promise.all([tap.close(), target.close()]);
     }
   },

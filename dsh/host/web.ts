@@ -37,6 +37,7 @@ import {
 } from './presets.ts';
 export { isDemandPreset } from './presets.ts';
 export type { ModelCarrierRequest } from '../bridge/model-carrier.ts';
+export { assertModelCarrierDiagnostics } from '../bridge/model-carrier.ts';
 export {
   createModelHttpsRelay,
   type ModelWireCommit,
@@ -141,13 +142,18 @@ export async function projectNativeConfiguration(
   return directory;
 }
 
-export type NativeModelEgress = 'direct' | 'paused';
+export type NativeModelEgress = 'direct' | 'paused' | 'mediated';
 
 export function resolveNativeModelEgress(value?: string): NativeModelEgress {
   if (value === undefined || value === 'direct') return 'direct';
-  if (value !== 'paused') throw new Error('Invalid RDWS_NATIVE_MODEL_EGRESS');
+  if (value !== 'paused' && value !== 'mediated')
+    throw new Error('Invalid RDWS_NATIVE_MODEL_EGRESS');
   if (process.platform !== 'darwin')
-    throw new Error('Paused Native model egress requires macOS');
+    throw new Error(
+      value === 'paused'
+        ? 'Paused Native model egress requires macOS'
+        : 'Mediated Native model egress requires macOS',
+    );
   return value;
 }
 
@@ -189,7 +195,7 @@ export class NativeWebHost {
     handle: NativeModelTransport['handle'];
     signal?: AbortSignal;
   };
-  private closeCarrier?: () => void;
+  private closeCarrier?: () => Promise<void>;
   get signal() {
     return this.invalidation.signal;
   }
@@ -198,7 +204,7 @@ export class NativeWebHost {
     readonly configurationHome?: string,
     readonly projectId: string = LEGACY_POC_PROJECT_ID,
     release: readonly ReleasedCapability[] = capabilityRelease,
-    readonly modelEgress: NativeModelEgress | 'mediated' = 'direct',
+    readonly modelEgress: NativeModelEgress = 'direct',
     modelTransport?: NativeModelTransport,
   ) {
     if (modelEgress === 'mediated') {
@@ -453,6 +459,8 @@ export class NativeWebHost {
       );
       const pkg = req.resolve('@deepseek-ai/dsh/package.json');
       const meta = JSON.parse(await readFile(pkg, 'utf8'));
+      if (this.modelEgress === 'mediated' && meta.version !== '0.2.2-rc.3')
+        throw new Error('Mediated Native egress requires DSH 0.2.2-rc.3');
       const bin = join(dirname(pkg), meta.bin.dsh);
       await mkdir(this.demandRoot, { recursive: true, mode: 0o700 });
       const env: NodeJS.ProcessEnv = {
@@ -535,7 +543,7 @@ export class NativeWebHost {
       let carrier: ReturnType<typeof serveModelCarrier> | undefined;
       const invalidate = () => {
         stopContext();
-        carrier?.close();
+        void carrier?.close();
         if (this.process !== child) return;
         exited = true;
         this.origin = '';
@@ -764,7 +772,7 @@ export class NativeWebHost {
     const child = this.process;
     this.ready = false;
     this.origin = '';
-    this.closeCarrier?.();
+    const carrierClosed = this.closeCarrier?.();
     this.closeCarrier = undefined;
     if (child?.pid && child.exitCode === null && child.signalCode === null) {
       await new Promise<void>((resolve, reject) => {
@@ -782,6 +790,7 @@ export class NativeWebHost {
         child.kill('SIGTERM');
       });
     }
+    await carrierClosed;
     this.process = undefined;
     this.key = '';
     if (this.lock) {

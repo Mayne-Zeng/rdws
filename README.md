@@ -81,6 +81,10 @@ macOS 的正式 Web Host 支持启动时暂停。先停止旧 BFF、它启动的
 
 未受管数据库恢复 direct 前，先停稳暂停的 BFF 与 Native，再在已授权的环境显式用 `RDWS_NATIVE_MODEL_EGRESS=direct` 重启。未设置变量的本地开发沿用 direct。回退时保留支持暂停的配套版本和显式设置。回到旧版本时，先保持 BFF 与 Native 关闭，或先验收独立的部署层外发阻断。`pnpm test:web-live tests/web-live/model-egress-pause.spec.ts` 使用合成供应商验证本机切换。 [实施与验收](docs/02-directory-and-engineering-design.html#t13-native-model-egress-pause-20261119)
 
+本机主推理接线可用 `RDWS_NATIVE_MODEL_EGRESS=mediated`、`RDWS_AUTHORITY_TICKET_FILE` 和 `RDWS_MAIN_MODEL_POLICY_FILE` 启动。要求 macOS、Node 24.20.0、锁定版 DSH 和已预登记的同库所有者启动票。策略文件使用绝对路径，须是运行账户私有、最多 4096 字节的普通 JSON 文件，字段为 `projectId`、`provider`、`model` 和 `destination`。目的地为精确的 HTTPS Chat Completions 路由，策略文件不含供应商凭据。
+
+目标项目使用 `$RDWS_HOME/config/projects/<id>/dsh/` 的 Native Profile，包含预置项目 `poc`。启动会核对持久所有者。Host 按需启用，实际步骤的选模或路由与冻结策略不匹配时拒绝外发。受管模式只接文本主推理及符合既有条件的重试，其它项目按 paused 处理。停稳模型出口后才能释放持久占位并换票回退到 paused。生产部署和真实供应商仍按独立验收办理。 [主推理接线](docs/02-directory-and-engineering-design.html#t13-main-bff-egress)
+
 ### 需求维护（T11）
 
 当前项目管理员及同时具备项目和需求身份的需求经理，可在「需求档案 → 基本信息」编辑标题、需求说明和验收标准。保存按原命令记录修改，活动区显示操作者与变更字段。若结果未确认，可回到原需求重试原保存。若原操作未提交，重试会应用原先改动的字段。保存和回读各自显示状态。 [需求资料编辑验收](docs/02-directory-and-engineering-design.html#t11-details-delivery-20261119)

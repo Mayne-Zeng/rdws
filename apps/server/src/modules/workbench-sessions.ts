@@ -202,8 +202,8 @@ export function registerSessions(
         'agent/error': '本轮发生错误',
       };
       const events = page.records.flatMap(({ event }) => {
+        if (!Object.hasOwn(labels, event.type)) return [];
         const label = labels[event.type];
-        if (!label) return [];
         let text: string | undefined;
         if (['user/message', 'assistant/message'].includes(event.type)) {
           if (

@@ -522,12 +522,16 @@ test.skipIf(process.platform !== 'darwin')(
   },
 );
 
-test('the BFF cannot enable or inject a mediated Host', () => {
+test('the BFF requires ownership and will not substitute an injected mediated Host', () => {
   const options = { databaseUrl: '', secret: '', origin: 'http://127.0.0.1:1' };
   const mode = process.env.RDWS_NATIVE_MODEL_EGRESS;
   try {
     process.env.RDWS_NATIVE_MODEL_EGRESS = 'mediated';
-    expect(() => buildApp(options)).toThrow('Invalid RDWS_NATIVE_MODEL_EGRESS');
+    expect(() => buildApp(options)).toThrow(
+      process.platform === 'darwin'
+        ? 'requires an owned runtime'
+        : 'requires macOS',
+    );
     if (process.platform === 'darwin') {
       delete process.env.RDWS_NATIVE_MODEL_EGRESS;
       const host = new NativeWebHost(
@@ -546,6 +550,20 @@ test('the BFF cannot enable or inject a mediated Host', () => {
       expect(() => buildApp({ ...options, nativeHost: host })).toThrow(
         'Native Host model egress does not match BFF configuration',
       );
+      process.env.RDWS_NATIVE_MODEL_EGRESS = 'mediated';
+      expect(() =>
+        buildApp({
+          ...options,
+          nativeHost: host,
+          authorityTicket: 'c'.repeat(64),
+          mainModelPolicy: {
+            projectId: 'poc',
+            provider: 'rdws-glm',
+            model: 'fixture',
+            destination: 'https://127.0.0.1:1/v1/chat/completions',
+          },
+        }),
+      ).toThrow('requires an owned runtime');
     }
   } finally {
     if (mode === undefined) delete process.env.RDWS_NATIVE_MODEL_EGRESS;

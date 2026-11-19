@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { hasSubscribers } from 'node:diagnostics_channel';
+import { debuglog } from 'node:util';
 import { once } from 'node:events';
 import {
   connect,
@@ -22,6 +24,30 @@ const attemptHeader = 'x-rdws-carrier-attempt';
 const callHeader = 'x-rdws-carrier-call';
 const version = '1';
 const maxStreams = 16;
+const carrierDiagnostics = [
+  'http2.server.stream.created',
+  'http2.server.stream.start',
+  'http2.server.stream.error',
+  'http2.server.stream.finish',
+  'http2.server.stream.close',
+  'http2.client.stream.created',
+  'http2.client.stream.start',
+  'http2.client.stream.error',
+  'http2.client.stream.bodyChunkSent',
+  'http2.client.stream.bodySent',
+  'http2.client.stream.finish',
+  'http2.client.stream.close',
+];
+const http2Debug = debuglog('http2');
+
+export function assertModelCarrierDiagnostics() {
+  if (
+    http2Debug.enabled ||
+    process.env.NODE_DEBUG_NATIVE ||
+    carrierDiagnostics.some(hasSubscribers)
+  )
+    throw new Error('Native model carrier diagnostics are not private');
+}
 const idleMs = 30000;
 const settings = { headerTableSize: 0, maxConcurrentStreams: maxStreams };
 const limits = {
@@ -198,18 +224,33 @@ export function serveModelCarrier(
   current: () => boolean,
   lifecycle?: AbortSignal,
 ) {
+  assertModelCarrierDiagnostics();
   const session = performServerHandshake(socket, limits);
   managed(session);
   let remote = false,
     acknowledged = false,
     identity = false,
-    active = 0;
-  const close = () => session.destroy();
+    accepting = true;
+  const active = new Set<Promise<void>>();
+  const ended = new Promise<void>((resolve) => session.once('close', resolve));
+  const stop = () => {
+    accepting = false;
+    session.destroy();
+  };
+  const close = async () => {
+    stop();
+    await ended;
+    await Promise.allSettled([...active]);
+  };
   const ready = () =>
-    identity && !session.closed && !session.destroyed && !lifecycle?.aborted;
-  if (lifecycle?.aborted) close();
-  else lifecycle?.addEventListener('abort', close, { once: true });
-  session.once('close', () => lifecycle?.removeEventListener('abort', close));
+    accepting &&
+    identity &&
+    !session.closed &&
+    !session.destroyed &&
+    !lifecycle?.aborted;
+  if (lifecycle?.aborted) stop();
+  else lifecycle?.addEventListener('abort', stop, { once: true });
+  session.once('close', () => lifecycle?.removeEventListener('abort', stop));
   session.once('remoteSettings', () => {
     remote = true;
   });
@@ -281,7 +322,7 @@ export function serveModelCarrier(
       !call ||
       typeof attemptId !== 'string' ||
       !uuid.test(attemptId) ||
-      active >= maxStreams
+      active.size >= maxStreams
     ) {
       transportFailure(stream);
       return;
@@ -296,9 +337,9 @@ export function serveModelCarrier(
       !controller.signal.aborted &&
       ready() &&
       current();
-    active++;
-    void (async () => {
+    const task = (async () => {
       try {
+        assertModelCarrierDiagnostics();
         const response = await handle({
           routeId,
           destination,
@@ -348,10 +389,10 @@ export function serveModelCarrier(
         else stream.end();
       } catch {
         transportFailure(stream, constants.NGHTTP2_INTERNAL_ERROR);
-      } finally {
-        active--;
       }
     })();
+    active.add(task);
+    void task.then(() => active.delete(task));
   });
   return {
     get ready() {
@@ -365,6 +406,7 @@ export function serveModelCarrier(
 }
 
 export function openModelCarrier(socket: Duplex, generation: string) {
+  assertModelCarrierDiagnostics();
   const session = connect('http://' + authority, {
     ...limits,
     createConnection: () => socket,

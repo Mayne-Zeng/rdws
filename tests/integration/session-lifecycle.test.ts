@@ -226,8 +226,10 @@ const inferenceRecords = [
       time: 1,
       surfaceOp: 'append',
       data: {
+        id: 'fixture-user',
+        role: 'user',
         source: { kind: 'user' },
-        message: { content: inferenceDiagnostic },
+        content: [{ type: 'text', text: inferenceDiagnostic }],
       },
     },
   },
@@ -243,7 +245,13 @@ const inferenceRecords = [
         step: 1,
         ...(type === 'assistant/message'
           ? {
-              message: assistantMessage,
+              message: {
+                ...assistantMessage,
+                source: {
+                  ...assistantMessage.source,
+                  replayState: inferenceDiagnostic,
+                },
+              },
               interrupted: true,
               stream: [
                 {
@@ -271,11 +279,11 @@ const inferenceRecords = [
         turn: 1,
         step: 1,
         provider: 'fixture',
-        mode: 'normal',
+        mode: inferenceDiagnostic,
         policyKey: 'normal',
         retry: 1,
         maxRetries: 2,
-        delayMs: 200,
+        delayMs: 200.5,
         failure: inferenceFailure,
       },
     },
@@ -290,6 +298,85 @@ const inferenceRecords = [
     },
   },
 ];
+const opaqueExtension = {
+  type: 'event',
+  event: {
+    type: 'supplier/' + inferenceDiagnostic,
+    seq: 6,
+    time: 2,
+    ignorable: true,
+    data: { raw: inferenceDiagnostic },
+    surfaceOp: { diagnostic: inferenceDiagnostic },
+  },
+};
+const redactedExtension = {
+  type: 'event',
+  event: { type: 'rdws/redacted', seq: 6, time: 2, ignorable: true, data: {} },
+};
+const replacement = {
+  type: 'event',
+  event: {
+    type: 'user/message',
+    seq: 7,
+    time: 3,
+    surfaceOp: { op: 'replace', startSeq: 1, endSeq: 1 },
+    sourceEventSeqs: [1],
+    data: {
+      id: 'replacement',
+      role: 'user',
+      source: { kind: 'model-selection' },
+      content: [
+        { type: 'text', text: 'Replacement' },
+        {
+          type: 'file',
+          attachment: {
+            attachmentId: 'fixture-file',
+            name: 'fixture.txt',
+            bytes: 3,
+          },
+        },
+      ],
+    },
+  },
+};
+const noisyReplacement = {
+  ...replacement,
+  event: {
+    ...replacement.event,
+    data: {
+      ...replacement.event.data,
+      source: {
+        kind: 'model-selection',
+        rpcId: inferenceDiagnostic,
+        clientTimeZone: inferenceDiagnostic,
+      },
+    },
+  },
+};
+const malformedContext = {
+  type: 'event',
+  event: {
+    type: 'user/message',
+    seq: 8,
+    time: 2,
+    surfaceOp: 'append',
+    data: {
+      id: 'synthetic-attachment',
+      role: 'user',
+      source: { kind: 'rdws-context' },
+      content: [
+        {
+          type: 'file',
+          attachment: {
+            attachmentId: 'synthetic-file',
+            name: inferenceDiagnostic,
+            bytes: 1,
+          },
+        },
+      ],
+    },
+  },
+};
 
 test('Native inference diagnostics are projected from HTTP session history without modifying message text', async () => {
   const { app, id, source, cookie, host } = await fixture();
@@ -329,7 +416,16 @@ test('Native inference diagnostics are projected from HTTP session history witho
             ...envelope,
             result: {
               ok: true,
-              value: { cursor: 5, hasMore: false, records: inferenceRecords },
+              value: {
+                cursor: 8,
+                hasMore: false,
+                records: [
+                  ...inferenceRecords,
+                  opaqueExtension,
+                  noisyReplacement,
+                  malformedContext,
+                ],
+              },
             },
           },
           { headers: { 'x-native-diagnostic': inferenceDiagnostic } },
@@ -343,17 +439,23 @@ test('Native inference diagnostics are projected from HTTP session history witho
       );
       expect(
         records.map((row: { event: { seq: number } }) => row.event.seq),
-      ).toEqual([1, 2, 3, 4, 5]);
+      ).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+      expect(records[5]).toEqual(redactedExtension);
+      expect(records[6]).toEqual(replacement);
+      expect(records[7]).toEqual({
+        ...redactedExtension,
+        event: { ...redactedExtension.event, seq: 8 },
+      });
       expect(records[3].event.data).toMatchObject({
         retryId: 'fixture-retry',
         retry: 1,
-        delayMs: 200,
+        delayMs: 200.5,
       });
       expect(records[4].event.data.reason.kind).toBe('error');
       expect(records[1].event.data.stream[0].chunk.reason.kind).toBe('error');
       expect(records[2].event.data.message).toEqual(assistantMessage);
       expect(records[2].event.data.stream[0].chunk.reason.kind).toBe('aborted');
-      expect(cursor).toBe(5);
+      expect(cursor).toBe(8);
       expect(hasMore).toBe(false);
       expect(response.headers['x-native-diagnostic']).toBeUndefined();
     }
@@ -618,11 +720,11 @@ test('Native inference diagnostics are projected from live and resumed WebSocket
       value: {
         type: 'snapshot',
         header: { id: source, version: 4, createdAt: 1, isSeeded: false },
-        cursor: 5,
+        cursor: 6,
         hasMore: false,
-        records: inferenceRecords,
+        records: [...inferenceRecords, opaqueExtension],
         projections: {
-          asOfSeq: 5,
+          asOfSeq: 6,
           values: {
             inbox: {
               'next-step': [],
@@ -646,9 +748,19 @@ test('Native inference diagnostics are projected from live and resumed WebSocket
             attemptId: 'attempt',
             turn: 1,
             step: 1,
-            startedAfterSeq: 5,
-            nextIndex: 1,
-            stream: failedStream,
+            startedAfterSeq: 6,
+            nextIndex: 2,
+            stream: [
+              ...failedStream,
+              {
+                type: 'text-chunks',
+                time0: 1,
+                index: 0,
+                dt: [],
+                texts: ['Buffered content'],
+                providerDiagnostic: inferenceDiagnostic,
+              },
+            ],
           },
         },
       },
@@ -663,9 +775,13 @@ test('Native inference diagnostics are projected from live and resumed WebSocket
     expect(JSON.stringify(snapshot.value.assistantStream)).not.toContain(
       inferenceDiagnostic,
     );
-    expect(snapshot.value.assistantStream.activeAttempt.nextIndex).toBe(1);
+    expect(snapshot.value.records.at(-1)).toEqual(redactedExtension);
+    expect(snapshot.value.assistantStream.activeAttempt.nextIndex).toBe(2);
+    expect(
+      snapshot.value.assistantStream.activeAttempt.stream[1].texts,
+    ).toEqual(['Buffered content']);
     expect(snapshot.value.projections).toEqual({
-      asOfSeq: 5,
+      asOfSeq: 6,
       values: { inbox: { 'next-step': [], 'next-turn': [queued] } },
     });
     const chunk = await receive({
@@ -676,8 +792,8 @@ test('Native inference diagnostics are projected from live and resumed WebSocket
         frame: {
           type: 'chunk',
           attemptId: 'attempt',
-          revision: 2,
-          index: 1,
+          revision: 3,
+          index: 2,
           time: 1,
           chunk: finish,
         },
@@ -685,8 +801,8 @@ test('Native inference diagnostics are projected from live and resumed WebSocket
     });
     expect(JSON.stringify(chunk)).not.toContain(inferenceDiagnostic);
     expect(chunk.value.frame).toMatchObject({
-      index: 1,
-      revision: 2,
+      index: 2,
+      revision: 3,
       chunk: { type: 'finish', reason: { kind: 'error' } },
     });
     const end = {
@@ -697,8 +813,8 @@ test('Native inference diagnostics are projected from live and resumed WebSocket
         frame: {
           type: 'end',
           attemptId: 'attempt',
-          revision: 2,
-          index: 2,
+          revision: 4,
+          index: 3,
           outcome: {
             kind: 'committed',
             eventType: 'assistant/attempt',
@@ -708,6 +824,15 @@ test('Native inference diagnostics are projected from live and resumed WebSocket
       },
     };
     expect(await receive(end)).toEqual(end);
+    expect(
+      (
+        await receive({
+          type: 'item',
+          streamId: 'follow',
+          value: noisyReplacement,
+        })
+      ).value,
+    ).toEqual(replacement);
     await open('observe', 'session/observeEvent', { request: session });
     const event = await receive({
       type: 'item',
@@ -718,7 +843,7 @@ test('Native inference diagnostics are projected from live and resumed WebSocket
     expect(event.value.event).toMatchObject({
       type: 'llm/retry',
       seq: 4,
-      data: { retry: 1, delayMs: 200 },
+      data: { retry: 1, delayMs: 200.5 },
     });
     const completed = await receive({
       type: 'item',
@@ -727,6 +852,40 @@ test('Native inference diagnostics are projected from live and resumed WebSocket
     });
     expect(JSON.stringify(completed)).not.toContain(inferenceDiagnostic);
     expect(completed.value.event).toMatchObject({ type: 'turn/end', seq: 5 });
+    expect(
+      (
+        await receive({
+          type: 'item',
+          streamId: 'observe',
+          value: opaqueExtension,
+        })
+      ).value,
+    ).toEqual(redactedExtension);
+    const retryStarted = await receive({
+      type: 'item',
+      streamId: 'observe',
+      value: {
+        type: 'event',
+        event: {
+          type: 'llm/retry-started',
+          seq: 7,
+          time: 3,
+          data: {
+            retryId: 'next',
+            turn: 1,
+            step: 1,
+            retry: 1,
+            provider: inferenceDiagnostic,
+          },
+        },
+      },
+    });
+    expect(retryStarted.value.event.data).toEqual({
+      retryId: 'next',
+      turn: 1,
+      step: 1,
+      retry: 1,
+    });
     const logicalError = await receive({
       type: 'error',
       streamId: 'observe',
@@ -761,9 +920,20 @@ test('the model catalog forwards available models without exposing Native diagno
   const diagnostic = 'synthetic-private-provider-diagnostic';
   const rpcId = randomUUID();
   const model = { id: 'test-model', name: 'Test model' };
+  const reasoning = {
+    efforts: [{ id: 'high', name: 'High' }],
+    defaultEffort: 'high',
+  };
+  const badge = { text: { en: 'Preview', 'zh-cn': '预览' }, tone: 'info' };
   const catalog = {
     default: { provider: 'available', model: model.id },
-    groups: [{ id: 'available', name: 'Available', models: [model] }],
+    groups: [
+      {
+        id: 'available',
+        name: 'Available',
+        models: [{ ...model, reasoning, badge }],
+      },
+    ],
     routableProviders: ['available'],
     failures: [{ id: 'unavailable', name: 'Unavailable', message: diagnostic }],
   };
@@ -795,7 +965,44 @@ test('the model catalog forwards available models without exposing Native diagno
   try {
     const partial = await requestCatalog(
       Response.json(
-        { ...envelope, result: { ok: true, value: catalog } },
+        {
+          ...envelope,
+          result: {
+            ok: true,
+            value: {
+              ...catalog,
+              default: { ...catalog.default, apiKey: diagnostic },
+              groups: [
+                {
+                  ...catalog.groups[0],
+                  endpoint: diagnostic,
+                  models: [
+                    {
+                      ...model,
+                      credentials: { token: diagnostic },
+                      reasoning: {
+                        defaultEffort: diagnostic,
+                        efforts: [
+                          { ...reasoning.efforts[0], stack: diagnostic },
+                        ],
+                      },
+                      badge: {
+                        ...badge,
+                        text: {
+                          ...badge.text,
+                          BAD_KEY: diagnostic,
+                          es: diagnostic,
+                        },
+                        service: diagnostic,
+                      },
+                    },
+                  ],
+                },
+              ],
+              routableProviders: ['available', 1, diagnostic, 'available'],
+            },
+          },
+        },
         { headers: { 'x-native-diagnostic': diagnostic } },
       ),
     );
@@ -809,6 +1016,14 @@ test('the model catalog forwards available models without exposing Native diagno
         ok: true,
         value: {
           ...catalog,
+          groups: [
+            {
+              ...catalog.groups[0],
+              models: [
+                { ...model, badge, reasoning: { efforts: reasoning.efforts } },
+              ],
+            },
+          ],
           failures: [
             {
               id: 'unavailable',
@@ -819,6 +1034,16 @@ test('the model catalog forwards available models without exposing Native diagno
         },
       },
     });
+
+    const valid = await requestCatalog(
+      Response.json({
+        ...envelope,
+        result: { ok: true, value: catalog },
+      }),
+    );
+    expect(valid.json().result.value.groups[0].models[0].reasoning).toEqual(
+      reasoning,
+    );
 
     const failure = await requestCatalog(
       Response.json({

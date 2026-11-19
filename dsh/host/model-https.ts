@@ -159,7 +159,7 @@ function hasResponseFraming(incoming: IncomingMessage) {
         Number.isSafeInteger(Number(length));
 }
 
-function responseStream(incoming: IncomingMessage, stop: () => void) {
+function responseStream(incoming: IncomingMessage, drain: () => Promise<void>) {
   const body = incoming[Symbol.asyncIterator]();
   let cancelled = false;
   return new ReadableStream<Uint8Array>({
@@ -169,17 +169,17 @@ function responseStream(incoming: IncomingMessage, stop: () => void) {
         if (cancelled) return;
         if (part.done) {
           if (!incoming.complete) throw unavailable();
-          controller.close();
-          stop();
+          await drain();
+          if (!cancelled) controller.close();
         } else controller.enqueue(part.value);
       } catch {
+        await drain();
         if (!cancelled) controller.error(unavailable());
-        stop();
       }
     },
     cancel() {
       cancelled = true;
-      stop();
+      return drain();
     },
   });
 }
@@ -187,6 +187,7 @@ function responseStream(incoming: IncomingMessage, stop: () => void) {
 export function createModelHttpsRelay(
   destination: string,
   ca?: string | Buffer,
+  projectBody?: (body: Buffer) => Buffer | undefined,
 ) {
   let url: URL;
   try {
@@ -229,6 +230,8 @@ export function createModelHttpsRelay(
     let secure: TLSSocket | undefined;
     let outgoing: ClientRequest | undefined;
     let incoming: IncomingMessage | undefined;
+    let closed: Promise<void> | undefined;
+    let authorization: Promise<ModelWireCommit> | undefined;
     let stopped = false;
     const deadline = setTimeout(stop, 10_000).unref();
     function stop() {
@@ -243,9 +246,15 @@ export function createModelHttpsRelay(
       transport?.destroy();
       socket?.destroy();
     }
+    async function drain() {
+      stop();
+      await Promise.allSettled([closed, authorization]);
+    }
     request.signal.addEventListener('abort', stop, { once: true });
     try {
-      const body = await readBody(request.body, signal);
+      const buffered = await readBody(request.body, signal);
+      const body = projectBody ? projectBody(buffered) : buffered;
+      if (!body || body.length > bodyLimit) throw unavailable();
       const headers = requestHeaders(request.headers, url, body.length);
       signal.throwIfAborted();
       if (!request.isCurrent() || !diagnosticsSafe()) throw unavailable();
@@ -284,7 +293,7 @@ export function createModelHttpsRelay(
         else if (!bridge.push(chunk)) raw.pause();
       });
       raw.on('end', () => bridge.push(null));
-      const closed = new Promise<void>((resolve) =>
+      closed = new Promise<void>((resolve) =>
         raw.once('close', () => {
           if (!raw.readableEnded) bridge.destroy(unavailable());
           resolve();
@@ -379,19 +388,17 @@ export function createModelHttpsRelay(
       )
         throw unavailable();
       const prefix = bytes.subarray(0, firstWriteLimit);
-      const commit = await untilClosed(
-        authorize((validBefore) => {
-          if (
-            signal.aborted ||
-            !request.isCurrent() ||
-            tls.listenerCount('keylog') !== 0 ||
-            !diagnosticsSafe()
-          )
-            return 'not-sent';
-          return submitModelPrefix(raw, fd, prefix, validBefore);
-        }),
-        signal,
-      );
+      authorization = authorize((validBefore) => {
+        if (
+          signal.aborted ||
+          !request.isCurrent() ||
+          tls.listenerCount('keylog') !== 0 ||
+          !diagnosticsSafe()
+        )
+          return 'not-sent';
+        return submitModelPrefix(raw, fd, prefix, validBefore);
+      });
+      const commit = await untilClosed(authorization, signal);
       if (commit.outcome !== 'submitted') throw unavailable();
       signal.throwIfAborted();
       if (bytes.length > prefix.length)
@@ -417,14 +424,13 @@ export function createModelHttpsRelay(
         throw unavailable();
       if (status === 429) {
         await drainRetry(response);
-        stop();
-        await closed;
+        await drain();
         commit.accept429();
         return new Response(null, { status });
       }
       clearTimeout(deadline);
       if (status >= 400 || status === 204 || status === 205) {
-        stop();
+        await drain();
         return new Response(null, { status });
       }
       const returned = new Headers();
@@ -433,12 +439,12 @@ export function createModelHttpsRelay(
         if (businessHeader(key) && !nominated.has(key))
           for (const entry of Array.isArray(value) ? value : [value])
             if (entry !== undefined) returned.append(key, entry);
-      return new Response(responseStream(response, stop), {
+      return new Response(responseStream(response, drain), {
         status,
         headers: returned,
       });
     } catch {
-      stop();
+      await drain();
       throw unavailable();
     }
   };

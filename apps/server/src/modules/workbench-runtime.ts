@@ -64,6 +64,7 @@ export function createWorkbenchRuntime(
   nativeRuntimeRoot?: string,
   nativeProfiles?: ReadonlyMap<string, string>,
   modelEgress: NativeModelEgress = 'direct',
+  mainPolicy?: import('./model-egress-policy.ts').MainModelPolicy,
 ) {
   const instanceRoot =
     process.env.RDWS_MODE === 'test'
@@ -175,6 +176,7 @@ export function createWorkbenchRuntime(
       blocked(userId, projectId, undefined, requirementId),
     nativeProfiles,
     modelEgress,
+    mainPolicy,
   );
 
   const revokedEpoch = new Map<string, number>();

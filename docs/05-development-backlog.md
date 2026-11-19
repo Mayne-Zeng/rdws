@@ -172,7 +172,7 @@
   - 前置：T11、T14。
   - 来源：I3-CONTEXT、D21；已有上下文同步契约。
 
-- [ ] **T13 · 模型与供应商管理**（进行中：路由拆分与冷恢复补偿已交付，正式受管出口方案仍有阻塞项）
+- [ ] **T13 · 模型与供应商管理**（进行中：文本主推理已通过正式 BFF 本机定序验收，待选模、其它用途与具名部署）
   - 说明：适配 DSH 原生配置界面和授权作用域，支持平台、项目和个人的分层选择。
   - 可验收目标：配置使用原生 Provider／Profile／Credentials；项目只使用允许集合；个人只在允许范围选择本次会话模型；平台锁定项不能被下级覆盖；普通 DTO、日志与页面不暴露凭据；不另建模型调用权威。
   - 已确认的选模验收：本人可在同一会话反复选择允许的模型，在下次本人有权发送时重验并应用。已选模型被停用或移出允许集合时，保留待发送输入，提示重新选择可用模型，由用户再次发送，无自动默认回退。验收分别核对保存、实际 Native 生效、撤权和其他会话隔离。详见[时点和验收](02-directory-and-engineering-design.html#t13-send-time-acceptance-20261118)。
@@ -202,8 +202,8 @@
   - 已交付子项：[TLS 1.3 主推理转发与首次写入](02-directory-and-engineering-design.html#t13-tls13-first-write-20261119)。真实 Native、PostgreSQL 与回环供应商串联验收。先撤权时零写入，先写入时本连接可完成，完整验证的 429 才开放下一次物理写入。诊断泄露、截断 429 和 TCP 首段计数复审通过。定点 37 项、整仓 260 项、浏览器两分片合计 44 项和基线通过。正式供应商和具名部署接线继续按 §11.16.17 验收。
   - 接线前置：[实施范围与路由拆分](02-directory-and-engineering-design.html#t13-egress-integration-plan)。协调检出 `main` 由既有协调者串行处理 BFF 工作台、Native 适配、相关测试和验收文档。R-01 已通过独立复审和整仓回归。
   - 评审续办：[Q1 合成供应商取证](06-implementation-review-report.html#s10-delivery)覆盖 `session/state`、`session/events` 与锁定版未注册的 `session/summary` 错误响应。其余读取与事件投影继续验证。R-08 的两次活动名单复核与取消补偿已通过[定点验收](02-directory-and-engineering-design.html#t13-egress-reconcile-evidence)。
-  - 评审续办：[R-05 首批浏览器投影](02-directory-and-engineering-design.html#t13-egress-projection-plan)已通过独立复审及真实 Native 合成供应商验证。历史扩展事件和模型目录字段继续跟踪。
-  - 正式接线初审：[受管入口待完成的技术判据](02-directory-and-engineering-design.html#t13-managed-egress-open-design)。生产选模策略、子会话首次选模、标题／附件绑定及正式 BFF 与物理发送的同序证据仍未齐备。外发与真实供应商验收仍按 §11.16.17。
+  - 评审交付：[R-05 历史与模型目录投影](02-directory-and-engineering-design.html#t13-main-bff-egress-evidence)已通过受控响应和真实 Native 合成供应商验证。合法正文、附件、序列及位置保留。
+  - 正式接线一阶段：[主推理验收](02-directory-and-engineering-design.html#t13-main-bff-egress-evidence)。隔离库及本机 HTTPS 合成供应商验证先撤权零外发、先首写可完成以及 429、关停和受管暂停回退。生产选模、派生首次选模、标题／附件和具名部署仍按 §11.16.17 验收。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。

@@ -8,6 +8,7 @@ import { actionAllowed, isRecord } from '@rdws/dsh/access';
 import {
   authorizeStreamFrame,
   createNativeStreamState,
+  publicModelCatalogValue,
   publicNativeSessionResponse,
   publicNativeStreamFrame,
   withNativeEnvelope,
@@ -36,38 +37,9 @@ function publicModelCatalog(response: Response, rpcId: unknown) {
           ok: false,
           error: { code: 'gateway/internal', message, details: {} },
         };
-      const catalog = result.value;
-      if (
-        result.ok !== true ||
-        !isRecord(catalog) ||
-        !isRecord(catalog.default) ||
-        !Array.isArray(catalog.groups) ||
-        !Array.isArray(catalog.routableProviders) ||
-        !Array.isArray(catalog.failures)
-      )
-        return;
-      const failures = catalog.failures.map((failure: unknown) => {
-        if (
-          !isRecord(failure) ||
-          typeof failure.id !== 'string' ||
-          typeof failure.name !== 'string'
-        )
-          fail(503, message);
-        return {
-          id: failure.id,
-          name: failure.name,
-          message: '供应商模型目录暂不可用',
-        };
-      });
-      return {
-        ok: true,
-        value: {
-          default: catalog.default,
-          groups: catalog.groups,
-          routableProviders: catalog.routableProviders,
-          failures,
-        },
-      };
+      if (result.ok !== true) return;
+      const catalog = publicModelCatalogValue(result.value);
+      if (catalog) return { ok: true, value: catalog };
     },
     () => fail(503, message),
   );

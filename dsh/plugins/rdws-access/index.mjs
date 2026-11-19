@@ -16,6 +16,7 @@ import { bootInjections } from '@deepseek-ai/dsh-client-modules';
 import { RemoteStreamMuxServer } from '@deepseek-ai/dsh-api-gateway/src/stream-server.ts';
 import { installContext } from './context.mjs';
 import { openContextIpc } from '../../bridge/context-ipc.ts';
+import { installModelCarrier } from './model-carrier.mjs';
 import { installPresets } from './presets.mjs';
 import { isDemandPreset } from '../../host/presets.ts';
 export const name = 'rdws-access';
@@ -158,6 +159,8 @@ export function apply(ctx, config) {
   }
   const context = openContextIpc(config.contextGeneration);
   ctx.effect(() => context.close);
+  if (config.modelRoutes)
+    installModelCarrier(ctx, config.contextGeneration, config.modelRoutes);
   const revokeContext = installContext(
     ctx,
     config,

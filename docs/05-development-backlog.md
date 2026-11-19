@@ -169,7 +169,7 @@
   - 前置：T11、T14。
   - 来源：I3-CONTEXT、D21；已有上下文同步契约。
 
-- [ ] **T13 · 模型与供应商管理**（进行中：macOS Web Host 已可暂停外发，统一出口待接线）
+- [ ] **T13 · 模型与供应商管理**（进行中：继承模型通道已验证，逐次外发授权待接线）
   - 说明：适配 DSH 原生配置界面和授权作用域，支持平台、项目和个人的分层选择。
   - 可验收目标：配置使用原生 Provider／Profile／Credentials；项目只使用允许集合；个人只在允许范围选择本次会话模型；平台锁定项不能被下级覆盖；普通 DTO、日志与页面不暴露凭据；不另建模型调用权威。
   - 已确认的选模验收：本人可在同一会话反复选择允许的模型，在下次本人有权发送时重验并应用。已选模型被停用或移出允许集合时，保留待发送输入，提示重新选择可用模型，由用户再次发送，无自动默认回退。验收分别核对保存、实际 Native 生效、撤权和其他会话隔离。详见[时点和验收](02-directory-and-engineering-design.html#t13-send-time-acceptance-20261118)。
@@ -191,6 +191,7 @@
   - 已交付子项：[Native 上下文回调迁移](02-directory-and-engineering-design.html#t13-native-context-ipc-20261119)。上下文读和释放走正式 Host 继承的 IPC，移除了后续隔离对 BFF HTTP 回调端口的依赖。无 BFF 监听时的真实 Native、两种故障后原文重填及合成供应商零到达通过。独立复审、整仓 195 项、浏览器 39 项、故障浏览器 2 项及基线通过。模型外发与其授权定序继续按 §11.16.17 实施。
   - 已交付子项：[正式 Native 环回传输直连](02-directory-and-engineering-design.html#t13-native-loopback-direct-20261119)。BFF 的 HTTP 和 WebSocket 上游直达已选 Native 环回地址。代理开启时真实启动、历史和跟随可用，合成供应商收到当前上下文，代理无新增到达。独立复审、整仓 198 项、浏览器 39 项及基线通过。正式暂停与模型出口接线仍按 §11.16.17 推进。
   - 已交付子项：[正式 Native 暂停外发与恢复](02-directory-and-engineering-design.html#t13-native-model-egress-pause-20261119)。macOS 支持每次 BFF 启动确定暂停模式，进程禁止主动联网，在鉴权后、入箱前拒绝提交。真实同页暂停与恢复保留草稿、旧键和会话历史，暂停期供应商零新增。独立复审、整仓 201 项、浏览器 40 项、真实模式切换 1 项及基线通过。正式统一出口及其逐次授权与撤权定序仍按 §11.16.17 实施。
+  - 已交付子项：[Native 继承模型通道](02-directory-and-engineering-design.html#t13-native-inherited-model-carrier-20261119)。内部受限 Host 经 FD 4 完成锁定适配器的 PiAi、DeepSeek Files 和 Messages，验证取消、各次尝试、共享上传与物理直连阻断。独立复审、定点 8 项、整仓 209 项、浏览器 40 项和基线通过。BFF 仍只接受 direct 和 paused，正式外发授权和撤权定序继续按 §11.16.17 实施。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。

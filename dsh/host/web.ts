@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { Socket } from 'node:net';
 import { randomBytes, randomUUID } from 'node:crypto';
 import {
   mkdir,
@@ -16,6 +17,11 @@ import { fileURLToPath } from 'node:url';
 import { parseDocument } from 'yaml';
 import { nativeLoopbackRequest } from './loopback-http.ts';
 import { serveContextIpc, type ContextHandler } from '../bridge/context-ipc.ts';
+import {
+  serveModelCarrier,
+  snapshotModelRoutes,
+  type NativeModelTransport,
+} from '../bridge/model-carrier.ts';
 import {
   signGrant,
   verifyGrant,
@@ -171,6 +177,12 @@ export class NativeWebHost {
   private lockPath = '';
   private readyPath = '';
   private shutdown?: Promise<void>;
+  private readonly modelTransport?: {
+    routes: ReadonlyMap<string, string>;
+    handle: NativeModelTransport['handle'];
+    signal?: AbortSignal;
+  };
+  private closeCarrier?: () => void;
   get signal() {
     return this.invalidation.signal;
   }
@@ -179,9 +191,23 @@ export class NativeWebHost {
     readonly configurationHome?: string,
     readonly projectId = 'poc',
     release: readonly ReleasedCapability[] = capabilityRelease,
-    readonly modelEgress: NativeModelEgress = 'direct',
+    readonly modelEgress: NativeModelEgress | 'mediated' = 'direct',
+    modelTransport?: NativeModelTransport,
   ) {
-    resolveNativeModelEgress(modelEgress);
+    if (modelEgress === 'mediated') {
+      resolveNativeModelEgress('paused');
+      if (!modelTransport)
+        throw new Error('Mediated Native requires a model carrier');
+      this.modelTransport = {
+        routes: snapshotModelRoutes(modelTransport.routes),
+        handle: modelTransport.handle,
+        signal: modelTransport.signal,
+      };
+    } else {
+      resolveNativeModelEgress(modelEgress);
+      if (modelTransport)
+        throw new Error('Native model carrier requires mediated startup');
+    }
     if (!validProjectId(projectId))
       throw new Error('Invalid Native project ID');
     this.home = join(runtimeHome, 'runtime', 'dsh', 'project-' + projectId);
@@ -210,6 +236,8 @@ export class NativeWebHost {
       throw new Error('Native instance unavailable');
   }
   private async launch() {
+    if (this.modelTransport?.signal?.aborted)
+      throw new Error('Native model carrier unavailable');
     const root = await realpath(this.runtimeHome).catch(
       async (error: NodeJS.ErrnoException) => {
         if (error.code !== 'ENOENT') throw error;
@@ -393,6 +421,13 @@ export class NativeWebHost {
                   projectId: this.projectId,
                   releasedCapabilities: this.releasedCapabilities,
                   contextGeneration: this.contextGeneration,
+                  ...(this.modelTransport
+                    ? {
+                        modelRoutes: Object.fromEntries(
+                          this.modelTransport.routes,
+                        ),
+                      }
+                    : {}),
                   contextEvidenceFile: join(
                     this.runtimeHome,
                     'runtime',
@@ -416,7 +451,7 @@ export class NativeWebHost {
         DSH_PRIMARY_RUNTIME: '',
         DSH_PERMISSION_MODE: 'read-only',
       };
-      const paused = this.modelEgress === 'paused';
+      const paused = this.modelEgress !== 'direct';
       const inherited = ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL'];
       if (!paused)
         inherited.push(
@@ -463,7 +498,17 @@ export class NativeWebHost {
           '--patch',
           overlay,
         ],
-        { cwd: this.demandRoot, env, stdio: ['pipe', 'ignore', 'pipe', 'ipc'] },
+        {
+          cwd: this.demandRoot,
+          env,
+          stdio: [
+            'pipe',
+            'ignore',
+            'pipe',
+            'ipc',
+            ...(this.modelTransport ? ['pipe' as const] : []),
+          ],
+        },
       );
       this.process = child;
       let exited = false;
@@ -478,8 +523,11 @@ export class NativeWebHost {
           !this.closing &&
           !this.invalidation.signal.aborted,
       );
+      let carrier: ReturnType<typeof serveModelCarrier> | undefined;
       const invalidate = () => {
         stopContext();
+        carrier?.close();
+        if (this.process !== child) return;
         exited = true;
         this.origin = '';
         if (this.ready) this.invalidation.abort();
@@ -488,6 +536,24 @@ export class NativeWebHost {
       child.once('error', invalidate);
       child.once('exit', invalidate);
       child.once('disconnect', invalidate);
+      if (this.modelTransport) {
+        const socket = child.stdio[4];
+        if (!(socket instanceof Socket))
+          throw new Error('Native model carrier unavailable');
+        carrier = serveModelCarrier(
+          socket,
+          this.contextGeneration,
+          this.modelTransport.routes,
+          this.modelTransport.handle,
+          () =>
+            this.process === child &&
+            this.ready &&
+            !this.closing &&
+            !this.invalidation.signal.aborted,
+          this.modelTransport.signal,
+        );
+        this.closeCarrier = carrier.close;
+      }
       child.on('message', (message: unknown, handle) => {
         if (handle || exited || port || !message || typeof message !== 'object')
           return;
@@ -509,8 +575,8 @@ export class NativeWebHost {
       });
       const deadline = Date.now() + 30_000;
       while (Date.now() < deadline) {
-        if (exited || this.closing) break;
-        if (port) {
+        if (exited || this.closing || carrier?.closed) break;
+        if (port && (!carrier || carrier.ready)) {
           this.origin = 'http://127.0.0.1:' + port;
           const result = await this.control('health', {}).catch(
             () => undefined,
@@ -525,11 +591,11 @@ export class NativeWebHost {
           if (
             !exited &&
             !this.closing &&
+            (!carrier || carrier.ready) &&
             proof?.purpose === 'service' &&
             proof.hostGeneration === this.contextGeneration &&
             proof.bodyHash === bodyHash({ port })
           ) {
-            this.ready = true;
             const temporary = this.readyPath + '.' + this.contextGeneration;
             try {
               await writeFile(
@@ -541,13 +607,17 @@ export class NativeWebHost {
                 }),
                 { mode: 0o600, flag: 'wx' },
               );
+              if (exited || this.closing || (carrier && !carrier.ready)) break;
               await rename(temporary, this.readyPath);
             } finally {
               await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
                 if (error.code !== 'ENOENT') throw error;
               });
             }
-            if (!exited && !this.closing) return;
+            if (!exited && !this.closing && (!carrier || carrier.ready)) {
+              this.ready = true;
+              return;
+            }
           }
           this.origin = '';
         }
@@ -685,6 +755,8 @@ export class NativeWebHost {
     const child = this.process;
     this.ready = false;
     this.origin = '';
+    this.closeCarrier?.();
+    this.closeCarrier = undefined;
     if (child?.pid && child.exitCode === null && child.signalCode === null) {
       await new Promise<void>((resolve, reject) => {
         const done = () => {

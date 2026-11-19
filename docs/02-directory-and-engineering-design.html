@@ -876,6 +876,21 @@
   <p>独立交付二版复审 APPROVE。工作台按原生 requestId 结算当前提交，仅使用带标识的 503 与已确认受理的提示更新暂停状态，按发送序号保留较新的观测。暂停后的断网与普通 401 均保留输入和暂停提示，同时保留通用失败反馈。<code>caffeinate -i pnpm test:e2e tests/e2e/session-retry.spec.ts -g 'a paused prompt'</code> 确认补审前返回 1，调整后返回 0（1 项）。隔离的 Linux 镜像另验证真实 <code>buildApp</code> 在开始监听前拒绝 paused，退出码 0。</p>
   <p>首次全量的账号用例因早期浏览器夹具异常留下一个临时项目而失败。核对测试库、项目 ID、两个夹具需求 ID 和名称后，清理这次夹具的记录。最终 <code>caffeinate -i pnpm check</code> 返回 0（34 文件、201 项通过、1 项平台条件跳过，类型、lint、格式和构建通过），构建仍有主包体积提示。<code>caffeinate -i pnpm test:e2e</code> 返回 0（40 项）。同次正式模式切换的浏览器定点返回 0（1 项），<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>feat: add fail-closed Native model egress pause</code>。</p>
 
+  <h4 id="t13-native-inherited-model-carrier-20261119">11.16.22 Native 继承模型通道</h4>
+  <p>Change / R3，基线 <code>ccad89d</code>，推进 §11.16.17 的统一出口。在正式 Host 的受限启动上接一条专用继承流，令锁定 Native 实际发出的请求及中止信号交给拥有该子进程的父级。保留 DSH Provider、Profile 和 Credentials。当前切片交付进程内的通道与接入，实际逐次授权、供应商外发与撤权定序是后续准入。</p>
+  <ol>
+    <li>现有 BFF 环境与注入仍只接受 direct 和 paused。仅内部构造显式受限的 mediated Host 并提供拥有者回调与可信路由表时，启动时增加 FD 4。复用 macOS Seatbelt 外发阻断、签名 Web 就绪与代次锁。HTTP/2 使用固定非网络 authority、显式伪头和已继承 Duplex。双方初始 SETTINGS/ACK 后进行本代协议握手，确认子进程模型 hook 已安装。子端在握手前不发送模型头，父端在本代 Web Host 取得签名就绪并完成发布前拒绝模型流。异步写就绪文件期间失效须使启动失败并清理记录与锁。发布后的通道中断会拒绝新流和取消在途回调，Web 读取与上下文 IPC 继续各自入口。</li>
+    <li>V0 只承载可信表完整 URL 所匹配的 PiAi completions、DeepSeek Files multipart 和 Messages 三类 POST。初始化快照并拒绝重复或歧义。只在锁版 <code>llm/stream</code> 异步作用域拦截。父级核对本代、POST、协议、固定 authority、路由 ID 及保留字段，拒绝重复或冲突的头，从可信映射选择目的地。Files GET/DELETE、其他未知目标与方法失败，保持直连关闭。调用、各次尝试、provider、model、session 与用途仅作关联。接收端仅调用显式提供的受信接口，业务授权与实际向供应商转发均须后续准入。库自身对 Files 失败的内联回退或退避重试作为独立 HTTP 尝试重新穿过边界。</li>
+    <li>使用标准 HTTP/2 流与回压，单流取消只跟随有效 Fetch Request.signal 或响应流取消，保留多个请求共享文件上传时的等待者语义。设置 16 并发流及实际回调槽、协议头/会话预算与 30 秒空闲上限。中止会取消双向流和回调 signal，实际 Promise 结算才归还处理槽，迟到响应销毁。关闭动态压缩表并双向标记敏感头。剥离 hop-by-hop 与内部保留头，保留业务头和完整正文。非 identity 响应与重定向拒绝，父拒绝或异常用固定信息而不透出错误正文、reason 或路径。关闭、IPC 断开、GOAWAY 或异常销毁专用连接及在途处理。该层仅内存传输，不记录供应商正文或认证头。</li>
+    <li>正式 Host 签名就绪后，由父级访问仅在夹具中注册的入站端点，触发真实锁版 Native 和合成供应商。验证 PiAi 首段在末段发布前到达、DeepSeek Files 完整 multipart 与 Messages 对应 file_id。验证 Files 拒绝未到达供应商、内联 Messages 另次检查，整体拒绝的调用所有尝试零到达，Files GET/DELETE 与计划外路由也零到达；核对独立 TCP 直连仍被内核拒绝。覆盖父端取消与并发邻流、缺通道/错代/就绪前断开、就绪后断开仍可 Web 读取且无新回调、协议负例及迟到返回。故障与正常路径检查合成正文/认证头标记不会进入专用通道的诊断和运行文件。<code>pnpm check</code>、<code>pnpm test:e2e</code> 与基线一并执行。本轮无真实供应商调用、部署、迁移或新依赖。</li>
+  </ol>
+  <p>第二版方案双面独立复审均 APPROVE。首轮补齐 SETTINGS/ACK、本代握手及就绪发布边界、取消与回调实际结算、双方 HPACK 动态表和敏感头保护、Files 失败后内联尝试重新检查。</p>
+  <p><code>caffeinate -i pnpm test tests/integration/native-model-carrier.test.ts tests/integration/model-carrier-protocol.test.ts</code> 返回 0（2 文件、6 项）。锁定版 Native 经正式签名就绪后，由父级访问仅测试配置注册的入站端点。PiAi 第一段先于尾段到达。DeepSeek 两个调用共享一次 Files 上传，取消第一个等待者后，第二个仍在 Messages 使用相同上传的 <code>file_id</code>。独立模拟供应商以逐次尝试 ID 核对完整 PNG、两种 Messages 文件表示和 PiAi 流。拒绝上传导致内联尝试重新经过父级回调，整体拒绝的调用零到达。真实 Native 主动直连得到系统拒绝。</p>
+  <p>协议及异常证据覆盖就绪前零回调、错代、无握手正文和凭据、GET/DELETE、计划外路由、异常 authority、重复头与 GOAWAY。响应读取取消和实际推理中止能传播到父端，相邻流仍完成。16 个已中止但未结算的回调保持占槽，迟到返回被销毁。实际 Host 的发布前中断清理锁与就绪文件，发布后断开仍可读取原生 Web，回调与供应商计数均未增加。受控异常和临时运行目录检查未发现测试正文或认证标记副本。</p>
+  <p>实际产品外发前须验证部署的诊断采集。Node 24.20.0 的 <code>http2.client.stream.*</code> 和 <code>http2.server.stream.*</code> 诊断事件可以向订阅者提供原始报头或分块，HPACK 设置限制的是编码与索引。当前工程没有注册这些订阅。具名环境须排除原始内容采集或验证采集端有效脱敏。当前固定失败正文已覆盖接收方拒绝；正式供应商错误还须核对 Retry-After、结构化错误和锁版退避语义。测试要求的用途关联使用标有标题用途的受控调用，真实后台标题身份和原生退避归后续验收。</p>
+  <p>独立交付二版复审 APPROVE。协议修订前，第四类端点和 <code>Connection</code> 所指定的逐跳报头两项实证失败。其后将路由限制到三类端点路径并拒绝裸 <code>?</code> 与 <code>#</code>，在 HTTP/2 编码前双向剥离所指定的逐跳头。定点追加由真实签名就绪延伸到写完临时就绪文件时中断，最终临时文件、就绪文件与项目锁全部清零，业务回调为零。补审后聚焦两文件 8 项全部通过。</p>
+  <p>最终 <code>caffeinate -i pnpm check</code> 返回 0（36 文件、209 项通过、1 项平台条件跳过，类型、lint、格式与构建通过），构建仍提示主包体积。<code>caffeinate -i pnpm test:e2e</code> 返回 0（40 项），<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>feat: add inherited Native model transport</code>。BFF 配置与注入仍只接受 direct 和 paused，后续逐次授权和撤权定序仍为产品启用的硬准入。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

@@ -632,8 +632,10 @@ export async function registerWorkbench(
   function lease(scope: ReadyAccess, generation: string) {
     const id = scope.who.authSessionId + ':' + scope.item.id + ':' + generation;
     let item = leases.get(id);
-    if (item && (item.revoked || item.expiresAt <= Date.now()))
+    if (item && (item.revoked || item.expiresAt <= Date.now())) {
+      leases.delete(id);
       fail(409, '连接已过期，请重新连接');
+    }
     if (!item) {
       item = {
         token: scope.runtime.native.ticket(grant(scope)),

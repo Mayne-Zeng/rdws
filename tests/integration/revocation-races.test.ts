@@ -1,4 +1,4 @@
-import { test, expect, beforeAll, afterAll } from 'vitest';
+import { test, expect, beforeAll, afterAll, vi } from 'vitest';
 import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
@@ -12,6 +12,7 @@ import {
   observedLogin,
 } from '../helpers/native-browser.ts';
 import { NativeWebHost } from '@rdws/dsh/web';
+import { LEASE_MS } from '@rdws/dsh/access';
 import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
 loadEnvironment('test');
 const pool = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
@@ -534,6 +535,24 @@ test('Native carriers enforce the bootstrap login and keep same-login leases acr
     expect((await rpc(first, rotated)).statusCode).toBe(200);
     expect(host.issued).toBe(2);
     expect(host.carriers[1]).not.toBe(host.carriers[0]);
+    const afterExpiry = Date.now() + LEASE_MS;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(afterExpiry);
+    try {
+      expect((await rpc(first, rotated)).statusCode).toBe(409);
+      expect((await rpc(first, rotated)).statusCode).toBe(409);
+      expect(host.issued).toBe(2);
+      expect(
+        (
+          await rpc(first, {
+            ...transportHeaders,
+            'x-rdws-client-generation': randomUUID(),
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(host.issued).toBe(3);
+    } finally {
+      clock.mockRestore();
+    }
     const disconnected = once(browser, 'close');
     expect(
       (

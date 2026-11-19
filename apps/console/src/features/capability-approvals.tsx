@@ -6,12 +6,8 @@ import type {
   CapabilityKind,
   ManagementCommand,
 } from '@rdws/contracts';
+import { capabilityKindLabels } from '@rdws/contracts';
 import { api } from '../lib/ui.tsx';
-
-const labels = { plugin: '插件', skill: '技能', mcp: 'MCP' } satisfies Record<
-  CapabilityKind,
-  string
->;
 type ApprovalIntent = Omit<
   Extract<ManagementCommand, { kind: 'capability.approval' }>,
   'commandId'
@@ -86,7 +82,7 @@ export function CapabilityApprovals({
                 }
               >
                 <option value="">选择类别</option>
-                {Object.entries(labels).map(([id, label]) => (
+                {Object.entries(capabilityKindLabels).map(([id, label]) => (
                   <option key={id} value={id}>
                     {label}
                   </option>
@@ -138,7 +134,7 @@ export function CapabilityApprovals({
                   <div className="prose-text">
                     <strong>{entry.reference}</strong>
                     <p className="muted">
-                      {labels[entry.kind]} · {entry.revision} ·{' '}
+                      {capabilityKindLabels[entry.kind]} · {entry.revision} ·{' '}
                       {entry.approved ? '已登记' : '已停用'}
                     </p>
                   </div>

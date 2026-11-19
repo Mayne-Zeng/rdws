@@ -75,6 +75,11 @@ export const taskStatusLabels = {
 } as const;
 export type Stage = keyof typeof stageLabels;
 export type TaskStatus = keyof typeof taskStatusLabels;
+export const capabilityKindLabels = {
+  plugin: '插件',
+  skill: '技能',
+  mcp: 'MCP',
+} satisfies Record<CapabilityKind, string>;
 export const roles = [
   'project_admin',
   'requirement_manager',

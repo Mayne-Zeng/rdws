@@ -106,19 +106,40 @@ export function normalizeManagement(input: ManagementCommand) {
 export function createBusiness(db: Database) {
   async function transaction<T>(
     work: (tx: Transaction) => Promise<T>,
+    opts: {
+      transactionTimeout?: string;
+      beforeRetry?: () => void;
+      isolationLevel?:
+        | 'read uncommitted'
+        | 'read committed'
+        | 'repeatable read'
+        | 'serializable';
+    } = {},
   ): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       try {
-        return await db.transaction(async (tx) => {
-          await tx.execute(sql`set local lock_timeout='3s'`);
-          return work(tx);
-        });
+        return await db.transaction(
+          async (tx) => {
+            if (opts.transactionTimeout)
+              await tx.execute(
+                sql.raw(
+                  `set local transaction_timeout='${opts.transactionTimeout}'`,
+                ),
+              );
+            await tx.execute(sql`set local lock_timeout='3s'`);
+            return work(tx);
+          },
+          opts.isolationLevel
+            ? { isolationLevel: opts.isolationLevel }
+            : undefined,
+        );
       } catch (error) {
         const code =
           (error as { cause?: { code?: string }; code?: string }).cause?.code ??
           (error as { code?: string }).code;
         if (attempt >= 2 || !['40001', '40P01'].includes(code ?? ''))
           throw error;
+        opts.beforeRetry?.();
       }
     }
   }
@@ -773,84 +794,89 @@ export function createBusiness(db: Database) {
     const normalized = normalizeImportRows(input.rows);
     const digest = digestOf(normalized),
       deadline = performance.now() + 7500;
-    return db.transaction(async (tx) => {
-      await tx.execute(sql`set local transaction_timeout='8s'`);
-      await tx.execute(sql`set local lock_timeout='3s'`);
-      const before = await importAuthority(tx, who, projectId);
-      const old = await importReceipt(
-        tx,
-        who,
-        projectId,
-        input.commandId,
-        digest,
-      );
-      const checked = (expires: Date) => {
-        if (expires <= new Date()) businessError(401, '登录已失效，请重新登录');
-        if (performance.now() >= deadline)
-          businessError(503, '本批次入库等待超时，请核对原批次');
-        confirm();
-      };
-      checked(before.session.expiresAt);
-      if (old) return old;
-      const targets = await importTargets(tx, projectId, normalized);
-      const { users, roles, session } = await identity(
-        tx,
-        who,
-        projectId,
-        targets,
-        true,
-        true,
-      );
-      if (!mayCreate(roles, who))
-        businessError(403, '无权批量导入当前项目的需求');
-      const reservation = await reserve(
-        tx,
-        who,
-        'project:' + projectId,
-        'requirement.import',
-        input.commandId,
-        normalized,
-      ).catch((error: unknown) => {
-        if ((error as { statusCode?: number }).statusCode === 409)
-          return 'conflict' as const;
-        throw error;
-      });
-      checked(session.expiresAt);
-      if (reservation === 'conflict') return reservation;
-      if ('result' in reservation) return reservation.result as StoredImport;
-      const { feedback, inputs } = validateImportRows(
-        normalized,
-        users,
-        roles,
-        input.commandId,
-      );
-      let receipt: StoredImport = {
-        commandId: input.commandId,
-        status: 'rejected',
-        rows: feedback,
-      };
-      if (
-        feedback.every((row) => !row.issues.length) &&
-        inputs.length === normalized.length
-      ) {
-        const ids = await persistRequirements(
+    return transaction(
+      async (tx) => {
+        const before = await importAuthority(tx, who, projectId);
+        const old = await importReceipt(
           tx,
           who,
           projectId,
-          inputs,
-          roles,
-          baselines,
+          input.commandId,
+          digest,
         );
-        receipt = {
-          commandId: input.commandId,
-          status: 'created',
-          rows: normalized.map(({ row }, index) => ({ row, id: ids[index]! })),
+        const checked = (expires: Date) => {
+          if (expires <= new Date())
+            businessError(401, '登录已失效，请重新登录');
+          if (performance.now() >= deadline)
+            businessError(503, '本批次入库等待超时，请核对原批次');
+          confirm();
         };
-      }
-      await finish(tx, reservation.value, receipt);
-      checked(session.expiresAt);
-      return receipt;
-    });
+        checked(before.session.expiresAt);
+        if (old) return old;
+        const targets = await importTargets(tx, projectId, normalized);
+        const { users, roles, session } = await identity(
+          tx,
+          who,
+          projectId,
+          targets,
+          true,
+          true,
+        );
+        if (!mayCreate(roles, who))
+          businessError(403, '无权批量导入当前项目的需求');
+        const reservation = await reserve(
+          tx,
+          who,
+          'project:' + projectId,
+          'requirement.import',
+          input.commandId,
+          normalized,
+        ).catch((error: unknown) => {
+          if ((error as { statusCode?: number }).statusCode === 409)
+            return 'conflict' as const;
+          throw error;
+        });
+        checked(session.expiresAt);
+        if (reservation === 'conflict') return reservation;
+        if ('result' in reservation) return reservation.result as StoredImport;
+        const { feedback, inputs } = validateImportRows(
+          normalized,
+          users,
+          roles,
+          input.commandId,
+        );
+        let receipt: StoredImport = {
+          commandId: input.commandId,
+          status: 'rejected',
+          rows: feedback,
+        };
+        if (
+          feedback.every((row) => !row.issues.length) &&
+          inputs.length === normalized.length
+        ) {
+          const ids = await persistRequirements(
+            tx,
+            who,
+            projectId,
+            inputs,
+            roles,
+            baselines,
+          );
+          receipt = {
+            commandId: input.commandId,
+            status: 'created',
+            rows: normalized.map(({ row }, index) => ({
+              row,
+              id: ids[index]!,
+            })),
+          };
+        }
+        await finish(tx, reservation.value, receipt);
+        checked(session.expiresAt);
+        return receipt;
+      },
+      { transactionTimeout: '8s' },
+    );
   }
   async function execute(who: Actor, id: string, input: BusinessCommand) {
     const [existing] = await db
@@ -1108,6 +1134,7 @@ export function createBusiness(db: Database) {
     input: RequirementPersonnelInput,
     confirmAuthority: () => void,
     fence: (removed: string[]) => void,
+    beforeRetry: () => void,
   ): Promise<PersonnelResult | 'conflict'> {
     const normalized = normalizePersonnel(input);
     const {
@@ -1120,8 +1147,7 @@ export function createBusiness(db: Database) {
       overrides,
       taskDigest,
     } = normalized;
-    return db.transaction(async (tx) => {
-      await tx.execute(sql`set local lock_timeout='3s'`);
+    async function applyPersonnelEdit(tx: Transaction) {
       const targets = [
         previewLeadId,
         leadId,
@@ -1309,7 +1335,8 @@ export function createBusiness(db: Database) {
       return complete('saved', version, [
         ...new Set(removed.map((person) => person.userId)),
       ]);
-    });
+    }
+    return transaction(applyPersonnelEdit, { beforeRetry });
   }
   async function recoverPersonnelCommit(
     actorId: string,
@@ -1318,9 +1345,8 @@ export function createBusiness(db: Database) {
     commandId: string,
     digest: string,
   ) {
-    return db.transaction(
+    return transaction(
       async (tx) => {
-        await tx.execute(sql`set local lock_timeout='3s'`);
         const [demand] = await tx
           .select({ id: schema.requirement.id })
           .from(schema.requirement)
@@ -1972,6 +1998,9 @@ export function createBusiness(db: Database) {
     const key = projectId ? 'project:' + projectId : 'platform';
     let fenced = false;
     try {
+      // Management commands deliberately keep one explicit attempt: the fence
+      // tests (project-administration) require a forced failure to surface as-is,
+      // and recovery replays the original command instead of auto-retrying.
       return await db.transaction(async (tx) => {
         await tx.execute(sql`set local lock_timeout='3s'`);
         const [session] = await tx
@@ -2277,6 +2306,9 @@ export function createBusiness(db: Database) {
     closing: () => boolean,
     publish: (confirm: () => void) => Promise<void>,
   ) {
+    // publish() moves git refs (CAS-gated) inside the transaction; retrying it
+    // automatically is a design decision still open (review R-02 / Q8), so this
+    // path deliberately keeps one explicit attempt.
     await db.transaction(async (tx) => {
       await tx.execute(sql`set local lock_timeout='3s'`);
       const { roles } = await identity(tx, who, projectId, [], true);

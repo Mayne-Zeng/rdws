@@ -9,8 +9,11 @@ import {
   type SetStateAction,
 } from 'react';
 import { Alert, Button, Loading } from 'tdesign-react';
-import type { SessionBinding } from '@deepseek-ai/dsh-api-session-controller/client';
-import { connectNative, type NativeRuntime } from '../lib/native.ts';
+import {
+  connectNative,
+  type NativeRuntime,
+  type SessionBinding,
+} from '../lib/native.ts';
 import { Icon } from '../lib/ui.tsx';
 import { SessionModelStatus } from './session-model.tsx';
 import type { SessionOperationResult } from '@rdws/contracts';

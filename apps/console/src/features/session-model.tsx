@@ -1,7 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { SessionBinding } from '@deepseek-ai/dsh-api-session-controller/client';
-import type {} from '@deepseek-ai/dsh-api-session-controller/remote';
-import type { NativeRuntime } from '../lib/native.ts';
+import type { NativeRuntime, SessionBinding } from '../lib/native.ts';
 
 function modelLabel(value: unknown) {
   if (!value || typeof value !== 'object') return;

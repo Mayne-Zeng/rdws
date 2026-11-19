@@ -204,6 +204,7 @@
   - 评审续办：[Q1 合成供应商取证](06-implementation-review-report.html#s10-delivery)覆盖 `session/state`、`session/events` 与锁定版未注册的 `session/summary` 错误响应。其余读取与事件投影继续验证。R-08 的两次活动名单复核与取消补偿已通过[定点验收](02-directory-and-engineering-design.html#t13-egress-reconcile-evidence)。
   - 评审交付：[R-05 历史与模型目录投影](02-directory-and-engineering-design.html#t13-main-bff-egress-evidence)已通过受控响应和真实 Native 合成供应商验证。合法正文、附件、序列及位置保留。
   - 正式接线一阶段：[主推理验收](02-directory-and-engineering-design.html#t13-main-bff-egress-evidence)。隔离库及本机 HTTPS 合成供应商验证先撤权零外发、先首写可完成以及 429、关停和受管暂停回退。生产选模、派生首次选模、标题／附件和具名部署仍按 §11.16.17 验收。
+  - 已补验：[正式 BFF 退避中撤权与诊断采样](02-directory-and-engineering-design.html#t13-main-bff-backoff-evidence)。原登录在 429 退避时退出后，供应商 HTTP 和完整正文均零新增；有权对照正常重试。父 BFF 与隔离库日志的双标记检查、独立复审均通过。同一步跨登录继续补验。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。

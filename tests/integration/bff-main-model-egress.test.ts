@@ -93,6 +93,9 @@ test.skipIf(process.platform !== 'darwin')(
       userId = randomUUID(),
       managerId = randomUUID();
     const credentialMarker = 'only-test-model-credential';
+    const bodyMarker = 'Synthetic model request body marker';
+    const retryDelayMs = 3000;
+    const retryTimeout = { timeout: retryDelayMs + 5000 };
     const pass = randomBytes(18).toString('hex');
     const ticket = randomBytes(32).toString('hex');
     const base = lab.childEnv.RDWS_ORIGIN!;
@@ -109,9 +112,11 @@ test.skipIf(process.platform !== 'darwin')(
     );
     let supplierReply = releaseFirstReply.wait;
     let rateLimit = false;
+    let supplierRequests = 0;
     const supplier = httpsServer(
       { ...keys, minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3' },
       async (request, response) => {
+        supplierRequests++;
         try {
           const chunks = [];
           for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -187,6 +192,17 @@ test.skipIf(process.platform !== 'darwin')(
     const gates = observeTransactions(() => transmissions.at(-1));
     let app: ReturnType<typeof buildApp> | undefined;
     const releases: Array<() => void> = [releaseFirstReply.release];
+    const output: string[] = [];
+    const collect = (chunk: unknown) => {
+      output.push(String(chunk));
+      return true;
+    };
+    const stdout = vi
+      .spyOn(process.stdout, 'write')
+      .mockImplementation(collect);
+    const stderr = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(collect);
     try {
       supplier.listen(0, '127.0.0.1');
       await once(supplier, 'listening');
@@ -222,8 +238,8 @@ test.skipIf(process.platform !== 'darwin')(
                     mode: 'normal',
                     maxRetries: 1,
                     backoff: {
-                      initialDelayMs: 35,
-                      maxDelayMs: 35,
+                      initialDelayMs: retryDelayMs,
+                      maxDelayMs: retryDelayMs,
                       jitterRatio: 0,
                     },
                   },
@@ -357,15 +373,23 @@ test.skipIf(process.platform !== 'darwin')(
         );
       const events = (login: Login, sessionId: string) =>
         rpc(login, 'events', { address: { kind: 'session', sessionId } });
-      async function turnEnd(login: Login, sessionId: string) {
+      async function historyRecords(login: Login, sessionId: string) {
         const response = await events(login, sessionId);
+        expect(response.statusCode).toBe(200);
         const value = response.json().result.value as {
           records: {
-            event: { type: string; data: { reason?: { kind: string } } };
+            event: {
+              type: string;
+              data: { reason?: { kind: string }; delayMs?: number };
+            };
           }[];
         };
-        return value?.records.find(({ event }) => event.type === 'turn/end')
-          ?.event.data.reason?.kind;
+        return value.records;
+      }
+      async function turnEnd(login: Login, sessionId: string) {
+        const records = await historyRecords(login, sessionId);
+        return records.find(({ event }) => event.type === 'turn/end')?.event
+          .data.reason?.kind;
       }
 
       const before = await login(),
@@ -375,10 +399,10 @@ test.skipIf(process.platform !== 'darwin')(
       const deniedGate = gates.arm('before-lock');
       releases.push(deniedGate.latch.release);
       expect(
-        (await prompt(before, deniedSession, 'Synthetic never sent')).json()
+        (await prompt(before, deniedSession, `${bodyMarker}: denied`)).json()
           .result.ok,
       ).toBe(true);
-      await expect.poll(() => deniedGate.entered).toBe(true);
+      await expect.poll(() => deniedGate.entered, retryTimeout).toBe(true);
       expect((await logout(before)).statusCode).toBe(200);
       deniedGate.latch.release();
       await expect.poll(() => deniedGate.wire?.closed).toBe(true);
@@ -390,11 +414,11 @@ test.skipIf(process.platform !== 'darwin')(
       const writtenGate = gates.arm('before-commit');
       releases.push(writtenGate.latch.release);
       expect(
-        (
-          await prompt(after, sentSession, 'Synthetic body before revoke')
-        ).json().result.ok,
+        (await prompt(after, sentSession, bodyMarker)).json().result.ok,
       ).toBe(true);
-      await expect.poll(() => writtenGate.wire?.bytes ?? 0).toBeGreaterThan(0);
+      await expect
+        .poll(() => writtenGate.wire?.bytes ?? 0, retryTimeout)
+        .toBeGreaterThan(0);
       const revoking = logout(after);
       await expect
         .poll(
@@ -418,39 +442,48 @@ test.skipIf(process.platform !== 'darwin')(
       await expect.poll(() => writtenGate.wire?.closed).toBe(true);
       expect(arrivals).toHaveLength(1);
       expect(arrivals[0]?.auth).toBe('Bearer ' + credentialMarker);
-      expect(JSON.stringify(arrivals[0]?.body)).toContain(
-        'Synthetic body before revoke',
-      );
+      expect(JSON.stringify(arrivals[0]?.body)).toContain(bodyMarker);
       expect((await events(after, sentSession)).statusCode).toBe(401);
+      const sentHistory = await events(observer, sentSession);
+      expect(sentHistory.body).toContain(bodyMarker);
+      expect(sentHistory.body.includes(credentialMarker)).toBe(false);
 
       supplierReply = Promise.resolve();
       const retrySession = await create(observer);
+      const retryPrompt = 'Synthetic valid retry';
       rateLimit = true;
       expect(
-        (await prompt(observer, retrySession, 'Synthetic valid retry')).json()
-          .result.ok,
+        (await prompt(observer, retrySession, retryPrompt)).json().result.ok,
       ).toBe(true);
       await expect
-        .poll(async () => (await events(observer, retrySession)).body)
+        .poll(
+          async () => (await events(observer, retrySession)).body,
+          retryTimeout,
+        )
         .toContain(reply);
       await expect
         .poll(() => turnEnd(observer, retrySession))
         .toBe('completed');
       expect(arrivals).toHaveLength(3);
+      for (const arrival of arrivals.slice(1))
+        expect(JSON.stringify(arrival.body)).toContain(retryPrompt);
 
       const unknownSession = await create(observer);
       const unknownGate = gates.arm('lose-commit');
+      const unknownPrompt = `${bodyMarker}: unknown commit`;
       expect(
-        (
-          await prompt(observer, unknownSession, 'Synthetic unknown commit')
-        ).json().result.ok,
+        (await prompt(observer, unknownSession, unknownPrompt)).json().result
+          .ok,
       ).toBe(true);
       await expect
         .poll(async () => (await events(observer, unknownSession)).body)
         .toContain('本轮模型请求失败');
-      await expect.poll(() => turnEnd(observer, unknownSession)).toBe('error');
+      await expect
+        .poll(() => turnEnd(observer, unknownSession), retryTimeout)
+        .toBe('error');
       expect(unknownGate.wire?.bytes).toBeGreaterThan(0);
       expect(arrivals).toHaveLength(4);
+      expect(JSON.stringify(arrivals.at(-1)?.body)).toContain(unknownPrompt);
 
       const timeoutSession = await create(observer);
       const lock = await lab.owner.connect();
@@ -465,13 +498,46 @@ test.skipIf(process.platform !== 'darwin')(
           ).json().result.ok,
         ).toBe(true);
         await expect
-          .poll(() => turnEnd(observer, timeoutSession), { timeout: 4500 })
+          .poll(() => turnEnd(observer, timeoutSession), retryTimeout)
           .toBe('error');
         expect(arrivals).toHaveLength(4);
       } finally {
         await lock.query('rollback');
         lock.release();
       }
+
+      const backingOff = await login();
+      const backoffSession = await create(backingOff);
+      const backoffPrompt = `${bodyMarker}: revoked during backoff`;
+      const arrivalsBeforeBackoff = arrivals.length;
+      const requestsBeforeBackoff = supplierRequests;
+      rateLimit = true;
+      expect(
+        (await prompt(backingOff, backoffSession, backoffPrompt)).json().result
+          .ok,
+      ).toBe(true);
+      await expect
+        .poll(
+          async () =>
+            (await historyRecords(observer, backoffSession)).find(
+              ({ event }) => event.type === 'llm/retry',
+            )?.event.data.delayMs,
+          { interval: 40, timeout: retryTimeout.timeout },
+        )
+        .toBe(retryDelayMs);
+      expect(arrivals).toHaveLength(arrivalsBeforeBackoff + 1);
+      expect(JSON.stringify(arrivals.at(-1)?.body)).toContain(backoffPrompt);
+      expect((await logout(backingOff)).statusCode).toBe(200);
+      const afterLogout = await historyRecords(observer, backoffSession);
+      expect(afterLogout.map(({ event }) => event.type)).not.toContain(
+        'llm/retry-started',
+      );
+      await expect
+        .poll(() => turnEnd(observer, backoffSession), retryTimeout)
+        .toBeDefined();
+      expect(arrivals).toHaveLength(arrivalsBeforeBackoff + 1);
+      expect(supplierRequests).toBe(requestsBeforeBackoff + 1);
+      expect(await turnEnd(observer, backoffSession)).toBe('error');
 
       const shutdownSession = await create(observer);
       const shutdownId = randomUUID();
@@ -487,7 +553,9 @@ test.skipIf(process.platform !== 'darwin')(
           )
         ).json().result.ok,
       ).toBe(true);
-      await expect.poll(() => shutdownGate.wire?.bytes ?? 0).toBeGreaterThan(0);
+      await expect
+        .poll(() => shutdownGate.wire?.bytes ?? 0, retryTimeout)
+        .toBeGreaterThan(0);
       const closing = bff.close();
       await expect.poll(() => shutdownGate.wire?.closed).toBe(true);
       const ownership = () =>
@@ -602,7 +670,7 @@ test.skipIf(process.platform !== 'darwin')(
             await prompt(active, sessionId, 'Synthetic management revocation')
           ).json().result.ok,
         ).toBe(true);
-        await expect.poll(() => gate.entered).toBe(true);
+        await expect.poll(() => gate.entered, retryTimeout).toBe(true);
         expect((await manage(command)).statusCode).toBe(200);
         gate.latch.release();
         await expect.poll(() => gate.wire?.closed).toBe(true);
@@ -633,12 +701,12 @@ test.skipIf(process.platform !== 'darwin')(
           await prompt(
             manager,
             unavailableSession,
-            'Synthetic unavailable outlet',
+            `${bodyMarker}: unavailable outlet`,
           )
         ).json().result.ok,
       ).toBe(true);
       await expect
-        .poll(() => turnEnd(manager, unavailableSession), { timeout: 4500 })
+        .poll(() => turnEnd(manager, unavailableSession), retryTimeout)
         .toBe('error');
       expect(arrivals).toHaveLength(beforeOutage);
 
@@ -670,11 +738,18 @@ test.skipIf(process.platform !== 'darwin')(
       expect(rejected.statusCode).toBe(503);
       expect(rejected.headers['x-rdws-model-egress']).toBe('paused');
       expect(arrivals).toHaveLength(beforeOutage);
+      await bff.close();
+      app = undefined;
+      const diagnostics = output.join('') + (await lab.logs());
+      for (const marker of [credentialMarker, bodyMarker])
+        expect(diagnostics.includes(marker)).toBe(false);
     } finally {
       releases.forEach((release) => release());
       try {
         await app?.close();
       } finally {
+        stdout.mockRestore();
+        stderr.mockRestore();
         gates.restore();
         setDefaultCACertificates(originalCAs);
         for (const socket of upstreamSockets) socket.destroy();

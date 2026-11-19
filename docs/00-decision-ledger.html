@@ -187,6 +187,12 @@
     <li><strong>T04／D23：</strong>用用户指定的授权 Gitee 仓库实测 <code>main</code> 的 HTTPS 只读镜像和 SSH 提交验签，以 <code>test</code> 为非生产目标。两项正式验证已通过，T05 解锁。T09 继续以授权 GitLab 仓库验收推送、MR、人工合入和回写。<a href="02-directory-and-engineering-design.html#t04-gitee-live-20261118">真实验收证据</a>。</li>
   </ul>
 
+  <h3 id="t13-egress-fork-decisions-20261119">8.14 T13 统一模型出口与派生选模 · 2026-11-19</h3>
+  <ul>
+    <li><strong>统一模型出口：</strong>用户确认模型请求走唯一受信出口。出口发送前做最终授权校验，实际交付请求与撤权生效共用定序点。撤权生效后禁止发起新请求，重试、文件上传和后台标题也须逐次校验。已发出的请求可能继续完成。部署方须确认出口可临时处理正文和认证头，两者均不得落盘或进入日志。后续可由出口对接 DSH 统一统计与计量。</li>
+    <li><strong>原生派生：</strong>父会话在派生切点中尚未用于实际请求的模型选择作为历史保留。遇到这类选择时，子会话首次发送前须由本人明确选择当前可用模型，父会话的待生效选择不会自动激活。原生前缀及其切点继续保留，快捷新建按 Q7 既有规则。<a href="02-directory-and-engineering-design.html#t13-egress-fork-acceptance-20261119">目标规格与验收</a>。</li>
+  </ul>
+
   <div class="warn">以下 §0–§7 保留 v3 设计历史与证据。与上方当前实施基线冲突时，以上方决定及替代关系为准；历史“已评审”不代表本轮实现已验证。</div>
   <h2 id="s0"><span class="num">0</span>这份文件的用途</h2>
   <div class="verdict">

@@ -169,10 +169,11 @@
   - 前置：T11、T14。
   - 来源：I3-CONTEXT、D21；已有上下文同步契约。
 
-- [ ] **T13 · 模型与供应商管理**（进行中：已验证原生授权与会话选模持久化）
+- [ ] **T13 · 模型与供应商管理**（进行中：统一出口与派生选模规则已确认，待实施方案）
   - 说明：适配 DSH 原生配置界面和授权作用域，支持平台、项目和个人的分层选择。
   - 可验收目标：配置使用原生 Provider／Profile／Credentials；项目只使用允许集合；个人只在允许范围选择本次会话模型；平台锁定项不能被下级覆盖；普通 DTO、日志与页面不暴露凭据；不另建模型调用权威。
-  - 已确认的选模验收：本人可在同一会话反复选择允许的模型，在下次本人有权发送时重验并应用。已选模型被停用或移出允许集合时，保留待发送输入，提示重新选择可用模型，由用户再次发送，无自动默认回退。验收分别核对保存、实际 Native 生效、撤权和其他会话隔离。本次无新增原生派生决定。详见[时点和验收](02-directory-and-engineering-design.html#t13-send-time-acceptance-20261118)。
+  - 已确认的选模验收：本人可在同一会话反复选择允许的模型，在下次本人有权发送时重验并应用。已选模型被停用或移出允许集合时，保留待发送输入，提示重新选择可用模型，由用户再次发送，无自动默认回退。验收分别核对保存、实际 Native 生效、撤权和其他会话隔离。详见[时点和验收](02-directory-and-engineering-design.html#t13-send-time-acceptance-20261118)。
+  - 已确认的出口及派生验收：统一受信出口须让实际发出与撤权同序，逐次校验主请求、重试、上传和后台标题。遇到派生前缀中的未外发模型选择，子会话须由本人明确选模后才能首次发送。历史前缀及快捷新建规则继续适用。部署方须确认瞬时处理正文和认证头的边界。DSH 统计与计量后续对接。见[决定台账](00-decision-ledger.html#t13-egress-fork-decisions-20261119)和[验收判据](02-directory-and-engineering-design.html#t13-egress-fork-acceptance-20261119)。
   - 前置：T03；已核实所需原生公开配置接口。
   - 来源：D2、D19；台账模型配置权威。
   - 当前证据：[原生授权核查](02-directory-and-engineering-design.html#t13-native-evidence-20261118)及[会话选模验证](02-directory-and-engineering-design.html#t13-session-model-evidence-20261118)。通过 Host 公共会话能力写入原生选择，目标会话冷启动后仍能读取，另一会话与实例默认值保持原值。普通浏览器授权继续拒绝配置读取和直接选模。分层配置与用户选模入口待接线。
@@ -184,7 +185,7 @@
   - 已交付修复：[旧标签页的原登录绑定](02-directory-and-engineering-design.html#t13-native-login-binding-evidence-20261119)。Native HTTP 与 WebSocket 按页面原登录校验，Cookie 更换后旧页停发。同账号登录变化后的原草稿可在当前页复制，重新打开后以新登录读取。独立复审、整仓 183 项、浏览器 34 项、本机 Native 断连和追溯校验通过。逐次推理授权和本人选模入口仍待交付。
   - 实现前验证：[发出前的传输证据](02-directory-and-engineering-design.html#t13-provider-dispatch-probe-20261119)。已在锁定版本的 PiAi HTTP 路径核对首次推理、429 后重试及独立后台标题。夹具可阻断指定的实际请求，标题原生记录可追溯到原消息。产品授权方案继续按 §11.16.7 复审。
   - 实现前验证：[DeepSeek Messages 与 Files](02-directory-and-engineering-design.html#t13-deepseek-messages-dispatch-probe-20261119)。回环实证核对上传、内联回退、缓存文件引用及扩展准备失败，确认 Files 与 Messages 各有实际外发边界。工作台图片输入及产品逐次授权未在此探针启用。
-  - 实现前验证：[入箱领取选模与派生边界](02-directory-and-engineering-design.html#t13-claim-selection-probe-20261119)。实际排队发送确认本轮原模型及下轮目标模型，阻止后仍可能把未外发的选择带入派生。撤权定序所需网络边界及未外发选择的派生语义登记为待决。
+  - 实现前验证：[入箱领取选模与派生边界](02-directory-and-engineering-design.html#t13-claim-selection-probe-20261119)。实际排队发送确认本轮原模型及下轮目标模型，阻止后仍可能把未外发的选择带入派生。后续以已确认的出口及派生验收为准，现有证据用于实施方案。
   - 已交付修复：[冷恢复后首次新发送](02-directory-and-engineering-design.html#t13-queued-recovery-evidence-20261119)。已刷盘的旧输入保留在 Native 原始日志。新的有效入箱才取消缺少运行绑定的旧活动项，首次新发送完成，旧键在再次冷启后仍可核对。独立复审、整仓 187 项、浏览器 34 项、本机 Native 通知故障回归及基线通过。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）

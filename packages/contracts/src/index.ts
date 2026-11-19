@@ -383,6 +383,35 @@ export interface RequirementDetail {
     codeWrite: false;
   };
 }
+export const businessAuditLabels = {
+  'requirement.initialized': '初始化需求',
+  'requirement.participation.repaired': '补全需求参与关系',
+  'requirement.created': '创建需求',
+  'requirement.stage': '调整需求阶段',
+  'requirement.details': '编辑需求资料',
+  'requirement.personnel': '调整人员与分工',
+  'task.created': '创建子任务',
+  'task.updated': '更新子任务',
+} as const;
+export interface BusinessAuditEvent {
+  id: string;
+  kind: keyof typeof businessAuditLabels;
+  actorId: string;
+  actorName: string | null;
+  source: 'web' | 'migration';
+  version: number;
+  taskId: string | null;
+  createdAt: string;
+  stage?: { before: Stage; after: Stage };
+  taskStatus?: { before?: TaskStatus; after: TaskStatus };
+  changedFields?: (keyof RequirementDetailsInput['patch'])[];
+}
+export interface BusinessAuditPage {
+  requirementId: string;
+  throughVersion: number;
+  next: { version: number; id: string } | null;
+  events: BusinessAuditEvent[];
+}
 
 export const RepositorySyncInput = Type.Object(
   { commandId: Type.String({ format: 'uuid' }) },

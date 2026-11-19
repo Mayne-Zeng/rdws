@@ -13,6 +13,7 @@ import { eq, and, desc, asc, sql, inArray } from 'drizzle-orm';
 import { schema } from '@rdws/db';
 import { isRecord, onlyKeys } from '@rdws/dsh/access';
 import { templateBindingPath, personnelPath } from './workbench-paths.ts';
+import { registerRequirementAudit } from './workbench-audit.ts';
 import {
   fail,
   type WorkbenchRuntime,
@@ -72,6 +73,7 @@ export function registerRequirements(
   app: FastifyInstance,
   workbench: WorkbenchRuntime,
 ) {
+  registerRequirementAudit(app, workbench);
   const {
     access,
     actor,

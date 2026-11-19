@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 import type { RequirementDetailsInput } from '@rdws/contracts';
 import { prepareSession } from '../helpers/auth-session.ts';
@@ -17,6 +18,7 @@ test('requirement details preserve the original edit across reload and discard s
     secondTitle = '其他需求 ' + second.slice(0, 8);
   const finalTitle = '更新 ' + id.slice(0, 8);
   const path = `/api/requirements/${id}/details`;
+  const auditPath = `/api/requirements/${id}/business-audit`;
   const routeUrl = `/?project=${project}&requirement=${id}&view=overview`;
   const received: RequirementDetailsInput[] = [];
   let isolated = false;
@@ -164,6 +166,81 @@ test('requirement details preserve the original edit across reload and discard s
     await expect(
       page.getByText('保留的验收标准', { exact: true }),
     ).toBeVisible();
+
+    const initialAuditIds = Array.from({ length: 25 }, () => randomUUID());
+    const auditPayloadMarker = 'SYNTHETIC_BROWSER_AUDIT_VALUE';
+    await pool.query(
+      `insert into requirement_event(id,requirement_id,kind,actor_id,source,command_id,version,"after")
+       select event, $2, 'task.created', $3, 'web', $4, 1, $5::jsonb
+       from unnest($1::text[]) as event`,
+      [
+        initialAuditIds,
+        id,
+        lead.id,
+        auditPayloadMarker,
+        JSON.stringify({ status: 'todo', description: auditPayloadMarker }),
+      ],
+    );
+    let denyAudit = false;
+    await page.route('**' + auditPath + '*', async (route) => {
+      if (denyAudit)
+        return route.fulfill({
+          status: 403,
+          json: { error: '当前权限已失效' },
+        });
+      const response = await route.fetch();
+      expect(response.status()).toBe(200);
+      const value = await response.json();
+      expect(JSON.stringify(value)).not.toContain(auditPayloadMarker);
+      const edited = value.events.find(
+        (event: { kind: string }) => event.kind === 'requirement.details',
+      );
+      if (edited) edited.actorName = ' =1+1';
+      return route.fulfill({ response, json: value });
+    });
+    const audit = page.getByRole('region', { name: '业务审计' });
+    const exportAudit = audit.getByRole('button', { name: '导出当前页 CSV' });
+    await audit.getByText('业务审计', { exact: true }).click();
+    await audit.getByText('编辑需求资料', { exact: true }).click();
+    await expect(audit.getByText('变更字段 需求标题')).toBeVisible();
+    const csv = page.waitForEvent('download');
+    await exportAudit.click();
+    const download = await csv;
+    expect(download.suggestedFilename()).toBe(`business-audit-${id}.csv`);
+    const summary = await readFile(await download.path(), 'utf8');
+    expect(summary).toContain('"\' =1+1"');
+    expect(summary).not.toContain(auditPayloadMarker);
+    expect(summary).not.toContain(finalTitle);
+    await audit.getByRole('button', { name: '下一页', exact: true }).click();
+    await expect(audit.getByText('创建子任务', { exact: true })).toHaveCount(1);
+    await expect(audit.getByText('编辑需求资料', { exact: true })).toHaveCount(
+      0,
+    );
+    await audit.getByText('创建子任务', { exact: true }).click();
+    await expect(audit.getByText('任务状态 待开始')).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await audit.screenshot({
+      path: testInfo.outputPath('business-audit-light-390.png'),
+    });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await expect(page.locator('html')).toHaveAttribute('theme-mode', 'dark');
+    await audit.screenshot({
+      path: testInfo.outputPath('business-audit-dark-390.png'),
+    });
+    denyAudit = true;
+    await audit.getByRole('button', { name: '返回最新记录' }).click();
+    await expect(audit.getByText('读取业务审计失败，请重试。')).toBeVisible();
+    await expect(exportAudit).toHaveCount(0);
+    denyAudit = false;
+    await audit.getByRole('button', { name: '重试读取业务审计' }).click();
+    await expect(
+      audit.getByText('编辑需求资料', { exact: true }),
+    ).toBeVisible();
+    await audit.getByText('业务审计', { exact: true }).click();
 
     await page.emulateMedia({ colorScheme: 'dark' });
     await edit.click();

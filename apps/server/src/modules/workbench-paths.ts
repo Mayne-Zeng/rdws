@@ -6,6 +6,7 @@ export const sessionHistoryPath =
   '/api/requirements/:id/sessions/:sessionId/history';
 export const sessionTemplatePath =
   '/api/requirements/:id/sessions/:sessionId/capability-template';
+export const businessAuditPath = '/api/requirements/:id/business-audit';
 export const sessionForkPath = '/api/requirements/:id/sessions/:sessionId/fork';
 export const nativeBootstrapPath = '/api/dsh/:id/bootstrap';
 export const nativeTransportPath = '/api/dsh/:id/native/*';
@@ -23,11 +24,12 @@ export const isImportRequest = (request: FastifyRequest) =>
 export const isTemplateBindingRequest = (request: FastifyRequest) =>
   request.routeOptions.url === templateBindingPath &&
   (request.method === 'GET' || request.method === 'POST');
-export const isPassiveSessionRead = (request: FastifyRequest) =>
+export const isPassiveRequirementRead = (request: FastifyRequest) =>
   request.method === 'GET' &&
   (request.routeOptions.url === sessionsPath ||
     request.routeOptions.url === sessionHistoryPath ||
-    request.routeOptions.url === sessionTemplatePath);
+    request.routeOptions.url === sessionTemplatePath ||
+    request.routeOptions.url === businessAuditPath);
 export const isSessionWrite = (request: FastifyRequest) =>
   request.method === 'POST' &&
   (request.routeOptions.url === sessionsPath ||

@@ -1391,6 +1391,18 @@
   <p><code>caffeinate -i pnpm test:e2e tests/e2e/requirement-import.spec.ts</code> 通过（1 项），覆盖实际 CSV 和共享／内联字符串 XLSX、公式定位、多工作表、校验进度、同页修正、入库回执、刷新后主动重试及暂时读回失败。复核 390px 明暗界面无横向溢出。</p>
   <p><code>caffeinate -i pnpm check</code> 返回 0（25 文件、164 项，类型、lint、格式和构建通过）。构建仍提示主包超过 500 kB。<code>caffeinate -i pnpm test:e2e</code> 返回 0（32 项，约 1 分钟）。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 个追溯点、16 视图）。交付以本地 <code>feat: import requirements with atomic batch receipts</code> 为准。</p>
 
+  <h3 id="t17-requirement-business-audit-plan-20261120">11.22 T17 需求范围内的业务审计</h3>
+  <p>Change / R2，基线 <code>f6d3f44</code>。按 T17、I2-AUTH、D7 交付按权限读取实际业务事件、查看细节与导出。复用 T03 已验证的需求读取和撤权、T11 的 <code>requirement_event</code> 写入证据以及 T16 <a href="#t16-trace-delivery-20261118">已验证的固定边界读回和本地导出</a>。入口在已授权需求的档案，覆盖当前需求的业务记录，平台级检索与其余事件来源继续按各自验收推进。Native 轨迹和物理锚点继续独立保存。</p>
+  <ol>
+    <li>新增只读 <code>GET /api/requirements/:id/business-audit</code>。沿用观察登录、no-store、项目及需求的已有读取授权和出站复核。先从有权需求读出项目、需求及 <code>contextVersion</code>，后以相同需求和项目查真实事件。每页最多 25 条，按 <code>(version,id)</code> 降序。首次确定可读版本上界，后续带同一上界和严格向前的版本／ID 游标。版本参数有正整数界、ID 只收有限已知标识格式。读侧无表变更、无 Native 启动。查询及导出只做投影，<code>requirement_event</code> 保持历史权威。</li>
+    <li>逐字段投影支持的已持久业务类型、操作者、时间、版本和任务关联。对于阶段和子任务状态，只投影已定义枚举的实际前后值。资料修改只投影已知字段名。人员记录显示已提交的类型、操作者与任务关联，保持原生之外的真实来源边界。原命令载荷、完整业务前后值、凭据和会话历史均不进入新 DTO、详情或导出。时间采用真实数据库时间。未知事件类型不合成状态。</li>
+    <li>在需求档案展开「业务审计」后读取，与最近活动并列。展示真实摘要、受支持的详情以及当前页 CSV 导出。请求按项目、需求、账号、观察登录和分页位置隔离，加载、空、失败、重试、下一页和回到最新明确可达。失权或切换清空旧结果及导出入口。CSV 仅写已显示的摘要元数据，按固定列编码、转义引号和首个非空白公式控制字符。复用页面现有明暗主题、键盘交互与布局。</li>
+    <li>隔离 PostgreSQL 用例覆盖真实业务命令、同版本排序、更新后固定上界、出站撤权、同登录匹配、跨需求和项目拒绝、原载荷未泄露及非法游标。浏览器覆盖实际列表与详情、导出字段、公式文本保护、权限失败与恢复、390px 明暗。确认改前缺入口、改后聚焦及整仓、浏览器两分片、类型、lint、格式、构建和基线。回退单项提交。</li>
+  </ol>
+
+  <p id="t17-requirement-business-audit-evidence-20261120">独立方案和交付复核均为 APPROVE。复核确认原观察登录、按当前项目与需求的初始和出站 reader 核查、固定版本与同版本 ID 定序，兼容迁移事件 ID。接口、详情及 CSV 保持最小业务投影。浏览器在请求失败或范围切换时隐藏旧记录和导出。</p>
+  <p>改前 <code>pnpm test tests/integration/requirement-details.test.ts -t 'authorized business audit cut'</code> 因路径 404 返回 1。改后该用例通过，实际 PostgreSQL 读回同版多行、后续提交与历史切点隔离、真实业务写入、跨项目／需求拒绝、观察登录错配、迟到撤权和私有载荷缺失。浏览器 <code>pnpm test:e2e tests/e2e/requirement-details.spec.ts</code> 通过 1 项，实际 API 翻页、打开字段及状态详情、CSV 首字符防护、失败重试、390px 明暗无横向溢出。锁定 Node 24.20.0 和 Apple Git 下，整仓 <code>pnpm test</code> 通过 48 文件、284 项，1 项既有条件跳过。<code>pnpm test:e2e --shard=1/2</code> 和 <code>pnpm test:e2e --shard=2/2</code> 各通过 22 项。类型、lint、格式、构建和基线通过。审计范围为已有的需求业务事件，T17 其余链路继续按清单验收。</p>
+
   <h2 id="s0"><span class="num">0</span>评审结论</h2>
   <div class="verdict">
     <div class="vtitle">总体判定</div>

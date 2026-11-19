@@ -27,7 +27,7 @@ import {
   nativeGenerationHeader,
   isImportRequest,
   isTemplateBindingRequest,
-  isPassiveSessionRead,
+  isPassiveRequirementRead,
   isSessionWrite,
 } from './workbench-paths.ts';
 export type Database = ReturnType<typeof connectDatabase>['db'];
@@ -597,7 +597,7 @@ export function createWorkbenchRuntime(
 
   app.addHook('onRequest', async (request, reply) => {
     if (request.routeOptions.url === nativeMuxPath) return;
-    const passiveRead = isPassiveSessionRead(request);
+    const passiveRead = isPassiveRequirementRead(request);
     const sessionWrite = isSessionWrite(request);
     if (passiveRead || sessionWrite) reply.header('cache-control', 'no-store');
     if (
@@ -694,7 +694,7 @@ export function createWorkbenchRuntime(
     const demand = /^\/api\/(?:requirements|dsh)\/([^/]+)/.exec(path);
     if (path !== '/api/projects' && !project && !demand) return;
     const templateBinding = isTemplateBindingRequest(request);
-    const passiveRead = isPassiveSessionRead(request);
+    const passiveRead = isPassiveRequirementRead(request);
     const epoch = authorizationEpoch;
     const who = await actor(request.headers);
     if (templateBinding) verifyEditLogin(request, who.authSessionId);

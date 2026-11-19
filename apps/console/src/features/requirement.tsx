@@ -17,6 +17,7 @@ import { RequirementWorktrees } from './requirement-worktrees.tsx';
 import { RequirementTemplate } from './requirement-template.tsx';
 import { SessionTemplateStatusPanel } from './session-template-status.tsx';
 import { RequirementPersonnel } from './requirement-personnel.tsx';
+import { RequirementAudit } from './requirement-audit.tsx';
 import {
   RequirementDetailsEditor,
   detailFieldLabels,
@@ -647,6 +648,10 @@ export function RequirementPage({
               ))}
             </div>
           </section>
+          <RequirementAudit
+            key={`business-audit:${detailsScope}`}
+            scope={{ id, projectId, userId, loginId: sessionId }}
+          />
         </>
       )}
     </>

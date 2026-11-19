@@ -33,10 +33,19 @@ const project = 'details-' + randomUUID(),
 const demand = randomUUID(),
   race = randomUUID(),
   late = randomUUID(),
+  auditDemand = randomUUID(),
   foreign = randomUUID(),
   unassigned = randomUUID(),
   nativeDemand = randomUUID();
-const demands = [demand, race, late, foreign, unassigned, nativeDemand];
+const demands = [
+  demand,
+  race,
+  late,
+  auditDemand,
+  foreign,
+  unassigned,
+  nativeDemand,
+];
 const members = new Map<
   string,
   { id: string; cookie: string; sessionId: string }
@@ -45,12 +54,129 @@ let isolated = false;
 let beforeResponse: (() => Promise<void>) | undefined;
 
 app.addHook('preSerialization', async (request, _reply, payload) => {
-  if (request.url.startsWith(`/api/requirements/${late}`) && beforeResponse) {
+  if (
+    beforeResponse &&
+    (request.url.startsWith(`/api/requirements/${late}`) ||
+      request.url.startsWith(`/api/requirements/${auditDemand}/business-audit`))
+  ) {
     const callback = beforeResponse;
     beforeResponse = undefined;
     await callback();
   }
   return payload;
+});
+
+test('reads an authorized business audit cut without exporting original business values', async () => {
+  const readAudit = (
+    user: string,
+    id = auditDemand,
+    query = '',
+    login = members.get(user)!.sessionId,
+  ) =>
+    app.inject({
+      url: `/api/requirements/${id}/business-audit${query}`,
+      headers: {
+        cookie: members.get(user)!.cookie,
+        'x-rdws-edit-session': login,
+      },
+    });
+  const marker = 'SYNTHETIC_AUDIT_PAYLOAD_' + randomUUID();
+  const changed = await post(
+    'manager',
+    auditDemand,
+    intent({ description: marker }),
+  );
+  expect(changed.statusCode).toBe(200);
+  const version = changed.json().contextVersion as number;
+  const eventIds = Array.from({ length: 25 }, () => randomUUID());
+  const taskId = randomUUID();
+  await pool.query(
+    `insert into requirement_event(id,requirement_id,task_id,kind,actor_id,source,command_id,version,"before","after")
+     select event, $2, $3, 'task.updated', $4, 'web', $5, $6, $7::jsonb, $8::jsonb
+     from unnest($1::text[]) as event`,
+    [
+      eventIds,
+      auditDemand,
+      taskId,
+      members.get('lead')!.id,
+      marker,
+      version,
+      JSON.stringify({ status: 'todo', description: marker }),
+      JSON.stringify({ status: 'in_progress', description: marker }),
+    ],
+  );
+  const first = await readAudit('tester');
+  expect(first.statusCode).toBe(200);
+  expect(first.headers['cache-control']).toBe('no-store');
+  const page = first.json();
+  expect(page.throughVersion).toBe(version);
+  expect(page.events).toHaveLength(25);
+  expect(page.events).toContainEqual(
+    expect.objectContaining({
+      kind: 'task.updated',
+      taskId,
+      actorId: members.get('lead')!.id,
+      taskStatus: { before: 'todo', after: 'in_progress' },
+    }),
+  );
+  expect(first.body).not.toContain(marker);
+  expect(page.next).toMatchObject({ version, id: page.events.at(-1).id });
+  const later = await post(
+    'manager',
+    auditDemand,
+    intent({ acceptance: 'New audit cut' }),
+  );
+  expect(later.statusCode).toBe(200);
+  const next = await readAudit(
+    'tester',
+    auditDemand,
+    '?' +
+      new URLSearchParams({
+        throughVersion: String(page.throughVersion),
+        beforeVersion: String(page.next.version),
+        beforeId: page.next.id,
+      }),
+  );
+  expect(next.statusCode).toBe(200);
+  expect(next.json().events).toHaveLength(1);
+  expect(next.json().throughVersion).toBe(version);
+  expect(next.json().next).toBeNull();
+  const all = [...page.events, ...next.json().events];
+  expect(all.every((event) => event.version === version)).toBe(true);
+  expect(new Set(all.map(({ id }) => id)).size).toBe(26);
+  expect(all.map(({ id }) => id)).toEqual(
+    all
+      .map(({ id }) => id)
+      .sort()
+      .reverse(),
+  );
+  expect(all.find(({ kind }) => kind === 'requirement.details')).toMatchObject({
+    actorId: members.get('manager')!.id,
+    changedFields: ['description'],
+  });
+  expect(next.body).not.toContain(marker);
+  expect((await readAudit('admin')).statusCode).toBe(403);
+  expect((await readAudit('pm', foreign)).statusCode).toBe(403);
+  expect((await readAudit('manager', unassigned)).statusCode).toBe(403);
+  expect(
+    (await readAudit('tester', auditDemand, '', randomUUID())).statusCode,
+  ).toBe(401);
+  expect(
+    (await readAudit('tester', auditDemand, '?beforeVersion=1')).statusCode,
+  ).toBe(400);
+  expect(
+    (await readAudit('tester', auditDemand, '?throughVersion=2147483647'))
+      .statusCode,
+  ).toBe(400);
+  beforeResponse = async () => {
+    await pool.query(
+      "delete from requirement_participant where requirement_id=$1 and user_id=$2 and role='tester'",
+      [auditDemand, members.get('tester')!.id],
+    );
+  };
+  const revoked = await readAudit('tester');
+  expect(revoked.statusCode).toBe(403);
+  expect(revoked.body).not.toContain(eventIds[0]!);
 });
 
 const get = (user: string, id: string) =>

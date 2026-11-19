@@ -274,9 +274,15 @@ export class ContextRuns {
       .filter((r) => r.submitted)
       .map((r) => r.runId);
   }
-  reconcile(candidates: string[], active: string[]) {
-    const keep = new Set(active);
-    for (const id of candidates) if (!keep.has(id)) this.discard(id);
+  reconcile(candidates: string[], active: ReadonlySet<string>) {
+    const retired: string[] = [];
+    for (const id of candidates) {
+      if (!active.has(id) && this.runs.get(id)?.submitted) {
+        this.discard(id);
+        retired.push(id);
+      }
+    }
+    return retired;
   }
   private current(batch: readonly Run[]) {
     const now = Date.now();

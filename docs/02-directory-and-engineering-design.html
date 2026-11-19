@@ -965,6 +965,9 @@
   </ol>
   <p>本轮先独立评审 R-01 方案并验证行为等价。正式入口的权限定序、支持的供应商协议和用途、配置归属及派生规则在实施前以本节验收要求补齐具体方案与双面复审证据。</p>
   <p>R-01 方案修订后复审及交付独立复审均 APPROVE。独立 TypeScript AST 对照确认 35 项 Fastify 路由、插件和钩子的注册顺序及内容一致，权限代次改为从共享运行时实时读取。<code>pnpm test</code> 返回 0（42 文件、263 项通过、1 项既有跳过），其中包含撤权与持久所有者用例。<code>pnpm test:e2e --shard=1/2</code> 和 <code>pnpm test:e2e --shard=2/2</code> 各通过 22 项，类型、lint、排除内嵌评审工作树后的格式检查、构建与基线校验通过。</p>
+  <p id="t13-egress-reconcile-evidence">R-08 方案与交付复审均 APPROVE。改前受控载体漏报时只读取一次活动列表，新用例按两次核对断言失败。改后首轮漏报可保留活跃绑定，两次明确缺失才登记补偿，畸形列表不清理候选，未确认取消阻止新认领并可重试，首次检查后并发提交的绑定保留。已受理键保持原有核对路径。<code>pnpm test</code> 定点覆盖 run-admission、native-queued-recovery 与 revocation-races，共 13 项通过，另有 session-lifecycle 22 项通过。<code>pnpm test:e2e tests/e2e/session-retry.spec.ts</code> 通过 5 项。</p>
+  <p id="t13-egress-projection-plan">R-05 的首个可单验切片收紧 state、list、projections 与其流式对照。按已授权的 streamId 对应端点选择投影。同一物理连接内的 ID 终身不可复用，保留的已用 ID 集合有上限，到限沿用重连；取消或终态只清理活动映射，忽略已终态 ID 的迟到帧。客户端 end 只半关闭上行。验证取消后同 ID 重开、再到达旧 item／error，以及正常邻流。</p>
+  <p>state 递归按公开队列内容类型重建，保留游标、运行、待处理输入和用户正文。list 保留会话标识、状态、时间、父节点及同一边界下的投影。control 的 baseline／projection、observeProjections、projections、follow 快照共用已核对的投影字段与嵌套值规则。保留 modelSelection 的 next／lastUsed 和 inbox 的 next-turn／next-step 项、明示空值及顺序水位。<code>$events</code> 重建 ready 的 clientId 与 host.home，保留五种会话通知，其他通知忽略。错误仅保留已知代码，其他代码及原消息和详情由通用结果替换。未知负载不默认透传。独立权限流保持现有契约。历史与实时消息继续应用既有诊断替换。用同一合成标记验证合法正文保留及未知嵌套字段去除，并用真实 Native 核对列表、控制／观察、快照与重连。历史中的其他扩展事件和目录模型字段仍需按锁定版逐项核对，完成所有入口后再关闭 R-05。</p>
 
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>

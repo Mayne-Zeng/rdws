@@ -94,12 +94,47 @@ export async function registerNativeTransport(
     verifyNativeLogin,
   } = workbench;
 
+  async function confirmRunCancellation(
+    runtime: ProjectRuntime,
+    runId: string,
+  ) {
+    const result = await runtime.native.control('run.cancel', { runId });
+    if (!isRecord(result) || result.cancelled !== true)
+      fail(503, '原生运行的取消尚未确认，请稍后重试');
+    runtime.abandonedRuns.delete(runId);
+  }
+
+  async function activeRunIds(native: ProjectRuntime['native']) {
+    const result = await native.control('runs.active', {});
+    if (
+      !isRecord(result) ||
+      !Array.isArray(result.runIds) ||
+      !result.runIds.every(
+        (id): id is string => typeof id === 'string' && id.length > 0,
+      )
+    )
+      return;
+    return new Set(result.runIds);
+  }
+
+  async function reconcileRuns(runtime: ProjectRuntime) {
+    const candidates = runtime.runs.submittedIds();
+    if (!candidates.length) return;
+    const first = await activeRunIds(runtime.native);
+    if (!first) return;
+    const missing = candidates.filter((id) => !first.has(id));
+    if (!missing.length) return;
+    const second = await activeRunIds(runtime.native);
+    if (!second) return;
+    for (const id of runtime.runs.reconcile(missing, second))
+      runtime.abandonedRuns.add(id);
+  }
+
   async function retireRun(runtime: ProjectRuntime, runId: string) {
     runtime.runs.discard(runId);
     runtime.abandonedRuns.add(runId);
     try {
-      await runtime.native.control('run.cancel', { runId });
-      runtime.abandonedRuns.delete(runId);
+      await confirmRunCancellation(runtime, runId);
     } catch {
       return;
     }
@@ -253,21 +288,9 @@ export async function registerNativeTransport(
           for (const [key, time] of acceptedPrompts)
             if (time < Date.now()) acceptedPrompts.delete(key);
           if (!acceptedPrompts.has(promptKey)) {
-            const candidates = runs.submittedIds();
-            if (candidates.length) {
-              const active = await native.control('runs.active', {});
-              if (Array.isArray(active.runIds))
-                runs.reconcile(
-                  candidates,
-                  active.runIds.filter(
-                    (id): id is string => typeof id === 'string',
-                  ),
-                );
-            }
-            for (const runId of abandonedRuns) {
-              await native.control('run.cancel', { runId });
-              abandonedRuns.delete(runId);
-            }
+            await reconcileRuns(scope.runtime);
+            for (const runId of abandonedRuns)
+              await confirmRunCancellation(scope.runtime, runId);
             await confirmAccess(request.headers, original);
             if (transfer.revoked || stale(original)) fail(401, '授权已变化');
             pendingRun = runs.admit(

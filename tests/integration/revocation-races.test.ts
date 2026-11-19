@@ -307,6 +307,7 @@ class ObservedLoginHost extends ControlledHost {
       await this.reconcile?.();
       return { runIds: [] };
     }
+    if (operation === 'run.cancel') return { seen: true, cancelled: true };
     return { seen: true };
   }
   override async fetch(

@@ -10,6 +10,7 @@ import type {
 import { api, roleLabels } from '../lib/ui.tsx';
 import { CapabilityApprovals } from './capability-approvals.tsx';
 import { CapabilityTemplates } from './capability-templates.tsx';
+import { PlatformAccountAudit } from './platform-account-audit.tsx';
 
 type Intent = ManagementCommand extends infer Command
   ? Command extends ManagementCommand
@@ -334,6 +335,7 @@ export function MembersPage({
 
 export function PlatformPage({
   userId,
+  accountAuditLoginId,
   username,
   logout,
   logoutBusy,
@@ -342,6 +344,7 @@ export function PlatformPage({
   openDesign,
 }: {
   userId: string;
+  accountAuditLoginId?: string;
   username: string;
   logout: () => void;
   logoutBusy: boolean;
@@ -650,6 +653,13 @@ export function PlatformPage({
                     ))}
                   </dl>
                 </div>
+                {accountAuditLoginId && (
+                  <PlatformAccountAudit
+                    key={JSON.stringify([userId, accountAuditLoginId])}
+                    userId={userId}
+                    loginId={accountAuditLoginId}
+                  />
+                )}
               </section>
             </>
           )}

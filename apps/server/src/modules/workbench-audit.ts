@@ -10,6 +10,7 @@ import {
   type ProjectBusinessAuditPage,
   type ProjectAccessAuditPage,
   type ProjectAccessAuditEvent,
+  type PlatformAccountAuditPage,
 } from '@rdws/contracts';
 import { schema } from '@rdws/db';
 import { isRecord, onlyKeys } from '@rdws/dsh/access';
@@ -18,6 +19,7 @@ import {
   businessAuditPath,
   projectBusinessAuditPath,
   projectAccessAuditPath,
+  platformAccountAuditPath,
 } from './workbench-paths.ts';
 import { fail, type WorkbenchRuntime } from './workbench-runtime.ts';
 
@@ -100,6 +102,7 @@ export function registerRequirementAudit(
   const { access, confirmAccess, db, verifyEditLogin } = workbench;
   registerProjectAudit(app, workbench);
   registerProjectAccessAudit(app, workbench);
+  registerPlatformAccountAudit(app, workbench);
   app.get<{ Params: { id: string } }>(
     businessAuditPath,
     async (request): Promise<BusinessAuditPage> => {
@@ -302,6 +305,105 @@ function registerProjectAccessAudit(
           targetName: row.targetName,
           beforeRoles: [...new Set(row.beforeRoles)],
           afterRoles: [...new Set(row.afterRoles)],
+        })),
+      };
+    },
+  );
+}
+
+function registerPlatformAccountAudit(
+  app: FastifyInstance,
+  workbench: WorkbenchRuntime,
+) {
+  const { actor, assertResponse, db, responseScopes, verifyEditLogin } =
+    workbench;
+  const { commandReceipt: receipt, user } = schema;
+  app.get(
+    platformAccountAuditPath,
+    { exposeHeadRoute: false },
+    async (request): Promise<PlatformAccountAuditPage> => {
+      const epoch = workbench.authorizationEpoch;
+      const who = await actor(request.headers);
+      verifyEditLogin(request, who.authSessionId, true);
+      if (!who.platformAdmin) fail(403, '无权读取平台账号状态记录');
+      const scope = { ...who, epoch, platformOnly: true };
+      assertResponse(scope);
+      const query = request.query;
+      if (
+        !isRecord(query) ||
+        !onlyKeys(query, ['beforeAt', 'beforeActorId', 'beforeCommandId'])
+      )
+        fail(400, '账号审计分页参数不正确');
+      const { beforeAt, beforeActorId, beforeCommandId } = query;
+      let position;
+      if (Object.keys(query).length) {
+        if (
+          !isMicrosecondTimestamp(beforeAt) ||
+          typeof beforeActorId !== 'string' ||
+          !accessAuditId.test(beforeActorId) ||
+          typeof beforeCommandId !== 'string' ||
+          !accessAuditId.test(beforeCommandId)
+        )
+          fail(400, '账号审计分页位置不正确');
+        position = sql`(${receipt.createdAt}, ${receipt.actorId}, ${receipt.commandId}) <
+        (cast(${beforeAt} as timestamptz), ${beforeActorId}, ${beforeCommandId})`;
+      }
+      const targetId = sql<string>`${receipt.result}->>'targetId'`;
+      const beforeActive = sql<boolean>`${receipt.result}->'before'`;
+      const afterActive = sql<boolean>`${receipt.result}->'after'`;
+      const rows = await db
+        .select({
+          at: sql<string>`to_char(${receipt.createdAt} at time zone 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+          recordedAt: receipt.createdAt,
+          commandId: receipt.commandId,
+          actorId: receipt.actorId,
+          actorName: user.name,
+          targetId,
+          targetName: sql<
+            string | null
+          >`(select ${user.name} from ${user} where ${user.id} = (${targetId}))`,
+          beforeActive,
+          afterActive,
+        })
+        .from(receipt)
+        .leftJoin(user, eq(user.id, receipt.actorId))
+        .where(
+          and(
+            eq(receipt.scope, 'platform'),
+            eq(receipt.operation, 'account.active'),
+            sql`exists (select 1 from ${user} where ${user.id} = ${who.userId}
+        and ${user.active} and ${user.platformAdmin})`,
+            sql`${receipt.result}->'changed' = 'true'::jsonb and not (${receipt.result} ? 'projectId')`,
+            sql`jsonb_typeof(${beforeActive}) = 'boolean' and jsonb_typeof(${afterActive}) = 'boolean' and (${beforeActive}) <> (${afterActive})`,
+            sql`jsonb_typeof(${receipt.result}->'targetId') = 'string' and (${targetId}) <> ${receipt.actorId}`,
+            sql`(${targetId}) ~ ${accessAuditIds} and ${receipt.actorId} ~ ${accessAuditIds} and ${receipt.commandId} ~ ${accessAuditIds}`,
+            position,
+          ),
+        )
+        .orderBy(
+          desc(receipt.createdAt),
+          desc(receipt.actorId),
+          desc(receipt.commandId),
+        )
+        .limit(pageSize + 1);
+      responseScopes.set(request, scope);
+      const visible = rows.slice(0, pageSize);
+      const tail = visible.at(-1);
+      return {
+        next:
+          rows.length > pageSize && tail
+            ? { at: tail.at, actorId: tail.actorId, commandId: tail.commandId }
+            : null,
+        events: visible.map((row) => ({
+          recordedAt: row.recordedAt.toISOString(),
+          commandId: row.commandId,
+          actorId: row.actorId,
+          actorName: row.actorName,
+          targetId: row.targetId,
+          targetName: row.targetName,
+          beforeActive: row.beforeActive,
+          afterActive: row.afterActive,
         })),
       };
     },

@@ -448,6 +448,27 @@ export interface ProjectAccessAuditPage {
   events: ProjectAccessAuditEvent[];
 }
 
+export interface PlatformAccountAuditCursor {
+  at: string;
+  actorId: string;
+  commandId: string;
+}
+export interface PlatformAccountAuditEvent extends Omit<
+  PlatformAccountAuditCursor,
+  'at'
+> {
+  recordedAt: string;
+  actorName: string | null;
+  targetId: string;
+  targetName: string | null;
+  beforeActive: boolean;
+  afterActive: boolean;
+}
+export interface PlatformAccountAuditPage {
+  next: PlatformAccountAuditCursor | null;
+  events: PlatformAccountAuditEvent[];
+}
+
 export const RepositorySyncInput = Type.Object(
   { commandId: Type.String({ format: 'uuid' }) },
   { additionalProperties: false },

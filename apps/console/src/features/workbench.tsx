@@ -124,6 +124,12 @@ export function Workbench() {
     return (
       <PlatformPage
         userId={session.user.id}
+        accountAuditLoginId={
+          observedLogin.userId === session.user.id &&
+          observedLogin.sessionId === session.session.id
+            ? observedLogin.sessionId
+            : undefined
+        }
         username={String(Reflect.get(session.user, 'username') ?? '')}
         {...logoutProps}
         back={projects.data?.projects.length ? () => setRoute({}) : undefined}

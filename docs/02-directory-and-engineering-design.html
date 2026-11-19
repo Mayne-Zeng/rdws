@@ -1432,6 +1432,21 @@
   <p><code>pnpm test:e2e tests/e2e/project-audit.spec.ts</code> 通过 2 项，覆盖真实角色变更详情与导出、项目管理员入口、切项目、迟到旧响应、读取失败和重试。人工检查 390px 明暗截图。权限页沿用项目管理授权，只读取当前项目已提交的角色及管理员席位变更。</p>
   <p>Node 24.20.0、Apple Git 2.54.0 和本机隔离 PostgreSQL 下，<code>pnpm test</code> 通过 48 文件、286 项，1 项既有平台条件跳过。<code>pnpm test:e2e --shard=1/2</code> 和 <code>pnpm test:e2e --shard=2/2</code> 各通过 23 项。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code>、<code>pnpm validate:baseline</code> 和 <code>git diff --check</code> 均通过。</p>
 
+  <h4 id="t17-platform-account-audit-plan-20261120">11.22.3 T17 平台账号停用与恢复</h4>
+  <p>Change / R3，基线 <code>3566d2d</code>。依据 T17、I2-AUTH、D7 及 T03 平台账号管理范围，在平台设置的「账号状态」下查看实际停用与恢复记录。当前平台管理员已有账号读取与状态管理权限。审计页复用现有身份范围，只读取平台账号状态历史。一次本地功能提交可回退。</p>
+  <ol>
+    <li>浏览器持实际 Cookie 并携原观察登录，通过独立 GET <code>/api/management/platform/account-audit</code> 获取当前页。响应 no-store，关闭自动 HEAD。BFF 由现有 <code>actor</code> 与 <code>verifyEditLogin</code> 复核本人当前登录、代次、管理员角色和请求 epoch。候选选择要求读取时平台管理员仍活动。响应出站通过 <code>currentAccount</code> 再查同一账号、登录、账号代次、有效期限与当前平台管理员角色，再检查现有撤权、退出和进程关停边界。普通用户与项目管理员无该读取权。</li>
+    <li>同一 PG 读只选择 <code>scope=platform</code> 且 <code>operation=account.active</code> 的已提交终态回执。T03 实际写入与回执同事务，重放沿用原键。匹配 <code>changed</code> 真值、两端布尔且确有改变、有效异于操作者的目标 ID、回执无项目字段。查询使用参数化比较，所有过滤先于预读。仅投影记录时间、操作标识、操作者和目标账号的持久 ID 与现有显示名、变更前后状态。回执、密钥、认证会话、摘要和项目内容均不承载到该读侧。保持现有数据来源和迁移。界面使用「记录时间」对应原创建时间。</li>
+    <li>按 <code>(createdAt,actorId,commandId)</code> 降序。scope 与 operation 固定，每页 25 条，预读一条合格事件。使用最后可见记录的 PG 精确 UTC 微秒和完整键分页。操作者及操作 ID 在候选查询和游标入参使用相同字符与长度约束，保护可继续读取的页界。参数完整校验，禁止额外筛选字段。权限与分页位置独立判定。历史显示名缺失时保留持久身份。</li>
+    <li>平台管理页把工作台原观察账号及登录与当前前端会话同时核对。仅一致时呈现审计入口和原观察登录，从新页面重新登录可绑定新的观察身份。主动展开后请求，复用现有账号管理查询的失效前缀和 CSV 公式防护。详情显示状态前后值，提供本地当前页 CSV、下一页、返回最新和重试。切换账号、撤权响应及读失败隐藏旧内容和下载入口。</li>
+    <li>先在隔离 PostgreSQL 复现新路径缺失，再以真实 T03 停用、恢复、重放和无变化验证来源。用跨 scope、其它操作、畸形结果、页界坏键、同微秒同操作 ID 不同操作者、不同角色及错观察登录测试读权。直接撤销测试管理员权限后验证出站拒绝。浏览器验证真实回执、无权入口、下载、同账号换登录与失败清除。运行定点与整仓、浏览器两分片及静态构建和基线校验。</li>
+  </ol>
+
+  <p id="t17-platform-account-audit-evidence-20261120">R3 双面方案复审与独立交付复审均 APPROVE。方案复审明确了分页候选与请求使用同一 ID 格式，以及旧页的观察身份由账号和登录共同决定。现有账号状态写入和终态回执仍在同一事务。平台账号审计只读取已经提交的停用与恢复记录。</p>
+  <p>接线路径前 <code>pnpm test tests/integration/project-administration.test.ts -t 'reads committed platform account changes'</code> 在项目管理员反例返回 404，退出 1。改后该 PG 用例通过，<code>pnpm test tests/integration/project-administration.test.ts</code> 通过 6 项。真实停用与恢复、同键重放、无变化、不同读写主体、出站撤权、错观察登录、未观察、HEAD、异范围和坏键隔离均经过验证。分页在同微秒与同命令键时保留两个操作者，读出的时间对照原 PG 回执。</p>
+  <p><code>pnpm test:e2e tests/e2e/project-administration.spec.ts</code> 通过 2 项。首轮定位把已有全局历史的同名状态一起选入，按本轮事件行限定后通过。覆盖实际变更详情、CSV 首字符防护与真实同账号换登录，旧页使用原观察登录收到 401，当前浏览器确认新登录后隐藏旧入口，刷新后按新登录正常读回。读取失败隐藏旧历史和导出，重试恢复。实查 390px 明暗截图。</p>
+  <p>Node 24.20.0、Apple Git 2.54.0 与本机隔离 PostgreSQL 下，<code>pnpm test</code> 通过 48 文件、287 项，1 项既有平台条件跳过。<code>pnpm test:e2e --shard=1/2</code> 通过 24 项，<code>pnpm test:e2e --shard=2/2</code> 通过 23 项。类型、lint、格式、构建、基线和补丁完整性检查均通过。构建仍提示既有的主包体积。</p>
+
   <h2 id="s0"><span class="num">0</span>评审结论</h2>
   <div class="verdict">
     <div class="vtitle">总体判定</div>

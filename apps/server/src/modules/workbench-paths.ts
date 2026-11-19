@@ -10,6 +10,8 @@ export const businessAuditPath = '/api/requirements/:id/business-audit';
 export const projectBusinessAuditPath =
   '/api/projects/:projectId/business-audit';
 export const projectAccessAuditPath = '/api/projects/:projectId/access-audit';
+export const platformAccountAuditPath =
+  '/api/management/platform/account-audit';
 export const sessionForkPath = '/api/requirements/:id/sessions/:sessionId/fork';
 export const nativeBootstrapPath = '/api/dsh/:id/bootstrap';
 export const nativeTransportPath = '/api/dsh/:id/native/*';
@@ -39,6 +41,9 @@ export const isProjectAuditRead = (request: FastifyRequest) =>
 export const isProjectAccessAuditRead = (request: FastifyRequest) =>
   request.method === 'GET' &&
   request.routeOptions.url === projectAccessAuditPath;
+export const isPlatformAccountAuditRead = (request: FastifyRequest) =>
+  request.method === 'GET' &&
+  request.routeOptions.url === platformAccountAuditPath;
 export const isSessionWrite = (request: FastifyRequest) =>
   request.method === 'POST' &&
   (request.routeOptions.url === sessionsPath ||

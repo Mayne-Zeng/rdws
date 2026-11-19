@@ -30,6 +30,7 @@ import {
   isPassiveRequirementRead,
   isProjectAuditRead,
   isProjectAccessAuditRead,
+  isPlatformAccountAuditRead,
   isSessionWrite,
 } from './workbench-paths.ts';
 export type Database = ReturnType<typeof connectDatabase>['db'];
@@ -600,10 +601,12 @@ export function createWorkbenchRuntime(
   app.addHook('onRequest', async (request, reply) => {
     if (request.routeOptions.url === nativeMuxPath) return;
     const passiveRead = isPassiveRequirementRead(request);
-    const projectAudit =
-      isProjectAuditRead(request) || isProjectAccessAuditRead(request);
+    const auditRead =
+      isProjectAuditRead(request) ||
+      isProjectAccessAuditRead(request) ||
+      isPlatformAccountAuditRead(request);
     const sessionWrite = isSessionWrite(request);
-    if (passiveRead || projectAudit || sessionWrite)
+    if (passiveRead || auditRead || sessionWrite)
       reply.header('cache-control', 'no-store');
     if (
       Object.keys(request.headers).some(
@@ -619,7 +622,7 @@ export function createWorkbenchRuntime(
             (isTemplateBindingRequest(request) ||
               isImportRequest(request) ||
               passiveRead ||
-              projectAudit ||
+              auditRead ||
               sessionWrite ||
               (request.method === 'GET' &&
                 request.routeOptions.url === nativeBootstrapPath) ||
@@ -785,7 +788,12 @@ export function createWorkbenchRuntime(
         );
         if (!current) fail(401, '账号或会话不可用');
         if (!current.platformAdmin)
-          businessError(403, '无权读取平台能力白名单');
+          businessError(
+            403,
+            isPlatformAccountAuditRead(request)
+              ? '无权读取平台账号状态记录'
+              : '无权读取平台能力白名单',
+          );
       }
       if (scope.memberOnly || scope.projectAdminOnly) {
         const [current] = await db

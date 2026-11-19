@@ -41,6 +41,7 @@ export type { ModelCarrierRequest } from '../bridge/model-carrier.ts';
 export { assertModelCarrierDiagnostics } from '../bridge/model-carrier.ts';
 export {
   createModelHttpsRelay,
+  createLoopbackAttachmentHttpsRelay,
   type ModelWireCommit,
   type ModelWireOutcome,
 } from './model-https.ts';

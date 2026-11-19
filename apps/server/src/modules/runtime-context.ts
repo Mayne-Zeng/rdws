@@ -341,6 +341,17 @@ export class ContextRuns {
   authorizeModelAttempt<T>(request: ModelAttempt, send: () => T) {
     return this.withAuthorizedAttempt(request, send);
   }
+  authorizeModelFileWireAttempt(
+    request: ModelAttempt,
+    write: (validBefore: number) => ModelWireOutcome,
+  ): Promise<ModelWireCommit> {
+    if (!this.lockModelAuthority || request.routeId !== 'files')
+      return invalidModel();
+    return this.withAuthorizedAttempt(request, (_step, validBefore) => ({
+      outcome: write(validBefore),
+      accept429() {},
+    }));
+  }
   authorizeModelWireAttempt(
     request: ModelAttempt,
     write: (validBefore: number) => ModelWireOutcome,

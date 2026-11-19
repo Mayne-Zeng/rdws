@@ -190,6 +190,25 @@ export function createModelHttpsRelay(
   projectBody?: (body: Buffer) => Buffer | undefined,
   purpose?: 'session-title',
 ) {
+  return modelHttpsRelay(destination, ca, projectBody, purpose);
+}
+
+export function createLoopbackAttachmentHttpsRelay(
+  destination: string,
+  ca: Buffer,
+  routeId: 'files' | 'messages',
+) {
+  if (!ca.length) throw unavailable();
+  return modelHttpsRelay(destination, ca, undefined, undefined, routeId);
+}
+
+function modelHttpsRelay(
+  destination: string,
+  ca: string | Buffer | undefined,
+  projectBody?: (body: Buffer) => Buffer | undefined,
+  purpose?: 'session-title',
+  attachmentRoute?: 'files' | 'messages',
+) {
   let url: URL;
   try {
     url = new URL(destination);
@@ -198,7 +217,11 @@ export function createModelHttpsRelay(
   }
   if (
     url.protocol !== 'https:' ||
-    !url.pathname.endsWith('/chat/completions') ||
+    (attachmentRoute
+      ? url.href !== destination ||
+        url.hostname !== '127.0.0.1' ||
+        !url.pathname.endsWith(`/${attachmentRoute}`)
+      : !url.pathname.endsWith('/chat/completions')) ||
     url.href.includes('?') ||
     url.href.includes('#') ||
     url.username ||
@@ -216,6 +239,7 @@ export function createModelHttpsRelay(
       process.platform !== 'darwin' ||
       process.version !== 'v24.20.0' ||
       request.destination !== url.href ||
+      (attachmentRoute !== undefined && request.routeId !== attachmentRoute) ||
       request.call.purpose !== purpose ||
       !request.call.bindingId ||
       !request.isCurrent() ||

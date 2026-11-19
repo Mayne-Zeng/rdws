@@ -862,6 +862,20 @@
   <p>独立交付第二版复审 APPROVE。模型目录上游非成功或请求 ID 无效时，BFF 会先取消未读取的正文。模型目录定点用例在处理保持打开的失败流时改前返回 1，补上取消后通过。协议夹具以第二个实际监听端口为错误目标及重定向目标，首跳实收合成票据，第二端口零访问。补审后合并复跑 <code>caffeinate -i pnpm test tests/integration/session-lifecycle.test.ts tests/integration/native-loopback-http.test.ts tests/integration/session-capability-preset.test.ts</code> 返回 0（3 文件、27 项）。</p>
   <p>最终 <code>caffeinate -i pnpm check</code> 返回 0（33 个测试文件、198 项，类型、lint、格式和构建通过），构建仍提示主包体积。<code>caffeinate -i pnpm test:e2e</code> 返回 0（39 项）。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>fix: keep Native loopback traffic off global proxies</code>。T13 暂停启动、正式模型通道和逐次授权均继续按各自验收判据推进。</p>
 
+  <h4 id="t13-native-model-egress-pause-20261119">11.16.21 正式 Native 暂停外发与恢复</h4>
+  <p>Change / R3，基线 <code>f9c9fca</code>。实现 §11.16.17 的关闭外发及回退路径。§11.16.18、§11.16.19 与 §11.16.20 分别提供 macOS 进程隔离、继承回调和正式环回直连证据。场景是运行维护者在停稳旧 BFF 及其 Native 后，显式重启进入暂停，在新的模型出口未就绪或回退时保留已存会话。</p>
+  <ol>
+    <li><code>RDWS_NATIVE_MODEL_EGRESS</code> 由 BFF 构建时一次读取，<code>direct</code> 保留现有本地启动，<code>paused</code> 使用 macOS Seatbelt。无效值和非 macOS 的 paused 在 BFF 开始监听前拒绝。每个按需启动的 Native 实例采用同一模式，注入实例也须一致。暂停时用固定 <code>/usr/bin/sandbox-exec</code> 运行真实 CLI，在 Node 启动前禁止主动网络连接，保留回环 Native Web 入站及继承 IPC，子进程不继承代理设置。沿用现有工作区、Profile、凭据源、进程锁和就绪证明。启动失败不生成新就绪记录，也不走 direct 备用路径。</li>
+    <li>工作台校验本人会话、原登录绑定、非空且不超过 128 字符的 requestId、非空字符串 rpcId、有效租约和当前权限，在认领与入箱前返回带固定暂停标识及 no-store 的 503。此前鉴权或身份失败仍按原失败边界。涵盖 queue、steer、新键和旧键。暂停期间由 WebSocket 打开 unary prompt 时关闭浏览器链路，不会转发该帧。读取、follow、取消、新建和其他业务入口继续各自授权规则。浏览器从 bootstrap 与实际 prompt 响应显示状态，保留当前输入及手动重试，恢复后的有效响应更新提示。同一标签可以在恢复后再次点击发送。普通失败仍沿用原提示，无自动重发。</li>
+    <li>用正式 BFF 项目组装、独立测试 Profile、锁版 DSH 和合成供应商。验证非法设置、注入不匹配、平台约束、跨项目和代次锁、真实 sandbox-exec 执行失败无重试降级。在同一运行根和同一浏览器标签先 direct 完成并保留成功提示，再 paused 查询旧会话及实际 WebSocket follow，验证取消和一条业务写。错误登录、非本人、空／超长 requestId 与无效 rpcId 在暂停判断前失败；真实新键、旧键与 WS unary 在暂停时无新入箱，原始前缀可核对。以同 PID 的 TCP 内核拒绝与模型失败、direct 同址正对照和供应商计数三者取证，模拟供应商从旧 direct 停稳至暂停结束零新增。恢复 direct 后原键保持已受理且零新增供应商请求。真实浏览器同一页面收到 503 后保留输入，恢复时零自动重发，手动重试后恰有一次新的供应商请求。执行聚焦、<code>pnpm check</code>、<code>pnpm test:e2e</code> 和基线。</li>
+    <li>正式 Web Host 的暂停生效以旧 BFF 与 Native 停止、每个项目新实例的签名就绪和受限证据为准。先停止已运行的独立 SDK 探针，维护期禁止其单独触发。回退须保持支持 paused 的配套版本与显式设置。回到不识别设置的旧修订，应让 BFF 与 Native 一并保持停止并阻断所有按需启动路径，或先独立验证部署层的外发阻断。恢复直接外发须在授权运行环境明确切换并重启。本轮交付本机代码和证据，无部署与新增依赖。统一外发、逐次授权与撤权定序仍按 §11.16.17。</li>
+  </ol>
+  <p>第二版方案双面独立复审均 APPROVE。修订补齐了暂停响应前的身份与租约校验、旧页手动重试、真实浏览器切换、请求原键的验收及旧版和独立 SDK 的运行边界。</p>
+  <p>工作台定点用例用合成 503 复现旧代码无法识别暂停提示，改前返回 1，改后同一命令返回 0（1 项）。真实 <code>caffeinate -i pnpm test:web-live tests/web-live/model-egress-pause.spec.ts</code> 返回 0（1 项），用锁定版 Native、正式 BFF、真实 PostgreSQL 测试库和同一 Chrome 标签页走正常、暂停、恢复，模型目标是独立本机合成供应商。旧 direct 存活时同根拒绝启动。停稳后默认项目及受管项目的 Native 均在签名就绪的同 PID 中证明 TCP 系统拒绝和实际模型失败。暂停期供应商零新增，历史、follow、会话取消和业务修改可用，WS unary 在 BFF 关闭且没有转发该帧。原始日志前缀未改，无两个被拒的新请求入箱记录。</p>
+  <p>恢复 direct 后，已受理的旧键可核对，供应商零新增。暂停期间拒绝的新键使用相同 ID 恢复受理，供应商收到一次。旧页收到真实 503 后保留输入，恢复时没有自动重发，手动提交后供应商只收到一次该草稿。<code>caffeinate -i pnpm test tests/integration/native-egress-mode.test.ts</code> 返回 0（macOS 3 项通过，非 macOS 条件项跳过）；外层禁止执行沙箱工具时两次尝试均失败，未生成就绪文件与锁残留。用本机已有 Node 24.20.0 Linux 镜像断网只读运行同一配置解析，直接模式通过，paused 明确拒绝，退出码 0。</p>
+  <p>独立交付二版复审 APPROVE。工作台按原生 requestId 结算当前提交，仅使用带标识的 503 与已确认受理的提示更新暂停状态，按发送序号保留较新的观测。暂停后的断网与普通 401 均保留输入和暂停提示，同时保留通用失败反馈。<code>caffeinate -i pnpm test:e2e tests/e2e/session-retry.spec.ts -g 'a paused prompt'</code> 确认补审前返回 1，调整后返回 0（1 项）。隔离的 Linux 镜像另验证真实 <code>buildApp</code> 在开始监听前拒绝 paused，退出码 0。</p>
+  <p>首次全量的账号用例因早期浏览器夹具异常留下一个临时项目而失败。核对测试库、项目 ID、两个夹具需求 ID 和名称后，清理这次夹具的记录。最终 <code>caffeinate -i pnpm check</code> 返回 0（34 文件、201 项通过、1 项平台条件跳过，类型、lint、格式和构建通过），构建仍有主包体积提示。<code>caffeinate -i pnpm test:e2e</code> 返回 0（40 项）。同次正式模式切换的浏览器定点返回 0（1 项），<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>feat: add fail-closed Native model egress pause</code>。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

@@ -3,6 +3,7 @@ import { fromNodeHeaders } from 'better-auth/node';
 import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import { connectDatabase } from '@rdws/db';
 import { Health } from '@rdws/contracts';
+import { resolveNativeModelEgress } from '@rdws/dsh/web';
 import { registerWorkbench } from './modules/workbench.ts';
 import { createAuth } from './modules/auth.ts';
 export function buildApp(options: {
@@ -14,6 +15,13 @@ export function buildApp(options: {
   nativeRuntimeRoot?: string;
   nativeProfiles?: ReadonlyMap<string, string>;
 }) {
+  const modelEgress = resolveNativeModelEgress(
+    process.env.RDWS_NATIVE_MODEL_EGRESS,
+  );
+  if (options.nativeHost && options.nativeHost.modelEgress !== modelEgress)
+    throw new Error(
+      'Native Host model egress does not match BFF configuration',
+    );
   const database = connectDatabase(options.databaseUrl);
   const auth = createAuth(database.db, options);
   let workbench: Awaited<ReturnType<typeof registerWorkbench>> | undefined;
@@ -89,6 +97,7 @@ export function buildApp(options: {
       options.repositoryHome,
       options.nativeRuntimeRoot,
       options.nativeProfiles,
+      modelEgress,
     );
   });
   app.setErrorHandler((error: FastifyError, _request, reply) => {

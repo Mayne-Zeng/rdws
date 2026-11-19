@@ -128,6 +128,16 @@ export async function projectNativeConfiguration(
   return directory;
 }
 
+export type NativeModelEgress = 'direct' | 'paused';
+
+export function resolveNativeModelEgress(value?: string): NativeModelEgress {
+  if (value === undefined || value === 'direct') return 'direct';
+  if (value !== 'paused') throw new Error('Invalid RDWS_NATIVE_MODEL_EGRESS');
+  if (process.platform !== 'darwin')
+    throw new Error('Paused Native model egress requires macOS');
+  return value;
+}
+
 export class NativeWebHost {
   readonly contextGeneration = randomUUID();
   private contextHandler?: ContextHandler;
@@ -169,7 +179,9 @@ export class NativeWebHost {
     readonly configurationHome?: string,
     readonly projectId = 'poc',
     release: readonly ReleasedCapability[] = capabilityRelease,
+    readonly modelEgress: NativeModelEgress = 'direct',
   ) {
+    resolveNativeModelEgress(modelEgress);
     if (!validProjectId(projectId))
       throw new Error('Invalid Native project ID');
     this.home = join(runtimeHome, 'runtime', 'dsh', 'project-' + projectId);
@@ -404,23 +416,36 @@ export class NativeWebHost {
         DSH_PRIMARY_RUNTIME: '',
         DSH_PERMISSION_MODE: 'read-only',
       };
-      for (const key of [
-        'PATH',
-        'HOME',
-        'TMPDIR',
-        'LANG',
-        'LC_ALL',
-        'HTTP_PROXY',
-        'HTTPS_PROXY',
-        'ALL_PROXY',
-        'NO_PROXY',
-        'NODE_EXTRA_CA_CERTS',
-      ])
+      const paused = this.modelEgress === 'paused';
+      const inherited = ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL'];
+      if (!paused)
+        inherited.push(
+          'HTTP_PROXY',
+          'HTTPS_PROXY',
+          'ALL_PROXY',
+          'NO_PROXY',
+          'NODE_EXTRA_CA_CERTS',
+        );
+      for (const key of inherited)
         if (process.env[key]) env[key] = process.env[key];
       if (this.closing) throw new Error('Native instance stopped');
+      const launch = paused
+        ? [
+            '-p',
+            [
+              '(version 1)',
+              '(allow default)',
+              '(deny network*)',
+              '(allow network-bind (local ip "localhost:*"))',
+              '(allow network-inbound (local ip "localhost:*"))',
+            ].join('\n'),
+            process.execPath,
+          ]
+        : [];
       const child = spawn(
-        process.execPath,
+        paused ? '/usr/bin/sandbox-exec' : process.execPath,
         [
+          ...launch,
           '--import',
           req.resolve('tsx/esm'),
           bin,

@@ -77,6 +77,7 @@ export function connectNative(
       if (!response.ok) throw new Error('无法连接需求会话');
       const payload = (await response.json()) as {
         loginBinding: string;
+        modelEgressPaused?: boolean;
         graph: WebBootGraph;
         injections: {
           kind: string;
@@ -93,6 +94,13 @@ export function connectNative(
       )
         throw new Error('会话登录校验失败，请重新打开');
       const root = new Cordis.Context();
+      let modelEgressPaused = payload.modelEgressPaused === true;
+      let promptSequence = 0;
+      let observedSequence = 0;
+      const promptAttempts = new Map<
+        string,
+        { sequence: number; paused: boolean }
+      >();
       let disposed = false;
       let generation = crypto.randomUUID();
       const load = (path: string) =>
@@ -129,16 +137,41 @@ export function connectNative(
             Reflect.set(window, injection.name, injection.value);
         }
         win.__DSH_TRANSPORT__ = {
-          fetch: (input: string | URL, init: RequestInit) => {
+          fetch: async (input: string | URL, init: RequestInit) => {
             const headers = new Headers(init.headers);
+            const path = String(input).replace(/^\//, '');
+            let attempt: { sequence: number; paused: boolean } | undefined;
             if (init.method?.toUpperCase() === 'POST') {
               headers.set('x-rdws-client-generation', generation);
               headers.set('x-rdws-native-login', loginBinding);
+              if (
+                path === 'api/session/prompt' &&
+                typeof init.body === 'string'
+              ) {
+                const envelope = JSON.parse(init.body);
+                const id: unknown = envelope?.payload?.args?.request?.requestId;
+                if (typeof id === 'string') {
+                  attempt = { sequence: ++promptSequence, paused: false };
+                  promptAttempts.set(id, attempt);
+                }
+              }
             }
-            return fetch(prefix + String(input).replace(/^\//, ''), {
+            const response = await fetch(prefix + path, {
               ...init,
               headers,
             });
+            if (
+              attempt &&
+              response.status === 503 &&
+              response.headers.get('x-rdws-model-egress') === 'paused'
+            ) {
+              attempt.paused = true;
+              if (attempt.sequence > observedSequence) {
+                observedSequence = attempt.sequence;
+                modelEgressPaused = true;
+              }
+            }
+            return response;
           },
           createWebSocket: () => {
             generation = crypto.randomUUID();
@@ -199,6 +232,18 @@ export function connectNative(
         const runtime = {
           sessions,
           root,
+          get modelEgressPaused() {
+            return modelEgressPaused;
+          },
+          finishPrompt(requestId: string, accepted: boolean) {
+            const attempt = promptAttempts.get(requestId);
+            promptAttempts.delete(requestId);
+            if (accepted && attempt && attempt.sequence > observedSequence) {
+              observedSequence = attempt.sequence;
+              modelEgressPaused = false;
+            }
+            return attempt?.paused === true;
+          },
           history(
             sessionId: string,
             positions: { throughSeq?: number; beforeSeq?: number } = {},
@@ -241,6 +286,7 @@ export function connectNative(
           async dispose() {
             if (disposed) return;
             disposed = true;
+            promptAttempts.clear();
             await root.fiber.dispose();
           },
         };

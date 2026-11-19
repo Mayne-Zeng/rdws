@@ -57,7 +57,7 @@ import { type RunBinding } from './runtime-context.ts';
 import { eq, and, desc, asc, isNull, sql, inArray } from 'drizzle-orm';
 import { fromNodeHeaders } from 'better-auth/node';
 import { schema, type connectDatabase } from '@rdws/db';
-import { NativeWebHost } from '@rdws/dsh/web';
+import { NativeWebHost, type NativeModelEgress } from '@rdws/dsh/web';
 import { sessionPage } from '@rdws/dsh/sessions';
 import {
   actionAllowed,
@@ -189,6 +189,7 @@ export async function registerWorkbench(
   repositoryHome?: string,
   nativeRuntimeRoot?: string,
   nativeProfiles?: ReadonlyMap<string, string>,
+  modelEgress: NativeModelEgress = 'direct',
 ) {
   const instanceRoot =
     process.env.RDWS_MODE === 'test'
@@ -293,6 +294,7 @@ export async function registerWorkbench(
       stopping ||
       blocked(userId, projectId, undefined, requirementId),
     nativeProfiles,
+    modelEgress,
   );
   async function retireRun(runtime: ProjectRuntime, runId: string) {
     runtime.runs.discard(runId);
@@ -2385,7 +2387,11 @@ export async function registerWorkbench(
     }
     const data = await response.json();
     const fresh = await confirmAccess(request.headers, original);
-    return { ...data, loginBinding: loginBinding(fresh) };
+    return {
+      ...data,
+      loginBinding: loginBinding(fresh),
+      modelEgressPaused: scope.runtime.native.modelEgress === 'paused',
+    };
   });
   async function allowedAsset(scope: ReadyAccess, path: string) {
     if (path.includes('..') || decodeURIComponent(path).includes('..'))
@@ -2482,6 +2488,27 @@ export async function registerWorkbench(
           const claims = native.claims(String(token));
           if (!claims || typeof args.requestId !== 'string')
             fail(403, '会话请求身份无效');
+          if (native.modelEgress === 'paused') {
+            if (
+              !args.requestId ||
+              args.requestId.length > 128 ||
+              typeof request.body.rpcId !== 'string' ||
+              !request.body.rpcId
+            )
+              fail(403, '会话请求身份无效');
+            await confirmAccess(request.headers, original);
+            if (
+              transfer.revoked ||
+              stale(original) ||
+              claims.expiresAt <= Date.now()
+            )
+              fail(401, '授权已变化');
+            return reply
+              .code(503)
+              .header('x-rdws-model-egress', 'paused')
+              .header('cache-control', 'no-store')
+              .send({ error: '模型发送已暂停，请在恢复后重试。' });
+          }
           const key = JSON.stringify([args.sessionId, args.requestId]);
           if (inFlightPrompts.has(key))
             businessError(409, '原消息正在提交，请稍后核对');
@@ -2733,7 +2760,7 @@ export async function registerWorkbench(
             )
               return;
             const scope = await confirmAccess(request.headers, original);
-            authorizeStreamFrame(
+            const frame = authorizeStreamFrame(
               data.toString(),
               {
                 ...grant({ ...scope, runtime }),
@@ -2744,6 +2771,14 @@ export async function registerWorkbench(
               },
               opened,
             );
+            if (
+              runtime.native.modelEgress === 'paused' &&
+              frame.type === 'open' &&
+              frame.endpoint === 'session/prompt'
+            ) {
+              close();
+              return;
+            }
             if (!stopped && !stale(original)) upstream!.send(data.toString());
           })
           .catch((error) => {

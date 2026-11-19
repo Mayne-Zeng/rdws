@@ -142,6 +142,106 @@ for (const failure of ['abort', 'invalid-json', 'reconnect'] as const)
         .getByRole('button', { name: /^会话 \d/ }),
     ).toHaveCount(2);
   });
+test('a paused prompt preserves the draft and can be sent after recovery', async ({
+  page,
+  baseURL,
+}) => {
+  const accounts = JSON.parse(
+    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
+  ) as { username: string; password: string }[];
+  await prepareSession(
+    page.context(),
+    baseURL!,
+    accounts.find(({ username }) => username === 'manager')!,
+  );
+  const { members } = await (
+    await page.request.get('/api/projects/poc/members')
+  ).json();
+  const created = await page.request.post('/api/projects/poc/requirements', {
+    headers: { origin: baseURL! },
+    data: {
+      commandId: randomUUID(),
+      title: 'Model pause E2E ' + randomUUID(),
+      description: 'Synthetic draft',
+      acceptance: 'The draft survives a pause',
+      leadId: members.find((member: { name: string }) => member.name === 'lead')
+        .id,
+      participants: [],
+    },
+  });
+  expect(created.status()).toBe(200);
+  const { id } = await created.json();
+  await prepareSession(
+    page.context(),
+    baseURL!,
+    accounts.find(({ username }) => username === 'lead')!,
+  );
+  let mode: 'paused' | 'offline' | 'unauthorized' | 'recovered' = 'paused';
+  const submitted: string[] = [];
+  await page.route(
+    `**/api/dsh/${id}/native/api/session/prompt`,
+    async (route) => {
+      const request = route.request().postDataJSON();
+      submitted.push(request.payload.args.request.content[0].text);
+      if (mode === 'paused') {
+        await route.fulfill({
+          status: 503,
+          headers: { 'x-rdws-model-egress': 'paused' },
+          json: { error: 'Synthetic paused response' },
+        });
+        return;
+      }
+      if (mode === 'offline') return route.abort('failed');
+      if (mode === 'unauthorized')
+        return route.fulfill({
+          status: 401,
+          json: { error: 'Synthetic failure' },
+        });
+      await route.fulfill({
+        json: {
+          type: 'server-response',
+          rpcId: request.rpcId,
+          result: { ok: true, value: { accepted: true } },
+        },
+      });
+    },
+  );
+  await page.goto(`/?project=poc&requirement=${id}&view=chat`);
+  await page.getByRole('button', { name: '新建会话', exact: true }).click();
+  const input = page.getByLabel('消息', { exact: true });
+  const send = page.getByRole('button', { name: '发送消息', exact: true });
+  const notice = page.getByText(
+    '模型发送已暂停。输入会保留，可在恢复后再次发送。',
+    { exact: true },
+  );
+  await expect(notice).toHaveCount(0);
+  const draft = 'Preserve the original text';
+  await input.fill(draft);
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect(notice).toBeVisible();
+  await expect(input).toHaveValue(draft);
+  const failure = page.getByText('消息发送失败，请检查权限或重新连接', {
+    exact: true,
+  });
+  for (const [outcome, attempts] of [
+    ['offline', 2],
+    ['unauthorized', 3],
+  ] as const) {
+    mode = outcome;
+    await send.click();
+    await expect.poll(() => submitted.length).toBe(attempts);
+    await expect(failure).toBeVisible();
+    await expect(notice).toBeVisible();
+    await expect(input).toHaveValue(draft);
+  }
+  mode = 'recovered';
+  await send.click();
+  await expect(input).toHaveValue('');
+  await expect(notice).toHaveCount(0);
+  expect(submitted).toEqual([draft, draft, draft, draft]);
+});
+
 test('a late catalog from the previous requirement cannot replace the current sessions', async ({
   page,
   baseURL,

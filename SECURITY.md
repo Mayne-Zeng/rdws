@@ -24,6 +24,8 @@ Native 上下文读和释放沿正式 Host 启动时继承的子进程 IPC，按
 
 BFF 到本代 Native Web 的 HTTP 和 WebSocket 使用进程就绪时选定的环回地址直连。HTTP 校验完整 origin 后才写出签票，上游 WebSocket 禁用重定向。签名就绪、读取和跟随可在 BFF 启用全局代理时通过本机通道完成。 [验收证据](docs/02-directory-and-engineering-design.html#t13-native-loopback-direct-20261119)
 
+在 macOS 启动 BFF 时可显式将正式 Web Host 设为 `paused`。新 Native 子进程的主动网络连接由 Seatbelt 拒绝，保留本机 Web 入站与继承 IPC。BFF 在核对真实登录、本人会话、请求身份和租约后，于认领前拒绝发送。沙箱失败会阻止启动。切换或回退前要求停止旧 BFF、Native 及独立 SDK；后续统一模型出口与逐次授权按 T13 的独立验收交付。 [暂停与恢复](docs/02-directory-and-engineering-design.html#t13-native-model-egress-pause-20261119)
+
 停用与恢复写入账号代次，登录会话保存发行时的代次。数据库在插入时定序，业务读取和执行检查当前代次。旧登录不会在恢复后重新有效。单项目成员变动对该账号的同项目会话和连接生效。通知失败保留 BFF 截止与 Native 短租约两层不同的证据，已获准的外部请求可能完成。
 
 Native 浏览器传输随页面打开时的登录固定。BFF 在准备工作区前核对 bootstrap 的观察登录，随后对 HTTP 和 WebSocket 核对 Cookie、实际需求归属及原绑定。WebSocket 升级前的授权代次贯穿上游 Peer 建立和后续流量。重连轮换短租约代次时沿用原绑定。原 Cookie 仍有效的连接按其原登录鉴权，撤权时关闭。旧页面发现换登录后释放连接，原草稿仅在当前文档内存保留，当前账号相同且需求授权读回后可复制。 [验收证据](docs/02-directory-and-engineering-design.html#t13-native-login-binding-evidence-20261119)

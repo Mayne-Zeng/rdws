@@ -241,10 +241,12 @@ function SessionPanel({
         submission.requestId,
       );
       if (!result.ok) throw new Error();
+      runtime.finishPrompt(submission.requestId, true);
       if (!submissionState.current.failed)
         setInput((current) => (current === value ? '' : current));
     } catch {
-      setError('消息发送失败，请检查权限或重新连接');
+      if (!runtime.finishPrompt(submission.requestId, false))
+        setError('消息发送失败，请检查权限或重新连接');
     } finally {
       setBusy(false);
     }
@@ -258,6 +260,12 @@ function SessionPanel({
         </span>
       </div>
       {error && <Alert theme="error" message={error} />}
+      {own && runtime.modelEgressPaused && (
+        <Alert
+          theme="warning"
+          message="模型发送已暂停。输入会保留，可在恢复后再次发送。"
+        />
+      )}
       {retryMessage && (
         <Button
           tag="button"

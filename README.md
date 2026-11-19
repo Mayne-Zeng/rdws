@@ -67,6 +67,12 @@ pnpm test:web-live
 
 前者验证基础浏览器旅程和会话结果未知时的重试；后者需要已有 GLM 原生配置，会产生真实模型调用，验证页面流、上下文刷新和失败阻断、授权轮换、non-owner 拒绝与撤权故障，以及五会话的派生、被动回放和中断恢复。live 使用运行根 `testing-web` / `testing-fault` / `testing-context-denied` / `testing-context-timeout` / `testing-sessions/<run-id>` 的独立数据目录，通过原生 patch / 凭据路径引用同一模型配置，不复制密钥。中断用例仅终止其自身创建且 PID 已核对的原生子进程，保留日志与数据库记录。测试产物在 `test-results/`，Demo 对照截图在 `.impeccable/review/`；两者均不进 Git。
 
+### 模型外发暂停（T13）
+
+macOS 的正式 Web Host 支持启动时暂停。先停止旧 BFF、它启动的 Native 进程及独立 SDK 探针，然后使用原 `RDWS_HOME` 启动 `RDWS_NATIVE_MODEL_EGRESS=paused pnpm dev`。每个 Native Host 按需启动并通过签名就绪检查。暂停实例由 Seatbelt 拒绝主动联网，保留原生本机入站与上下文 IPC。配置无效、平台不支持或沙箱启动失败时，启动会失败。确认生效后，用户可按权限读取或跟随历史、取消及操作其他业务入口。提示词提交在入箱前返回 503，旧请求键在暂停期间也应等到恢复后再核对。已打开页面保留输入，由用户手动重试。维护窗口内保持独立 SDK 停止。
+
+恢复前停稳暂停的 BFF 与 Native，再在已授权的环境显式用 `RDWS_NATIVE_MODEL_EGRESS=direct` 重启。未设置变量的本地开发沿用 direct。回退时保留支持暂停的配套版本和显式设置。回到旧版本时，先保持 BFF 与 Native 关闭，或先验收独立的部署层外发阻断。`pnpm test:web-live tests/web-live/model-egress-pause.spec.ts` 使用合成供应商验证本机切换。[实施与验收](docs/02-directory-and-engineering-design.html#t13-native-model-egress-pause-20261119)
+
 ### 需求维护（T11）
 
 当前项目管理员及同时具备项目和需求身份的需求经理，可在「需求档案 → 基本信息」编辑标题、需求说明和验收标准。保存按原命令记录修改，活动区显示操作者与变更字段。若结果未确认，可回到原需求重试原保存。若原操作未提交，重试会应用原先改动的字段。保存和回读各自显示状态。 [需求资料编辑验收](docs/02-directory-and-engineering-design.html#t11-details-delivery-20261119)

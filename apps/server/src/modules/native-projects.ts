@@ -2,6 +2,7 @@ import {
   NativeWebHost,
   projectNativeConfiguration,
   validProjectId,
+  type NativeModelEgress,
 } from '@rdws/dsh/web';
 import type { createBusiness } from './business.ts';
 import { businessError } from './business.ts';
@@ -24,6 +25,7 @@ export function createProjectRuntimes(
     requirementId: string,
   ) => boolean,
   nativeProfiles?: ReadonlyMap<string, string>,
+  modelEgress: NativeModelEgress = 'direct',
 ) {
   const pending = new Map<string, Promise<ProjectRuntime>>();
   const live = new Map<string, ProjectRuntime>();
@@ -89,7 +91,9 @@ export function createProjectRuntimes(
       if (project !== 'poc' && !configuration)
         businessError(503, '项目运行时尚未配置');
       if (closing) businessError(503, '项目运行时暂不可用');
-      return register(new NativeWebHost(root, configuration, project));
+      return register(
+        new NativeWebHost(root, configuration, project, undefined, modelEgress),
+      );
     })().finally(() => pending.delete(project));
     pending.set(project, registration);
     return registration;

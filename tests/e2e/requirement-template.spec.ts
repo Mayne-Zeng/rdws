@@ -40,6 +40,7 @@ test('requirement template recovery stays with the same command and the current 
   let pausedReads: Promise<void> | undefined;
   let resumeReads: () => void = () => {};
   let isolated = false;
+  let releaseOldStatus: (() => void) | undefined;
   let release!: () => void, notifyArrival!: () => void;
   const held = new Promise<void>((resolve) => {
     release = resolve;
@@ -171,6 +172,113 @@ test('requirement template recovery stays with the same command and the current 
         '新建会话会核对绑定版本。已有会话和派生会话沿用原能力版本。',
       ),
     ).toBeVisible();
+    const versionPanel = page.getByRole('region', { name: '会话模板版本' });
+    const sessionPicker = versionPanel.getByLabel('选择会话');
+    const recorded = {
+      status: 'recorded',
+      templateId,
+      name: template,
+      revision: 2,
+    };
+    const heldStatus = new Promise<void>((resolve) => {
+      releaseOldStatus = resolve;
+    });
+    let oldStatusReturned = false;
+    let denyNewStatus = false;
+    const observedReads: { target?: string; login?: string }[] = [];
+    await page.route(`**/api/requirements/${id}/sessions`, (route) =>
+      route.fulfill({
+        json: {
+          sessions: [
+            { id: 'session-old', own: true },
+            { id: 'session-new', own: false },
+            {
+              id: 'session-default',
+              own: true,
+              sourceSessionId: 'session-old',
+            },
+          ],
+        },
+      }),
+    );
+    await page.route(
+      `**/api/requirements/${id}/sessions/*/capability-template`,
+      async (route) => {
+        const requested = new URL(route.request().url()).pathname
+          .split('/')
+          .at(-2);
+        observedReads.push({
+          target: requested,
+          login: route.request().headers()['x-rdws-edit-session'],
+        });
+        if (requested === 'session-old') {
+          await heldStatus;
+          await route
+            .fulfill({ json: { ...recorded, revision: 1 } })
+            .catch(() => {});
+          oldStatusReturned = true;
+        } else if (requested === 'session-default') {
+          await route.fulfill({ json: { status: 'unbound' } });
+        } else if (denyNewStatus) {
+          await route.fulfill({
+            status: 403,
+            json: { error: '当前会话权限已变化' },
+          });
+        } else {
+          await route.fulfill({ json: recorded });
+        }
+      },
+    );
+    const currentLogin = await page.request.get('/api/auth/get-session');
+    const currentLoginId = (await currentLogin.json()).session.id;
+    await page.reload();
+    await sessionPicker.selectOption('session-old');
+    await expect
+      .poll(() => observedReads.some(({ target }) => target === 'session-old'))
+      .toBe(true);
+    await sessionPicker.selectOption('session-new');
+    await expect(
+      versionPanel.getByText('第 2 版', { exact: false }),
+    ).toBeVisible();
+    releaseOldStatus?.();
+    await expect.poll(() => oldStatusReturned).toBe(true);
+    expect(observedReads.some(({ target }) => target === 'session-new')).toBe(
+      true,
+    );
+    expect(observedReads.every(({ login }) => login === currentLoginId)).toBe(
+      true,
+    );
+    await expect(
+      versionPanel.getByText('第 1 版', { exact: false }),
+    ).toHaveCount(0);
+    await expect(
+      panel.getByText(`${template} · 第 1 版`, { exact: true }),
+    ).toBeVisible();
+    await versionPanel.screenshot({
+      path: testInfo.outputPath('session-template-status-light-390.png'),
+    });
+    await sessionPicker.selectOption('session-default');
+    await expect(
+      versionPanel.getByText('此会话未采用需求模板。'),
+    ).toBeVisible();
+    denyNewStatus = true;
+    await sessionPicker.selectOption('session-new');
+    await expect(
+      versionPanel.getByText('暂无法核实会话模板版本。'),
+    ).toBeVisible();
+    await expect(
+      versionPanel.getByText('第 2 版', { exact: false }),
+    ).toHaveCount(0);
+    denyNewStatus = false;
+    await versionPanel.getByRole('button', { name: '重试核实版本' }).click();
+    await expect(
+      versionPanel.getByText('第 2 版', { exact: false }),
+    ).toBeVisible();
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await versionPanel.screenshot({
+      path: testInfo.outputPath('session-template-status-dark-390.png'),
+    });
+    await page.emulateMedia({ colorScheme: 'light' });
 
     await picker.selectOption(`${templateId}:2`);
     outcome = 'not-sent';
@@ -318,6 +426,7 @@ test('requirement template recovery stays with the same command and the current 
     });
     expect(errors).toEqual([]);
   } finally {
+    releaseOldStatus?.();
     resumeReads();
     release();
     if (isolated) {

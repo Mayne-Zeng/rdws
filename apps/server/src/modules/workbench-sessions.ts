@@ -1,13 +1,21 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { SessionCreate, SessionFork } from '@rdws/contracts';
+import {
+  SessionCreate,
+  SessionFork,
+  type SessionTemplateStatus,
+} from '@rdws/contracts';
+import { schema } from '@rdws/db';
+import { and, eq } from 'drizzle-orm';
 import { sessionPage } from '@rdws/dsh/sessions';
+import { isDemandPreset } from '@rdws/dsh/web';
 import { isRecord, onlyKeys } from '@rdws/dsh/access';
 import {
   sessionsPath,
   sessionHistoryPath,
   sessionForkPath,
+  sessionTemplatePath,
 } from './workbench-paths.ts';
 import { fail, type WorkbenchRuntime } from './workbench-runtime.ts';
 
@@ -21,6 +29,7 @@ export function registerSessions(
     business,
     closingSessions,
     confirmAccess,
+    db,
     grant,
     prepared,
     projects,
@@ -45,6 +54,75 @@ export function registerSessions(
       })),
     };
   });
+
+  app.get<{ Params: { id: string; sessionId: string } }>(
+    sessionTemplatePath,
+    async (request): Promise<SessionTemplateStatus> => {
+      const { id, sessionId } = request.params;
+      const scope = await access(request.headers, id);
+      if (!scope.sessions.some((row) => row.id === sessionId))
+        fail(403, '无权读取该会话模板');
+      const { projectId, nativeWorkspaceId } = scope.item;
+      let status: SessionTemplateStatus = { status: 'unavailable' };
+      const runtime = nativeWorkspaceId
+        ? await projects.get(projectId).catch(() => undefined)
+        : undefined;
+      if (runtime) {
+        const { native } = runtime;
+        const identity = await native
+          .start()
+          .then(() =>
+            native.control('session.preset', { requirementId: id, sessionId }),
+          )
+          .catch(() => undefined);
+        if (
+          identity?.workspaceId === nativeWorkspaceId &&
+          identity?.cwd === join(native.demandRoot, id)
+        ) {
+          const preset = identity.agentPreset;
+          if (isDemandPreset(preset)) {
+            const definition = await native.presets
+              .read(preset, id)
+              .catch(() => undefined);
+            if (definition && definition.revision <= 2147483647) {
+              const { templateId, revision } = definition;
+              const versions = schema.capabilityTemplateRevision;
+              const [version] = await db
+                .select({ name: versions.name })
+                .from(versions)
+                .where(
+                  and(
+                    eq(versions.projectId, projectId),
+                    eq(versions.templateId, templateId),
+                    eq(versions.revision, revision),
+                  ),
+                );
+              if (version)
+                status = {
+                  status: 'recorded',
+                  templateId,
+                  revision,
+                  name: version.name,
+                };
+            }
+          } else if (
+            preset === null ||
+            (typeof preset === 'string' &&
+              /^[a-zA-Z0-9._-]{1,128}$/.test(preset) &&
+              !preset.startsWith('rdws-demand-'))
+          ) {
+            status = { status: 'unbound' };
+          }
+        }
+      }
+      const fresh = await confirmAccess(request.headers, scope);
+      if (!fresh.sessions.some((row) => row.id === sessionId))
+        fail(403, '无权读取该会话模板');
+      return fresh.item.nativeWorkspaceId === nativeWorkspaceId
+        ? status
+        : { status: 'unavailable' };
+    },
+  );
 
   async function sessionOperation(
     request: FastifyRequest,

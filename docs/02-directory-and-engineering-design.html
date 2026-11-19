@@ -1173,6 +1173,17 @@
   <p>真实本机 DSH 与隔离 PostgreSQL 验证受审模块、Native 技能目录和每 Agent 可见的离线 MCP 定义。未绑定需求和其他版本未取得该技能或离线定义。合成回环模型验证已完成轮次后原生选版拒绝、绑定改变后的源版本继承，以及头记录与有效投影不同时的派生。验证同键恢复、装载中换绑、停用和登录过期、无发布或摘要错配、外部模块依赖拒绝、维护暂停与过往历史。夹具未建立 MCP 连接或执行工具。运营目录未登记实际制品，相关真实连接与 T07 工具准入未验收。无数据库迁移或生产依赖。</p>
   <p><code>caffeinate -i pnpm check</code> 返回 0（26 文件、166 项，类型、lint、格式与构建通过）。构建仍有主包体积提示。<code>caffeinate -i pnpm test:e2e</code> 返回 0（32 项，59.9 秒）。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 个追溯点、16 视图）。本地交付修订以 <code>feat: apply immutable capability presets to new sessions</code> 为准。</p>
 
+  <h4 id="t12-session-template-status-plan-20261120">11.17.12 T12 会话实际模板版本</h4>
+  <p>Change / R2，基线 <code>f8dfd45</code>。依据 T12 的模板引用和生效状态验收，复用 T14 <a href="#t14-demand-binding-delivery-20261119">绑定配置</a>与<a href="#t14-preset-delivery-evidence-20261119">精确版本装载和冷恢复</a>已验证子能力。需求一旦更换绑定，当前配置与历史会话实际采用的版本可以不同。先交付上下文页的会话模板读回。需求背景维护及 T14 运营制品和用户侧验收维持清单状态。</p>
+  <ol>
+    <li>上下文页在需求当前绑定下面提供该需求已有目录的会话选择。通过同登录的只读 GET 取所选会话的实际原生 <code>agentPreset</code>，展示原始关联模板版本、无需求模板或无法核实。无选择、无会话、加载、失败及重试均有明确状态。按项目、需求、账号、登录和目标会话区分读请求。晚到响应不覆盖新选择，授权错误隐藏旧信息。标签明确是会话配置。页面不承诺插件已加载、上下文已消费或执行能力。</li>
+    <li>沿用会话目录和轨迹的观察登录、请求撤销、出站权限复核和 no-store。新 GET 先确认需求与会话归属再取得本项目 Native；按需启动 Host 后用现有 <code>session.preset</code> 被动观察已登记的工作区和会话，避免调用能创建工作区的准备路径。核对实际工作区 ID 及 cwd 与业务映射。受管 preset 读取既有不可变定义及其版本，检查项目与需求范围；按项目、模板 ID 与修订查询对应的发布记录以取得名称，只返回状态、模板标识、名称和正整数版本。原生或定义无有效证据、发布记录缺失时只报无法核实。现有版本定义读取只检查目录和文件，发布路径继续负责目录创建。响应前复核原登录和最新可读会话，授权失败使用既有拒绝。</li>
+    <li>复用 T14 真 PostgreSQL 和隔离 Native 用例，验证更换绑定前后的会话、派生、冷启、无绑定、损坏定义和错需求拒绝，证明被动读取无新模型调用。浏览器覆盖所选会话、迟到旧响应、同登录头、读取失败隐藏旧数据、恢复以及窄屏和明暗。先跑改前失败，改后跑聚焦、类型、lint、格式、构建、整仓、两个浏览器分片和基线。单一提交可回退，无数据迁移。</li>
+  </ol>
+
+  <p id="t12-session-template-status-evidence-20261120">独立方案和交付复核均为 APPROVE。复核确认使用 Native <code>session.preset</code> 的有效投影、原观察登录、no-store、出站会话及工作区核验。定义读取只检查既有目录，缺目录时没有创建副作用。页面按登录、项目、需求和所选会话隔离，晚到回包不覆盖当前版本。</p>
+  <p>改前 <code>pnpm test tests/integration/session-capability-preset.test.ts -t 'released capability versions'</code> 因新读取入口 404 退出 1。改后执行 <code>pnpm test tests/integration/session-capability-preset.test.ts tests/integration/requirement-template.test.ts</code> 通过 2 文件、9 项，覆盖真 PostgreSQL 与锁定 Native 下旧版、新版、原生有效投影、派生、冷启、无模板、损坏定义、错需求、观察登录错配及读取中撤权。回环模型无新增调用。<code>pnpm test:e2e tests/e2e/requirement-template.spec.ts</code> 通过 1 项，另核对了 390px 明暗截图、已发送的观察登录、迟到旧响应、授权失败后的旧值隐藏和重试恢复。Node 24.20.0 与 Apple Git 2.54.0 下，整仓 <code>pnpm test</code> 通过 48 文件、283 项，1 项既有条件跳过；<code>pnpm test:e2e --shard=1/2</code> 和 <code>pnpm test:e2e --shard=2/2</code> 各通过 22 项。类型、lint、格式、构建和基线校验均通过。</p>
+
   <h3 id="t16-trace-plan-20261118">11.18 T16 会话轨迹页</h3>
   <p>Change / R2。依据 D7、I2-AUTH、设计基线 Q1／Q2、T16 的轨迹读取、详情和摘要验收，以及已验证的 T02 被动历史分页，交付一条“需求内选会话 → 读取固定逻辑历史 → 展开详情 → 下载已读摘要”的路径。复用 <a href="#session-lifecycle-live-20261118">T02 的真实恢复与被动读取证据</a>，T02 用户侧视觉验收保留。影响面为已有前端导航和历史读取适配，撤销本次功能提交即可恢复原入口。原始持久前缀与独立哈希锚点另按 T16 实现。</p>
   <ol>

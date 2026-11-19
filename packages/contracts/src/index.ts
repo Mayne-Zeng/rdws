@@ -586,6 +586,9 @@ export interface RequirementTemplateBinding {
   binding: (TemplateVersion & { name: string; available: boolean }) | null;
   options?: (TemplateVersion & { name: string })[];
 }
+export type SessionTemplateStatus =
+  | (TemplateVersion & { status: 'recorded'; name: string })
+  | { status: 'unbound' | 'unavailable' };
 export interface TemplateBindingReceipt {
   commandId: string;
   status: 'saved' | 'unchanged' | 'unavailable';

@@ -109,14 +109,15 @@ export class DemandPresets {
     }
   }
 
-  private async directory(durable = false) {
+  private async directory(publish = false) {
     let path = await realpath(this.runtimeHome);
     for (const part of ['runtime', 'presets', 'project-' + this.projectId]) {
       const parent = path;
       path = join(path, part);
-      await mkdir(path, { mode: 0o700 }).catch((error: unknown) => {
-        if (errorCode(error) !== 'EEXIST') throw error;
-      });
+      if (publish)
+        await mkdir(path, { mode: 0o700 }).catch((error: unknown) => {
+          if (errorCode(error) !== 'EEXIST') throw error;
+        });
       const stat = await lstat(path);
       if (
         !stat.isDirectory() ||
@@ -124,7 +125,7 @@ export class DemandPresets {
         stat.mode & (part === 'runtime' ? 0o022 : 0o077)
       )
         throw new Error('Invalid preset directory');
-      if (durable) await sync(parent, true);
+      if (publish) await sync(parent, true);
     }
     return path;
   }

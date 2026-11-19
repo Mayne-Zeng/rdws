@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import { createServer } from 'node:http';
 import * as http from 'node:http';
 import {
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
@@ -34,6 +35,10 @@ test('preset publication reconciles concurrent copies and rejects an abnormal de
   const choice = { templateId: randomUUID(), revision: 1, capabilities: [] };
   try {
     const good = store.definition(randomUUID(), choice);
+    await expect(store.read(good.id, good.requirementId)).rejects.toThrow();
+    await expect(lstat(join(root, 'runtime'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
     await Promise.all([store.publish(good), store.publish(good)]);
     expect(await store.read(good.id, good.requirementId)).toEqual(good);
 
@@ -365,6 +370,30 @@ test('released capability versions stay scoped through binding changes, replay a
     });
     expect(loginState.statusCode).toBe(200);
     const authSessionId = loginState.json().session.id as string;
+    const templateStatus = (
+      sessionId: string,
+      requirementId = demand,
+      observedLogin = authSessionId,
+    ) =>
+      app!.inject({
+        url: `/api/requirements/${requirementId}/sessions/${sessionId}/capability-template`,
+        headers: { cookie, 'x-rdws-edit-session': observedLogin },
+      });
+    async function expectTemplate(
+      sessionId: string,
+      revision: number,
+      name: string,
+    ) {
+      const response = await templateStatus(sessionId);
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(response.json()).toEqual({
+        status: 'recorded',
+        templateId: template,
+        revision,
+        name,
+      });
+    }
     const bind = async (revision: number) => {
       const response = await app!.inject({
         method: 'POST',
@@ -392,6 +421,13 @@ test('released capability versions stay scoped through binding changes, replay a
     const nearSession = near.json().sessionId as string;
     const nearIdentity = await inspect(nearSession, neighbor);
     expect(nearIdentity.agentPreset).not.toMatch(/^rdws-demand-v1-/);
+    expect((await templateStatus(nearSession, neighbor)).json()).toEqual({
+      status: 'unbound',
+    });
+    expect((await templateStatus(nearSession)).statusCode).toBe(403);
+    expect(
+      (await templateStatus(session1, demand, randomUUID())).statusCode,
+    ).toBe(401);
     await bind(2);
     expect((await create(command)).json()).toMatchObject({
       status: 'mapped',
@@ -404,6 +440,33 @@ test('released capability versions stay scoped through binding changes, replay a
     expect(replacement.agentPreset).toMatch(/^rdws-demand-v1-[0-9a-f]{64}$/);
     expect(replacement.agentPreset).not.toBe(original.agentPreset);
     expect(await inspect(session1)).toEqual(original);
+    await expectTemplate(session1, 1, 'First');
+    await expectTemplate(session2, 2, 'Next');
+    expect(calls).toHaveLength(0);
+    const liveNative = native!;
+    const readNative = liveNative.control.bind(liveNative);
+    const revokeDuringRead = vi
+      .spyOn(liveNative, 'control')
+      .mockImplementation(async (operation, input) => {
+        const result = await readNative(operation, input);
+        if (operation === 'session.preset')
+          await db.query(
+            'delete from project_member where project_id=$1 and user_id=$2',
+            [project, actor],
+          );
+        return result;
+      });
+    try {
+      const rejected = await templateStatus(session1);
+      expect(rejected.statusCode).toBe(403);
+      expect(rejected.body).not.toContain(template);
+    } finally {
+      revokeDuringRead.mockRestore();
+      await db.query(
+        "insert into project_member(project_id,user_id,role) values($1,$2,'project_admin') on conflict do nothing",
+        [project, actor],
+      );
+    }
     const observed = await probe([session1, session2, nearSession]);
     expect(observed.values[0]).toMatchObject({
       sessionId: session1,
@@ -580,6 +643,7 @@ test('released capability versions stay scoped through binding changes, replay a
     expect((await inspect(child.json().sessionId)).agentPreset).toBe(
       original.agentPreset,
     );
+    await expectTemplate(child.json().sessionId, 1, 'First');
 
     await bind(1);
     const selectedSource = sameBoundRelease.json().sessionId as string;
@@ -591,12 +655,14 @@ test('released capability versions stay scoped through binding changes, replay a
     expect((await inspect(selectedSource)).agentPreset).toBe(
       replacement.agentPreset,
     );
+    await expectTemplate(selectedSource, 2, 'Next');
     await closeTurn(selectedSource);
     const selectedChild = await fork(selectedSource);
     expect(selectedChild.statusCode).toBe(200);
     expect((await inspect(selectedChild.json().sessionId)).agentPreset).toBe(
       replacement.agentPreset,
     );
+    await expectTemplate(selectedChild.json().sessionId, 2, 'Next');
     expect(calls.length).toBe(2);
     for (const call of calls) {
       expect(call).toContain(contextMarker);
@@ -737,6 +803,10 @@ test('released capability versions stay scoped through binding changes, replay a
       error: expect.stringContaining('审核已失效'),
     });
     await boot();
+    const beforeRead = calls.length;
+    await expectTemplate(session1, 1, 'First');
+    await expectTemplate(session2, 2, 'Next');
+    expect(calls).toHaveLength(beforeRead);
     await closeTurn(session1);
     await follow(session2);
     expect(await inspect(session1)).toEqual(original);
@@ -775,6 +845,9 @@ test('released capability versions stay scoped through binding changes, replay a
     );
     await writeFile(frozen, '{}');
     await boot();
+    const damagedVersion = await templateStatus(session1);
+    expect(damagedVersion.statusCode).toBe(200);
+    expect(damagedVersion.json()).toEqual({ status: 'unavailable' });
     const passive = await app!.inject({
       url: '/api/requirements/' + demand + '/sessions/' + session1 + '/history',
       headers: { cookie },

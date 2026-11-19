@@ -15,6 +15,7 @@ import { Icon, api, roleLabels } from '../lib/ui.tsx';
 import { Conversation, type NativeTab } from './conversation.tsx';
 import { RequirementWorktrees } from './requirement-worktrees.tsx';
 import { RequirementTemplate } from './requirement-template.tsx';
+import { SessionTemplateStatusPanel } from './session-template-status.tsx';
 import { RequirementPersonnel } from './requirement-personnel.tsx';
 import {
   RequirementDetailsEditor,
@@ -370,6 +371,13 @@ export function RequirementPage({
             id={id}
             userId={userId}
             sessionId={sessionId}
+            projectId={projectId}
+          />
+          <SessionTemplateStatusPanel
+            key={`session-template-status:${detailsScope}`}
+            id={id}
+            userId={userId}
+            loginId={sessionId}
             projectId={projectId}
           />
           <section className="document-section info-panel context-tasks">

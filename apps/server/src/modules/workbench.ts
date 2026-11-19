@@ -632,10 +632,8 @@ export async function registerWorkbench(
   function lease(scope: ReadyAccess, generation: string) {
     const id = scope.who.authSessionId + ':' + scope.item.id + ':' + generation;
     let item = leases.get(id);
-    if (item && (item.revoked || item.expiresAt <= Date.now())) {
-      leases.delete(id);
+    if (item && (item.revoked || item.expiresAt <= Date.now()))
       fail(409, '连接已过期，请重新连接');
-    }
     if (!item) {
       item = {
         token: scope.runtime.native.ticket(grant(scope)),
@@ -2045,6 +2043,11 @@ export async function registerWorkbench(
               userIds,
             };
             personnelFences.set(key, entry);
+          },
+          () => {
+            if (entry && personnelFences.get(key) === entry)
+              personnelFences.delete(key);
+            entry = undefined;
           },
         );
         responseScopes.set(request, {

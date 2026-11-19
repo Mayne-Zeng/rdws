@@ -108,6 +108,7 @@ export function createBusiness(db: Database) {
     work: (tx: Transaction) => Promise<T>,
     opts: {
       transactionTimeout?: string;
+      beforeRetry?: () => void;
       isolationLevel?:
         | 'read uncommitted'
         | 'read committed'
@@ -138,6 +139,7 @@ export function createBusiness(db: Database) {
           (error as { code?: string }).code;
         if (attempt >= 2 || !['40001', '40P01'].includes(code ?? ''))
           throw error;
+        opts.beforeRetry?.();
       }
     }
   }
@@ -1132,6 +1134,7 @@ export function createBusiness(db: Database) {
     input: RequirementPersonnelInput,
     confirmAuthority: () => void,
     fence: (removed: string[]) => void,
+    beforeRetry: () => void,
   ): Promise<PersonnelResult | 'conflict'> {
     const normalized = normalizePersonnel(input);
     const {
@@ -1144,7 +1147,7 @@ export function createBusiness(db: Database) {
       overrides,
       taskDigest,
     } = normalized;
-    return transaction(async (tx) => {
+    async function applyPersonnelEdit(tx: Transaction) {
       const targets = [
         previewLeadId,
         leadId,
@@ -1332,7 +1335,8 @@ export function createBusiness(db: Database) {
       return complete('saved', version, [
         ...new Set(removed.map((person) => person.userId)),
       ]);
-    });
+    }
+    return transaction(applyPersonnelEdit, { beforeRetry });
   }
   async function recoverPersonnelCommit(
     actorId: string,

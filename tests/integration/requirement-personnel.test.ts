@@ -39,6 +39,8 @@ const demand = randomUUID(),
   race = randomUUID(),
   unknown = randomUUID(),
   rollback = randomUUID(),
+  retrySerialization = randomUUID(),
+  retryDeadlock = randomUUID(),
   self = randomUUID(),
   selfKnown = randomUUID(),
   roleRace = randomUUID(),
@@ -54,6 +56,8 @@ const demands = [
   race,
   unknown,
   rollback,
+  retrySerialization,
+  retryDeadlock,
   self,
   selfKnown,
   roleRace,
@@ -549,6 +553,41 @@ function latch() {
   });
   return { wait, open };
 }
+
+test.each([
+  { code: '40001', id: retrySerialization },
+  { code: '40P01', id: retryDeadlock },
+])(
+  'a rolled-back personnel commit retries after $code',
+  async ({ code, id }) => {
+    const payload = edit({ leadId: actor('dev').id, remove: [removeLead()] });
+    const spy = interceptCommit(payload.commandId, async (finish) => {
+      await finish(false);
+      throw Object.assign(new Error('Synthetic transaction rollback'), {
+        code,
+      });
+    });
+    try {
+      const result = await save('pm', id, payload);
+      expect(result.statusCode).toBe(200);
+      expect(result.json()).toMatchObject({
+        status: 'saved',
+        contextVersion: 2,
+        revocation: 'confirmed',
+      });
+      expect((await get('lead', id)).statusCode).toBe(403);
+      expect(
+        (
+          await db.query('select 1 from command_receipt where command_id=$1', [
+            payload.commandId,
+          ])
+        ).rowCount,
+      ).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  },
+);
 
 test.each([
   { committed: true, id: unknown },

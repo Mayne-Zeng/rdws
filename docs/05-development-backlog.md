@@ -215,6 +215,7 @@
   - 实现前补验：[Native 模型投影与实际外发](02-directory-and-engineering-design.html#t13-native-last-used-evidence-20261120)。在真实首写前撤权后，读取原生 `lastUsed` 可见模型，供应商仍零到达。派生验收以实际首写证据判断既有选择是否已经外发。
   - 已交付子项：[受管项目模型目录](02-directory-and-engineering-design.html#t13-mediated-model-catalog-20261120)。公开入口按当前项目的冻结策略和 Native 可路由记录公布精确模型。实例默认保留原生配置，受管 paused 沿用原生目录。方案和交付独立复审、整仓 268 项、浏览器 44 项、真实 Native 本机模式切换及基线校验通过。
   - 实现前核对：[Native 首消息标题的来源](02-directory-and-engineering-design.html#t13-title-origin-evidence-20261120)。独立技术裁决及安装包内存探针确认标题插件作用域内的实际调用可与原始消息序列关联。
+  - 实现前核对：[完整领取后的原生选模时点](02-directory-and-engineering-design.html#t13-selection-boundary-evidence-20261120)。锁定 Native 在同一轮的下一步按完整同修订批次命中目标模型。不同修订同批终态为阻止，即使模型相同，供应商第二次 HTTP 仍为零。独立复审、反例和 5 项原生邻域通过。该探针为保存、发送授权和派生提供实现依据。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。

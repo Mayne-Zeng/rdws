@@ -1042,6 +1042,18 @@
   <p>交付 A 面第三轮 APPROVE，B 面第二轮最终 APPROVE。两面复核原始登录、已发连接和可重复取证。定点命令 <code>pnpm test tests/integration/bff-first-message-title.test.ts tests/integration/model-attempt-authority.test.ts</code> 通过 20 项。授权单测另核对候选到期、错误调用、主动关闭、冷代和一次消费。首消息标题保持回环合成测试开关，实际供应商、正式部署和其他模型用途继续按 §11.16.17 验收。</p>
   <p>使用锁定 Node 24.20.0 和本机 Git 2.56.0 的 <code>pnpm test</code> 通过 45 文件、278 项，1 项既有条件跳过。首次回归选到 Apple Git 启动器，T06 的沙箱如预期拦下其再次启动 Git 的行为。普通路径的同内容检出通过两个浏览器分片共 44 项。<code>pnpm test:web-live tests/web-live/model-egress-pause.spec.ts</code> 首次等待浏览器恢复发送超时，复跑通过 1 项，供应商为本机夹具。类型、lint、格式、构建和基线通过。</p>
 
+  <h4 id="t13-selection-boundary-plan-20261120">11.16.34 T13 完整领取批次的选模取证</h4>
+  <p>Change / R2，隔离分支基线 <code>1e0cbd8</code>。依据 §11.16.7、§11.16.17、§11.16.29，仅用锁定 Native 探针验证同一供应商的两个合成模型在完整领取批次后的步骤边界。试验代码运行在集成夹具。持久选模、产品界面、派生门禁、具名部署按原规格另行验收。</p>
+  <ol>
+    <li>两位独立代理复核锁定上游。<code>ReactLoopInbox.claim</code> 先写入 <code>agent/inbox/spliced</code> 的非取消移除，再同步逐条发出 <code>agent/inbox/claimed</code>，驱动随后读取 <code>agent.model.current()</code>。会话事件仅记录本次候选的完整计数；确认全部领取后才在回调同步更新一次会话选择。<code>agent/pre-step</code> 独立核对原批次、冻结修订和已固定实际路由。逐条改写或延迟至下一个任务调度无法对应完整批次。原生公开 <code>session/selectModel</code> 会修改实例默认，<code>agent/request</code> 拒绝替换已经固定的路由。正式接线继续区分本步新增和仍需复核授权的前步输入。</li>
+    <li>测试通过正式 Native Host、non-owner 浏览器身份和已签名的本机运行服务发送输入。一个真实回环供应商逐次核对实际模型和正文。主 HTTP 响应挂起时，发送两条同修订的 <code>steer</code>，先确认旧步仍使用原模型，再释放响应验证下一步实际收到两条新正文与目标模型。另观察不同修订的两条已领取输入被阻止，供应商零新增，原生未写入它们的选择。相邻会话和实例默认仍使用初始模型。明确复验对照，注释或日志本身不作行为证据。</li>
+    <li>实际首写与派生由另一位独立代理复核。Native 的 <code>lastUsed</code> 能在发送前更新，同值选择可能省略原生事件；成功的旧同值修订和晚于切点的父调用均不足以解除门禁。可用内部同修订准备回执绑定刷盘的 <code>step/start</code> 坐标与尝试 ID，确认后由独立短事务记录首写终态，保持真实授权和 TCP 同序。部分写、崩溃或提交失确认保留未知，冷代只读旧状态。已发连接允许结束。二次派生须保留尚未解除的祖先门禁。尚未进入原生前缀的纯保存无合法历史坐标；两条不同修订同批的实际草稿恢复、未知首写在产品上的核对路径仍需另案验收。</li>
+  </ol>
+  <p>阶段验收运行新探针及 Native 邻域，类型、lint、格式、构建和基线。改动限定测试与文档，回退单一提交即可。</p>
+
+  <p id="t13-selection-boundary-evidence-20261120">独立方案复审 APPROVE。新用例通过真实 Native Web Host 的签名运行服务和 non-owner 接口，用合成 HTTP 供应商核对两个模型的实际正文。第一步响应挂起时，两条已准入的引导输入按原请求 ID 记在同一会话的下一步。释放后，Native 的非取消 splice 一次领取两条，选模事件落在同一轮的第 1 步与第 2 步之间，供应商在第 2 次调用实际收齐两条正文并使用目标模型。不同修订的两条输入也被完整领取，分别覆盖模型相同和模型不同。两组终态均为 <code>blocked</code>，无第二步、无选模事件、供应商入口无新增。相邻会话和实例默认仍为初始模型。</p>
+  <p>将同步选模临时移到微任务时，正例第二次 HTTP 未到达（实际 1，期望 2）。临时只去掉修订相等条件、保留模型相等条件时，同模型异修订负例终态变成 <code>completed</code>（期望 <code>blocked</code>）。两类故障注入均退出 1。恢复后，<code>pnpm test tests/integration/native-model-selection-boundary.test.ts tests/integration/project-native-paths.test.ts tests/integration/native-queued-recovery.test.ts</code> 通过 3 文件、5 项。探针从合成映射取得原请求修订，生产接口保存、发送前持久快照、首写证明和派生门禁仍按后续方案推进。交付复审首轮发现原负例同时改变模型与修订，追加同模型异修订用例和单条件反例后复审 APPROVE。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

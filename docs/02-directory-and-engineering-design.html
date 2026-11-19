@@ -1098,6 +1098,20 @@
   <p><code>pnpm test tests/integration/model-attachment-evidence.test.ts tests/integration/native-model-carrier.test.ts tests/integration/native-messages-dispatch.test.ts</code> 通过 3 个文件、6 项。现有受限 Native 通过 FD 4 产生真实 Files 和 Messages 字节。父端记录的测试摘要逐次与回环供应商实际到达一致，实际 multipart 与内联 PNG 的变体摘要相同。缓存引用的摘要在另一 Native 调用的 Messages 中被观察到，独立尝试标识保留。拒绝及内联回退继续按原夹具验证。测试使用合成认证与内容，生产 Files/Messages 准入仍按 §11.16.17。</p>
   <p>Node 24.20.0 和 Apple Git 2.54.0 下，<code>pnpm test</code> 通过 51 文件、293 项，1 项既有平台条件跳过。类型、lint、格式、构建、基线和补丁完整性检查均通过。</p>
 
+  <h4 id="t13-attachment-variant-plan-20261120">11.16.38 T13 附件变体与原入箱证据</h4>
+  <p>Change / R3，基线 <code>09e4a7e</code>。在受限 macOS Native 的临时 Profile 和继承通道验证原入箱身份、实际领取与图片转换。夹具限定合成图片和认证配置，父端返回本机合成响应。保留产品现有的文字准入及出口授权。</p>
+  <ol>
+    <li>以真实签名 <code>session/prompt</code> 和已有 <code>ContextRuns</code> 本机配置受理文字。只在临时 Profile 对单个明确的合成标记包装 <code>admitPromptContent</code>，委托原服务接纳附加的合成图片。核对真实入箱、领取、来源主体、原请求和会话相符。此接点位于原生初步图片检查之后，证据范围是原身份建立后的附件接纳与领取。</li>
+    <li>设置已公布的合成 vision 路由及较小图片目标。用限定在实际 <code>llm/stream</code> 作用域的临时观察记录原 <code>readImageRequest</code> 的变体摘要、MIME、尺寸和实际请求消息身份。Files 与内联 Messages 分别比较该摘要和实际请求正文，核对原图及变体的尺寸和摘要确有变化。同一轮的两次运输拥有独立尝试 ID。</li>
+    <li>另一真实签名会话的原入箱仅有文字。在夹具的 <code>pre-step</code> 将前一会话已知的同一图片附加到请求候选，验证此图虽可产生相同变体，但当前领取无法提供该图片证据。父端合成拒绝 Files 及其内联回退，不返回成功推理。本机的现有步骤授权与附件证据各自核对。该否决规则仅供夹具取证，正式首写仍须同库授权、真实上传回执和部署方确认。</li>
+    <li>验产品入口对含图片请求的现有拒绝、同一步原绑定、准备尺寸、真实载体字节、两会话分离和回退否决。仅传回合成标识、次数及摘要。运行聚焦锁版邻域、整仓、静态和基线。临时 Profile 随测试清理，本批可按提交回退。</li>
+  </ol>
+
+  <p id="t13-attachment-variant-evidence-20261120">R3 双面方案和独立交付复审均 APPROVE。锁版 <code>session/prompt</code> 先由真实 Peer 建立原请求和主体，随后在创建原生消息前调用附件接纳。临时 Profile 包装附件接纳与实际 <code>readImageRequest</code>，保留原方法以及同一模型流的异步作用域，退出时清理。直达工作台保护的 Native 路径对同份签名请求加入原图返回 503，随后原键提交文字被受理。</p>
+  <p><code>pnpm test tests/integration/native-attachment-variant.test.ts tests/integration/native-prompt-observation.test.ts tests/integration/model-attachment-evidence.test.ts tests/integration/native-model-carrier.test.ts</code> 通过 4 文件、7 项。首次修正夹具 Profile 缺少 Host 需要的声明项，再用原 HTTP 状态核对拒绝。两会话的原请求、登录、需求、Nonce 及步骤绑定各自独立。正例在真实原入箱及领取记录可查图片，尺寸 32×32 变为 8×8，原图与变体摘要区别明确，实际 Files 与内联请求吻合变体的 MIME、字节和摘要。两次调用共享同一步绑定且尝试 ID 不同。夹具返回 Files 403 触发内联，正例完成并产生合成回复。</p>
+  <p>负例使用同一图片和同一变体，原入箱和领取记录只有文字。尽管两次载体仍获当前夹具的步骤身份，附件条件均拒绝，两次独立尝试均无成功推理回复。浏览器、BFF 与原生常规图片准入依赖正式上传凭证及授权。此处是临时 Profile 的合成身份与响应，外发首写和真实供应商上传回执仍待对应实现。</p>
+  <p>Node 24.20.0 和 Apple Git 2.54.0 下，<code>pnpm test</code> 通过 52 文件、294 项，1 项既有平台条件跳过。类型、lint、格式、构建、基线和补丁完整性检查均通过。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

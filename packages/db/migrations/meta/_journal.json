@@ -92,6 +92,13 @@
       "when": 1795108462228,
       "tag": "0012_requirement_write_lease",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1795126760734,
+      "tag": "0013_session_log_anchor_projection",
+      "breakpoints": true
     }
   ]
 }

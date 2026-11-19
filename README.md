@@ -192,6 +192,8 @@ pnpm --silent trace:anchor verify "$journal" "$through_byte"
 
 普通集成验证使用本机已有的项目固定 PostgreSQL 镜像。用本机已有的 `node:24.20.0-bookworm-slim` 镜像执行 `RDWS_TEST_ANCHOR_READONLY=1 pnpm test tests/integration/trace-anchor.test.ts`，可复验独立 Linux 非 root 进程的只读挂载、自动记录及旧坐标核对。正式环境只读部署仍按研发清单验收。[T16 自动截止方案](docs/02-directory-and-engineering-design.html#t16-automatic-cutoff-plan-20261119)
 
+迁移 0013 为 T17 提供应用角色专用的只读投影。它按当前账号及会话授权读取已提交的摘要，保留独立校验命令及其专用登录。投影读取的是原记录值，核验当前原件仍使用上面的 `verify` 命令。研发清单记录工作台接线与正式环境验收进度。[T17 锚点联查方案](docs/02-directory-and-engineering-design.html#t17-session-anchor-projection-plan-20261120)
+
 ## 这个仓库现在有什么
 
 | 路径                                            | 内容                                                             |

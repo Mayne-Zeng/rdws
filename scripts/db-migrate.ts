@@ -11,6 +11,8 @@ import {
   explicitDatabaseConnection,
   grantAnchorWriter,
 } from './trace-anchor-db.mjs';
+const anchorProjection =
+  'public.read_session_log_anchors(text,text,text,text,text,timestamptz,text)';
 export async function grantApplication(
   client: Pick<PoolClient, 'query'>,
   application: 'rdws_app' | 'rdws_test_app',
@@ -71,6 +73,35 @@ export async function grantApplication(
       );
       if (rows[0]?.safe !== true)
         throw new Error('Unexpected runtime authority permissions');
+    }
+    const {
+      rows: [projection],
+    } = await client.query<{ present: boolean }>(
+      'select pg_catalog.to_regprocedure($1) is not null as present',
+      [anchorProjection],
+    );
+    if (projection?.present) {
+      await client.query(
+        `grant execute on function ${anchorProjection} to ${application}`,
+      );
+      const {
+        rows: [acl],
+      } = await client.query<{ safe: boolean }>(
+        `select pg_catalog.pg_get_userbyid(proc.proowner) = current_user
+          and proc.prosecdef and proc.provolatile = 's'
+          and proc.proconfig = array['search_path=pg_catalog, pg_temp']
+          and pg_catalog.has_function_privilege($1, proc.oid, 'EXECUTE')
+          and not exists (
+            select 1 from pg_catalog.aclexplode(coalesce(proc.proacl, pg_catalog.acldefault('f', proc.proowner))) as entry
+            where entry.grantee <> proc.proowner
+              and (entry.grantee <> (select oid from pg_catalog.pg_roles where rolname = $1)
+                or entry.grantor <> proc.proowner or entry.privilege_type <> 'EXECUTE' or entry.is_grantable)
+          ) as safe
+          from pg_catalog.pg_proc as proc where proc.oid = pg_catalog.to_regprocedure($2)`,
+        [application, anchorProjection],
+      );
+      if (acl?.safe !== true)
+        throw new Error('Unexpected session log anchor projection permissions');
     }
     await client.query('commit');
   } catch (error) {

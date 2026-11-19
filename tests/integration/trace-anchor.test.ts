@@ -408,6 +408,7 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
     const demandId = randomUUID(),
       neighborDemand = randomUUID();
     const userId = randomUUID();
+    const readerLoginId = randomUUID();
     const real = await createJournal(fixture, demandId);
     await owner.query('insert into auth_user(id,name,email) values($1,$2,$3)', [
       userId,
@@ -427,6 +428,29 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
       [real.sessionId, demandId, userId],
     );
     await owner.query(
+      "insert into auth_session(id,token,user_id,expires_at) values($1,$2,$3,statement_timestamp()+interval '1 hour')",
+      [readerLoginId, randomUUID(), userId],
+    );
+    await owner.query(
+      "insert into project_member values($1,$3,'developer'),($2,$3,'project_admin')",
+      [sourceProject, otherProject, userId],
+    );
+    await owner.query(
+      "insert into requirement_participant values($1,$2,'developer')",
+      [demandId, userId],
+    );
+    const anchorPage =
+      'select * from public.read_session_log_anchors($1,$2,$3,$4,$5,$6,$7)';
+    const readerScope = [
+      sourceProject,
+      demandId,
+      real.sessionId,
+      userId,
+      readerLoginId,
+      null,
+      null,
+    ];
+    await owner.query(
       'alter default privileges grant select on tables to rdws_test_app',
     );
     await runMigration(fixtureHome, ownerDsn, false);
@@ -439,6 +463,19 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
     ).toEqual({ audit: null, migrations: 10 });
     await owner.query(
       'alter default privileges revoke select on tables from rdws_test_app',
+    );
+    await owner.query(
+      'alter default privileges in schema public grant execute on functions to rdws_test_app',
+    );
+    await runMigration(fixtureHome, ownerDsn, false);
+    expect(
+      (
+        await owner.query(`select to_regprocedure('public.read_session_log_anchors(text,text,text,text,text,timestamptz,text)') as projection,
+      (select count(*)::integer from drizzle.__drizzle_migrations) as migrations`)
+      ).rows[0],
+    ).toEqual({ projection: null, migrations: 10 });
+    await owner.query(
+      'alter default privileges in schema public revoke execute on functions from rdws_test_app',
     );
     await runMigration(fixtureHome, ownerDsn, true);
     expect(
@@ -480,6 +517,29 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
     );
     await runMigration(fixtureHome, ownerDsn, true);
     await runMigration(fixtureHome, ownerDsn, true);
+    const anchorFunction =
+      'public.read_session_log_anchors(text,text,text,text,text,timestamptz,text)';
+    await owner.query(
+      `grant execute on function ${anchorFunction} to rdws_test_app with grant option`,
+    );
+    await runMigration(fixtureHome, ownerDsn, false);
+    await owner.query(
+      `revoke grant option for execute on function ${anchorFunction} from rdws_test_app`,
+    );
+    await runMigration(fixtureHome, ownerDsn, true);
+    await expect(writer.query(anchorPage, readerScope)).rejects.toMatchObject({
+      code: '42501',
+    });
+    const otherReaderRole = 'rdws_anchor_fixture_observer';
+    const otherReaderPassword = randomBytes(24).toString('hex');
+    await addRole(otherReaderRole, otherReaderPassword);
+    await boot.query(
+      'grant connect on database rdws_test to rdws_anchor_fixture_observer',
+    );
+    const otherReader = makePool(dsn(otherReaderRole, otherReaderPassword));
+    await expect(
+      otherReader.query(anchorPage, readerScope),
+    ).rejects.toMatchObject({ code: '42501' });
     await expect(
       app.query('select * from audit.session_log_anchor'),
     ).rejects.toMatchObject({ code: '42501' });
@@ -634,6 +694,77 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
       recordedAt: expect.any(String),
       ignoredTailBytes: 0,
     });
+    const projected = await app.query(anchorPage, readerScope);
+    expect(projected.rows).toEqual([
+      {
+        anchor_id: expect.stringMatching(/^[a-f0-9]{64}$/),
+        through_byte: String(cutoff),
+        sha256: sha(real.bytes),
+        recorded_at: expect.stringMatching(
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/,
+        ),
+      },
+    ]);
+    expect(projected.rows[0].recorded_at).toBe(
+      (
+        await owner.query(
+          `select to_char(recorded_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as exact
+        from audit.session_log_anchor where project_id=$1 and session_id=$2`,
+          [sourceProject, real.sessionId],
+        )
+      ).rows[0].exact,
+    );
+    for (const wrong of [
+      [otherProject, ...readerScope.slice(1)],
+      [sourceProject, neighborDemand, ...readerScope.slice(2)],
+      [
+        ...readerScope.slice(0, 2),
+        'session-' + randomUUID(),
+        ...readerScope.slice(3),
+      ],
+      [...readerScope.slice(0, 3), randomUUID(), ...readerScope.slice(4)],
+      [...readerScope.slice(0, 4), randomUUID(), ...readerScope.slice(5)],
+    ])
+      expect((await app.query(anchorPage, wrong)).rows).toEqual([]);
+    await owner.query('update auth_user set auth_epoch=1 where id=$1', [
+      userId,
+    ]);
+    expect((await app.query(anchorPage, readerScope)).rows).toEqual([]);
+    await owner.query(
+      'update auth_user set auth_epoch=0, active=false where id=$1',
+      [userId],
+    );
+    expect((await app.query(anchorPage, readerScope)).rows).toEqual([]);
+    await owner.query('update auth_user set active=true where id=$1', [userId]);
+    await owner.query(
+      "update auth_session set expires_at=statement_timestamp()-interval '1 second' where id=$1",
+      [readerLoginId],
+    );
+    expect((await app.query(anchorPage, readerScope)).rows).toEqual([]);
+    await owner.query(
+      "update auth_session set expires_at=statement_timestamp()+interval '1 hour' where id=$1",
+      [readerLoginId],
+    );
+    await owner.query(
+      'delete from requirement_participant where requirement_id=$1 and user_id=$2',
+      [demandId, userId],
+    );
+    expect((await app.query(anchorPage, readerScope)).rows).toEqual([]);
+    await owner.query(
+      "update project_member set role='project_admin' where project_id=$1 and user_id=$2",
+      [sourceProject, userId],
+    );
+    expect((await app.query(anchorPage, readerScope)).rows).toEqual(
+      projected.rows,
+    );
+    await owner.query(
+      "update project_member set role='developer' where project_id=$1 and user_id=$2",
+      [sourceProject, userId],
+    );
+    await owner.query(
+      "insert into requirement_participant values($1,$2,'developer')",
+      [demandId, userId],
+    );
     const [bucket] = real.entry.split(sep);
     const independent = (
       await owner.query('select * from audit.session_log_anchor')
@@ -963,6 +1094,11 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
       ).rejects.toMatchObject({ code: '23503' });
       await writing.query('begin');
       await writing.query(insert, key(cutoff - 3));
+      expect(
+        (await app.query(anchorPage, readerScope)).rows,
+      ).not.toContainEqual(
+        expect.objectContaining({ through_byte: String(cutoff - 3) }),
+      );
       expect(await host('verify', 2, cutoff - 3)).toEqual({
         status: 'missing-anchor',
         throughByte: cutoff - 3,
@@ -975,6 +1111,16 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
       await waitBlocked(movingPid);
       await writing.query('commit');
       await blockedMove;
+      expect((await app.query(anchorPage, readerScope)).rows).toEqual([]);
+      expect(
+        (
+          await app.query(anchorPage, [
+            otherProject,
+            neighborDemand,
+            ...readerScope.slice(2),
+          ])
+        ).rows,
+      ).toEqual([]);
       expect(await host('verify', 0, cutoff - 3)).toEqual({
         status: 'matched',
         throughByte: cutoff - 3,
@@ -984,6 +1130,9 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
         throughByte: cutoff - 4,
       });
       await moving.query(move, moveValues(demandId));
+      expect((await app.query(anchorPage, readerScope)).rows).toContainEqual(
+        expect.objectContaining({ through_byte: String(cutoff - 3) }),
+      );
 
       for (const commitMove of [true, false]) {
         await moving.query('begin');
@@ -1005,6 +1154,63 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
       writing.release();
       moving.release();
     }
+    const paginationSession = 'session-' + randomUUID();
+    await owner.query(
+      'insert into native_session(id,requirement_id,owner_id) values($1,$2,$3)',
+      [paginationSession, demandId, userId],
+    );
+    const recordedAt = '2026-02-10T01:02:03.314159Z';
+    await owner.query(
+      `insert into audit.session_log_anchor (project_id,session_id,bucket_sha256,journal_name,through_byte,sha256,recorded_at)
+      select $1,$2,$3,'session.v'||generation||'.jsonl',10,$4,$5
+      from pg_catalog.generate_series(1,28) as generation`,
+      [
+        sourceProject,
+        paginationSession,
+        sha('synthetic bucket'),
+        sha('synthetic prefix'),
+        recordedAt,
+      ],
+    );
+    const paginationScope = [
+      sourceProject,
+      demandId,
+      paginationSession,
+      userId,
+      readerLoginId,
+    ];
+    const firstPage = (
+      await app.query(anchorPage, [...paginationScope, null, null])
+    ).rows;
+    expect(firstPage).toHaveLength(26);
+    expect(
+      firstPage.every(
+        (anchor) =>
+          anchor.recorded_at === recordedAt && anchor.through_byte === '10',
+      ),
+    ).toBe(true);
+    const tail = firstPage[24];
+    const older = (
+      await app.query(anchorPage, [
+        ...paginationScope,
+        tail.recorded_at,
+        tail.anchor_id,
+      ])
+    ).rows;
+    expect(older).toHaveLength(3);
+    const orderedIds = [...firstPage.slice(0, 25), ...older].map(
+      (anchor) => anchor.anchor_id,
+    );
+    expect(new Set(orderedIds).size).toBe(28);
+    expect(orderedIds).toEqual([...orderedIds].sort().reverse());
+    expect(
+      (await app.query(anchorPage, [...paginationScope, recordedAt, null]))
+        .rows,
+    ).toEqual([]);
+    expect(
+      (await app.query(anchorPage, [...paginationScope, recordedAt, 'bad']))
+        .rows,
+    ).toEqual([]);
     await owner.query(`revoke insert (project_id,session_id,bucket_sha256,journal_name,through_byte,sha256)
       on audit.session_log_anchor from rdws_test_anchor_writer`);
     expect(await host('record', 2)).toEqual({
@@ -1015,6 +1221,9 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
       throughByte: cutoff,
     });
     await runMigration(fixtureHome, ownerDsn, true);
+    expect(
+      (await app.query(anchorPage, [...paginationScope, null, null])).rows,
+    ).toEqual(firstPage);
     expect(await host('record', 2)).toEqual({
       status: 'database-unauthorized',
     });
@@ -1041,6 +1250,13 @@ test('a separate PostgreSQL login anchors an actual stopped Native journal and v
       status: 'matched',
       throughByte: cutoff,
     });
+    const restartedApp = makePool(
+      dsn(appRole, applicationPassword, dbName, restartedAddress),
+    );
+    expect(
+      (await restartedApp.query(anchorPage, [...paginationScope, null, null]))
+        .rows,
+    ).toEqual(firstPage);
   } finally {
     await Promise.all(pools.map((pool) => pool.end()));
     if (container) await docker('rm', '-fv', container).catch(() => {});

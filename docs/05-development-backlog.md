@@ -260,6 +260,7 @@
   - 已本地交付子项：[项目权限变更](02-directory-and-engineering-design.html#t17-project-access-audit-evidence-20261120)。当前项目管理员可查角色及管理员席位变更，查看前后角色并导出当前页。独立复审、整仓 286 项、浏览器 46 项及基线通过。
   - 已本地交付子项：[平台账号状态审计](02-directory-and-engineering-design.html#t17-platform-account-audit-evidence-20261120)。当前平台管理员在「账号状态」下查看真实停用与恢复记录并导出当前页。独立复审、整仓 287 项、浏览器 47 项及基线通过。
   - 已本地交付子项：[跨项目业务检索](02-directory-and-engineering-design.html#t17-cross-project-business-audit-evidence-20261120)。在「全部有权项目」检索已经授权的需求事件，查看来源和导出当前页。独立复审、整仓 288 项、浏览器 47 项及基线通过。
+  - 已本地交付子项：[物理锚点只读投影](02-directory-and-engineering-design.html#t17-session-anchor-projection-evidence-20261120)。应用按真实项目、需求、会话及当前登录读取已提交摘要。隔离迁移、真实 Native 原件、独立复审、整仓 288 项及基线通过，工作台接线继续推进。
   - 剩余验收包含执行事件、交付事件及锚点联查。
   - 来源：I2-AUTH、D7；服务账号拆权和逐次调用审计约定。
 

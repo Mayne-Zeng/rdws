@@ -1461,6 +1461,20 @@
   <p><code>pnpm test:e2e tests/e2e/project-audit.spec.ts tests/e2e/requirement-details.spec.ts</code> 通过 3 项。历史数据及同项目多事件曾造成聚焦定位匹配多行，按本轮数据和指定事件行收窄后通过。覆盖同名项目的来源 ID、CSV 公式防护、切回当前项目后丢弃迟到响应和同账号换登录时拒绝旧读。实查 390px 明暗布局。项目权限及单需求业务审计保留各自入口和范围。</p>
   <p>Node 24.20.0、Apple Git 2.54.0 与本机隔离 PostgreSQL 下，<code>pnpm test</code> 通过 48 文件、288 项，1 项既有平台条件跳过。<code>pnpm test:e2e --shard=1/2</code> 通过 24 项，<code>pnpm test:e2e --shard=2/2</code> 通过 23 项。类型、lint、格式、构建、基线和补丁完整性检查均通过。</p>
 
+  <h4 id="t17-session-anchor-projection-plan-20261120">11.22.5 T17 会话物理锚点联查</h4>
+  <p>Change / R3，基线 <code>deb6759</code>。依据 I2-AUTH、D7、T16 和 T17，将独立校验者已提交的物理锚点关联到已授权的会话。首步交付应用角色的数据库只读投影，验证独立写者边界后再接 BFF 与浏览器。浏览器展示记录凭据的物理截止、SHA-256、记录时间及不透明标识，在线重算与正式环境的可信只读核验仍走 T16 运维流程。</p>
+  <ol>
+    <li>新增 <code>public.read_session_log_anchors(text,text,text,text,text,timestamptz,text)</code>，静态 SQL、稳定只读 <code>SECURITY DEFINER</code>、固定 <code>pg_catalog, pg_temp</code> 路径及完整限定表名。迁移以原拥有者撤销 PUBLIC EXECUTE，并检查异常默认授权。迁移脚本仅授予准确应用角色无转授的 EXECUTE，验证归属、固定配置和完整 ACL。原 <code>audit</code> schema、锚点表、触发器、专用校验者及其现有检查保持独立。对比可更新视图和专用读者，精确函数可避免现有公共表的批量写授权和另一套运行凭据。</li>
+    <li>函数对传入的原登录 ID、账号、代次、活动状态和时限做同一 PG 快照核对，校验当前项目角色与需求参与角色交集或本项目管理员。通过项目、需求、会话稳定 ID 的精确关联读取同项目、同会话的原锚点。锚点持久身份是 T16 原项目及会话 ID，需求归属使用当前会话绑定。跨项目运维重绑后仍保留原锚点供独立核对，新项目读不到原锚点；原读请求也须在出站复核中拒绝。产品没有重绑接口，函数不对历史需求归属作追溯推断。应用角色本身受信处理 Cookie，函数提供最小汇总；用户凭据由后续 BFF 验证。</li>
+    <li>从完整物理主键的规范编码计算稳定不透明标识。只投影该标识、安全整数物理字节截止、SHA-256 及 PG UTC 微秒记录时间。每次以 <code>(recorded_at,anchor_id)</code> 降序最多返回 26 条，游标两字段一起验证，应用只消费实际返回的页界。相同记录时间和字节截止的不同物理文件仍各自可辨。永不读取文件、启动 Native 或解释逻辑 <code>throughSeq</code>。本机验收仅在独立测试库应用迁移。</li>
+    <li>数据库聚焦用例复用现有独立 PostgreSQL、锁定 Native 实际停稳文件及专用校验 CLI。核对函数不存在的改前结果、实际字节和摘要、原表拒绝、专用写者及普通角色执行拒绝、默认函数 ACL 漂移原子失败、重跑迁移、错项目／需求／会话／观察登录、已失效登录、普通参与权及撤权、跨项目重绑与同微秒完整分页。保留追加、同键回放及留卷重启的旧验证。回退产品接线后保留原记录与迁移，必要时经授权撤销应用 EXECUTE；运行正式迁移会再次按合同授权。</li>
+    <li>后续 BFF 使用 exact 会话锚点 GET、必需原观察登录、no-store 和现有权限栅栏。出站用一次 PG 查询重新校验原登录、需求角色和会话归属，再同步查期限及原请求撤权代次。审计详情链接使用事件真实项目及需求导航到锚点专用轨迹模式，用户选择当前会话。锚点模式只读 PostgreSQL，继续支持用户切换到既有逻辑轨迹。浏览器区分已记录摘要与当前核验结果，核对换登录、选会话迟到响应及摘要换行。</li>
+  </ol>
+
+  <p id="t17-session-anchor-projection-evidence-20261120">数据库阶段的双面方案复审与独立交付复审均 APPROVE。应用连接在既有隔离夹具请求新签名，改前报告函数不存在而失败，迁移 0013 通过 <code>pnpm db:generate --custom --name=session_log_anchor_projection</code> 生成并由隔离夹具调用实际 <code>pnpm db:migrate</code>。普通角色和独立写者执行投影被拒，应用仍受原表隔离。异常默认函数授予导致新增迁移原子回退，应用执行权的转授漂移使迁移授权检查失败，消除漂移后重跑通过。</p>
+  <p><code>RDWS_TEST_ANCHOR_READONLY=1 pnpm test tests/integration/trace-anchor.test.ts</code> 通过 3 项。锁定 Native 停稳原件由独立 Linux 非 root 只读挂载校验，应用读到相同真实字节截止、SHA-256 和原微秒时间。覆盖未提交行、项目／需求／会话与登录错配、账号代次、停用与过期、参与权与项目管理员、跨项目重绑和相同微秒与截止的 28 条分页。重复迁移及留卷重启保留只读投影、历史坐标和独立写者的已有边界。此批交付数据库能力，工作台入口继续按上方方案推进。</p>
+  <p>Node 24.20.0 和 Apple Git 2.54.0 下，<code>pnpm test</code> 通过 48 文件、288 项，1 项既有平台条件跳过。类型、lint、格式、构建、基线及补丁完整性检查均通过。迁移在本批夹具的独立容器验收。</p>
+
   <h2 id="s0"><span class="num">0</span>评审结论</h2>
   <div class="verdict">
     <div class="vtitle">总体判定</div>

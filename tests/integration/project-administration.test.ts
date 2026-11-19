@@ -522,8 +522,28 @@ test('a temporary project fence suppresses output without revoking a socket when
     );
     await once(browser, 'open');
     const [peer] = (await connected) as [WebSocket];
+    const opened = once(peer, 'message');
+    browser.send(
+      JSON.stringify({
+        type: 'open',
+        streamId: 'fixture',
+        endpoint: '$events',
+        payload: { args: {} },
+      }),
+    );
+    await opened;
     const downlink: string[] = [];
     browser.on('message', (data) => downlink.push(data.toString()));
+    const notice = (sessionId: string) =>
+      JSON.stringify({
+        type: 'item',
+        streamId: 'fixture',
+        value: {
+          type: 'emit',
+          event: 'api-session/removed',
+          args: [sessionId],
+        },
+      });
     const spy = interceptCommit(commandId, async (rollback) => {
       entered();
       await blocked;
@@ -559,24 +579,14 @@ test('a temporary project fence suppresses output without revoking a socket when
       (await app.inject({ url: '/api/projects', headers: { cookie: lead } }))
         .statusCode,
     ).toBe(401);
-    peer.send(
-      JSON.stringify({
-        type: 'item',
-        streamId: 'fixture',
-        value: 'provisional-output',
-      }),
-    );
+    peer.send(notice('provisional-output'));
     await sleep(1200);
     expect(browser.readyState).toBe(WebSocket.OPEN);
     expect(native.revoked).toBe(0);
     expect(downlink).toEqual([]);
     release();
     expect((await attempt).statusCode).toBe(500);
-    const afterRollback = JSON.stringify({
-      type: 'item',
-      streamId: 'fixture',
-      value: 'after-rollback',
-    });
+    const afterRollback = notice('after-rollback');
     peer.send(afterRollback);
     await vi.waitFor(() => expect(downlink).toEqual([afterRollback]));
     expect(

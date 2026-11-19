@@ -24,6 +24,8 @@ Native 上下文读和释放沿正式 Host 启动时继承的子进程 IPC，按
 
 BFF 到本代 Native Web 的 HTTP 和 WebSocket 使用进程就绪时选定的环回地址直连。HTTP 校验完整 origin 后才写出签票，上游 WebSocket 禁用重定向。签名就绪、读取和跟随可在 BFF 启用全局代理时通过本机通道完成。 [验收证据](docs/02-directory-and-engineering-design.html#t13-native-loopback-direct-20261119)
 
+BFF 按实际获准的 Native 流端点投影浏览器会话状态、列表、选模、队列及会话通知。连接内的流 ID 不复用，取消和终态后的迟到帧不转发。公开错误保留已知代码并统一消息与详情。历史扩展事件与模型目录字段仍按 R-05 跟踪。 [范围与证据](docs/02-directory-and-engineering-design.html#t13-egress-projection-plan)
+
 在 macOS 启动 BFF 时可显式将正式 Web Host 设为 `paused`。新 Native 子进程的主动网络连接由 Seatbelt 拒绝，保留本机 Web 入站与继承 IPC。BFF 在核对真实登录、本人会话、请求身份和租约后，于认领前拒绝发送。沙箱失败会阻止启动。切换或回退前要求停止旧 BFF、Native 及独立 SDK；后续统一模型出口与逐次授权按 T13 的独立验收交付。 [暂停与恢复](docs/02-directory-and-engineering-design.html#t13-native-model-egress-pause-20261119)
 
 内部受限 Host 可经继承 FD 4 将实际模型请求与读取取消交给所属进程的受信回调。双方核对本代握手，并从启动时冻结的路由映射选择目标。该通道使用内存流、受限并发和固定故障信息，本代活性失效时终止模型流。BFF 的配置和注入仍只接受 direct 和 paused。模型通道的关联字段与业务授权分开，实际外发以 T13 逐次授权与撤权定序验收为准。 [通道验收](docs/02-directory-and-engineering-design.html#t13-native-inherited-model-carrier-20261119)

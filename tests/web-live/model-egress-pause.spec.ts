@@ -395,7 +395,9 @@ test('macOS pause confines the real Native Host and the same browser can resume'
           type: 'client-request',
           rpcId: Object.hasOwn(opts, 'rpcId') ? opts.rpcId : randomUUID(),
           method: `session/${action}`,
-          payload: { args: { request: data } },
+          payload: {
+            args: action === 'list' ? { _request: data } : { request: data },
+          },
         },
       });
     }
@@ -514,6 +516,34 @@ test('macOS pause confines the real Native Host and the same browser can resume'
           }),
         )
         .toContain('"hasSnapshot":true');
+      for (const [endpoint, type] of [
+        ['session/control', 'baseline'],
+        ['session/observeProjections', 'ready'],
+        ['session/observeState', undefined],
+      ] as const) {
+        const id = randomUUID();
+        ws.send(
+          JSON.stringify({
+            type: 'open',
+            streamId: id,
+            endpoint,
+            payload: {
+              args:
+                endpoint === 'session/control'
+                  ? {}
+                  : { request: { sessionId: first.sessionId } },
+            },
+          }),
+        );
+        await expect
+          .poll(
+            () =>
+              frames.find(
+                (frame) => frame.type === 'item' && frame.streamId === id,
+              )?.value,
+          )
+          .toMatchObject(type === undefined ? { running: false } : { type });
+      }
       const closed = once(ws, 'close');
       ws.send(
         JSON.stringify({
@@ -605,6 +635,32 @@ test('macOS pause confines the real Native Host and the same browser can resume'
         value: { running: false },
       });
       expect(state.body).not.toContain(supplierDiagnostic);
+      const directory = await read('list', {});
+      expect(directory.statusCode).toBe(200);
+      expect(directory.json().result).toMatchObject({
+        ok: true,
+        value: {
+          items: expect.arrayContaining([
+            expect.objectContaining({
+              sessionId,
+              projections: expect.objectContaining({
+                kind: 'sequenced',
+                asOfSeq: expect.any(Number),
+              }),
+            }),
+          ]),
+        },
+      });
+      const projections = await read('projections');
+      expect(projections.statusCode).toBe(200);
+      expect(projections.json().result).toMatchObject({
+        ok: true,
+        value: {
+          kind: 'sequenced',
+          asOfSeq: expect.any(Number),
+          values: expect.any(Object),
+        },
+      });
       const summary = await read('summary');
       expect(summary.statusCode).toBe(503);
       expect(summary.json()).toEqual({

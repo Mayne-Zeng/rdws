@@ -291,7 +291,7 @@
     <tr><th>发现</th><th>处置</th><th>建议时机与验收要点</th></tr>
     <tr><td>R-01 workbench 巨石</td><td><span class="pill p-green">路由已拆分</span></td><td>会话、传输、导入、仓库、管理和需求各归域文件，使用同一运行时对象。35 项注册对照和浏览器验收见 <a href="02-directory-and-engineering-design.html#t13-egress-integration-plan">工程设计 §11.16.28</a>。</td></tr>
     <tr><td>R-04 包化</td><td><span class="pill p-green">包化完成</span></td><td>同步器、编排和运行配置使用私有 workspace 包。T19 继续验收可运行交付包及干净环境安装。</td></tr>
-    <tr><td>R-05 脱敏旁路</td><td><span class="pill p-amber">Q1 已实测</span></td><td>锁定版的 <code>session/state</code> 与 <code>session/summary</code> 结果见 §10.5。随 §11.16.17 继续核对全部 reads 与 emit 事件。</td></tr>
+    <tr><td>R-05 脱敏旁路</td><td><span class="pill p-amber">首批投影已验证</span></td><td>状态、列表、投影、控制与跟随快照以及五种会话通知已收敛。<a href="02-directory-and-engineering-design.html#t13-egress-projection-plan">验证证据</a>。历史扩展事件与模型目录字段继续按 §11.16.17 核对。</td></tr>
     <tr><td>R-06 可选头过渡</td><td><span class="pill p-green">文档完成</span></td><td>README 固化更新和回退的「先 BFF 后浏览器制品并重载」顺序。</td></tr>
     <tr><td>R-07 目录透传偏薄</td><td><span class="pill p-green">检查项已补</span></td><td>README 的 DSH 升级核对包含候选版目录 DTO 与 BFF 失败投影。</td></tr>
     <tr><td>R-08 reconcile 兜底</td><td><span class="pill p-green">已补偿</span></td><td>首查缺失后复核，明确退役的绑定进入补偿队列，收到取消确认后出队。<a href="02-directory-and-engineering-design.html#t13-egress-reconcile-evidence">Q2 回归证据</a>。</td></tr>

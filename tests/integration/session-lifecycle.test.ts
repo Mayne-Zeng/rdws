@@ -392,6 +392,136 @@ test('Native inference diagnostics are projected from HTTP session history witho
   }
 });
 
+test('public Native reads retain only the state, summary and model projection fields', async () => {
+  const { app, id, source, cookie, host } = await fixture();
+  host.ticket = () => 'synthetic-inference-ticket';
+  const binding = await fixtureBinding(app, cookie, 'poc', id);
+  const selected = { provider: 'synthetic-provider', model: 'synthetic-model' };
+  const projection = {
+    asOfSeq: 7,
+    values: { modelSelection: { next: selected, lastUsed: null } },
+  };
+  const state = {
+    active: true,
+    running: false,
+    cursor: 7,
+    pendingInput: ['question'],
+    queue: [
+      {
+        id: 'queued-message',
+        placement: 'queued',
+        content: [
+          {
+            type: 'text',
+            text: 'Keep the queued content ' + inferenceDiagnostic,
+          },
+        ],
+      },
+    ],
+  };
+  const summary = {
+    sessionId: source,
+    agentAvailable: true,
+    running: false,
+    updatedAt: 1,
+    blank: false,
+    projections: { kind: 'sequenced', ...projection },
+  };
+  const privateFields = { diagnostic: inferenceDiagnostic };
+  const noisyProjection = {
+    ...projection,
+    ...privateFields,
+    values: {
+      modelSelection: {
+        next: { ...selected, ...privateFields },
+        lastUsed: null,
+        ...privateFields,
+      },
+      vendorDetail: privateFields,
+    },
+  };
+  async function read(method: string, value: unknown, expected: unknown) {
+    const rpcId = randomUUID();
+    host.fetch = async () =>
+      Response.json({
+        type: 'server-response',
+        rpcId,
+        result: { ok: true, value },
+      });
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/dsh/${id}/native/api/${method}`,
+      headers: {
+        cookie,
+        origin: process.env.RDWS_ORIGIN!,
+        'x-rdws-native-login': binding,
+        'x-rdws-client-generation': randomUUID(),
+      },
+      payload: {
+        type: 'client-request',
+        rpcId,
+        method,
+        payload: {
+          args:
+            method === 'session/list' ? {} : { request: { sessionId: source } },
+        },
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.json().result).toEqual({ ok: true, value: expected });
+  }
+  try {
+    await read(
+      'session/state',
+      {
+        ...state,
+        ...privateFields,
+        queue: [
+          ...state.queue.map((item) => ({
+            ...item,
+            ...privateFields,
+            content: item.content.map((content) => ({
+              ...content,
+              ...privateFields,
+            })),
+          })),
+          { id: 'invalid-item', placement: inferenceDiagnostic, content: [] },
+        ],
+      },
+      state,
+    );
+    await read(
+      'session/projections',
+      { kind: 'sequenced', ...noisyProjection },
+      { kind: 'sequenced', ...projection },
+    );
+    await read(
+      'session/list',
+      {
+        ...privateFields,
+        items: [
+          {
+            ...summary,
+            ...privateFields,
+            formatStatus: inferenceDiagnostic,
+            origin: inferenceDiagnostic,
+            projections: { kind: 'sequenced', ...noisyProjection },
+          },
+          {
+            ...summary,
+            running: inferenceDiagnostic,
+            updatedAt: inferenceDiagnostic,
+          },
+        ],
+      },
+      { items: [summary] },
+    );
+  } finally {
+    await app.close();
+  }
+});
+
 test('Native inference diagnostics are projected from live and resumed WebSocket session frames', async () => {
   const upstream = new WebSocketServer({ host: '127.0.0.1', port: 0 });
   await once(upstream, 'listening');
@@ -431,6 +561,32 @@ test('Native inference diagnostics are projected from live and resumed WebSocket
       return JSON.parse(String(raw));
     }
     await open('events', '$events', {});
+    native.send(
+      JSON.stringify({
+        type: 'item',
+        streamId: 'events',
+        value: {
+          type: 'emit',
+          event: 'synthetic/unknown',
+          args: [inferenceDiagnostic],
+        },
+      }),
+    );
+    const status = await receive({
+      type: 'item',
+      streamId: 'events',
+      value: {
+        type: 'emit',
+        event: 'api-session/status',
+        args: [source, true, inferenceDiagnostic],
+        diagnostic: inferenceDiagnostic,
+      },
+    });
+    expect(status.value).toEqual({
+      type: 'emit',
+      event: 'api-session/status',
+      args: [source, true],
+    });
     const emit = await receive({
       type: 'item',
       streamId: 'events',
@@ -447,6 +603,12 @@ test('Native inference diagnostics are projected from live and resumed WebSocket
     });
 
     const session = { address: { kind: 'session', sessionId: source } };
+    const queued = {
+      id: 'queued-message',
+      role: 'user',
+      source: { kind: 'user', rpcId: 'original-request' },
+      content: [{ type: 'text', text: inferenceDiagnostic }],
+    };
     await open('follow', 'session/follow', {
       request: { ...session, assistantStream: true },
     });
@@ -459,7 +621,25 @@ test('Native inference diagnostics are projected from live and resumed WebSocket
         cursor: 5,
         hasMore: false,
         records: inferenceRecords,
-        projections: { asOfSeq: 5, values: {} },
+        projections: {
+          asOfSeq: 5,
+          values: {
+            inbox: {
+              'next-step': [],
+              'next-turn': [
+                { content: [] },
+                {
+                  ...queued,
+                  source: { ...queued.source, diagnostic: inferenceDiagnostic },
+                  content: [
+                    { ...queued.content[0], diagnostic: inferenceDiagnostic },
+                  ],
+                },
+              ],
+              diagnostic: inferenceDiagnostic,
+            },
+          },
+        },
         assistantStream: {
           revision: 2,
           activeAttempt: {
@@ -484,6 +664,10 @@ test('Native inference diagnostics are projected from live and resumed WebSocket
       inferenceDiagnostic,
     );
     expect(snapshot.value.assistantStream.activeAttempt.nextIndex).toBe(1);
+    expect(snapshot.value.projections).toEqual({
+      asOfSeq: 5,
+      values: { inbox: { 'next-step': [], 'next-turn': [queued] } },
+    });
     const chunk = await receive({
       type: 'item',
       streamId: 'follow',
@@ -547,7 +731,7 @@ test('Native inference diagnostics are projected from live and resumed WebSocket
       type: 'error',
       streamId: 'observe',
       error: {
-        code: 'gateway/internal',
+        code: 'supplier/private-diagnostic',
         message: inferenceDiagnostic,
         details: { requestId: inferenceDiagnostic },
       },
@@ -556,7 +740,7 @@ test('Native inference diagnostics are projected from live and resumed WebSocket
     expect(logicalError).toMatchObject({
       type: 'error',
       streamId: 'observe',
-      error: { details: {} },
+      error: { code: 'gateway/internal', details: {} },
     });
     expect(browser.readyState).toBe(WebSocket.OPEN);
 

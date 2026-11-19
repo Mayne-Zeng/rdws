@@ -7,6 +7,7 @@ import { type RunBinding } from './runtime-context.ts';
 import { actionAllowed, isRecord } from '@rdws/dsh/access';
 import {
   authorizeStreamFrame,
+  createNativeStreamState,
   publicNativeSessionResponse,
   publicNativeStreamFrame,
   withNativeEnvelope,
@@ -323,12 +324,7 @@ export async function registerNativeTransport(
           response =
             path === '/api/session/modelCatalog'
               ? await publicModelCatalog(response, rpcId)
-              : await publicNativeSessionResponse(
-                  response,
-                  rpcId,
-                  path === '/api/session/page' ||
-                    path === '/api/session/events',
-                );
+              : await publicNativeSessionResponse(response, rpcId, path);
         }
         reply.code(response.status);
         for (const [key, value] of response.headers)
@@ -434,7 +430,7 @@ export async function registerNativeTransport(
       let hostSignal: AbortSignal | undefined;
       let timer: ReturnType<typeof setInterval> | undefined;
       let chain = Promise.resolve();
-      const opened = new Set<string>();
+      const opened = createNativeStreamState();
       const close = () => {
         if (stopped) return;
         stopped = true;
@@ -479,7 +475,8 @@ export async function registerNativeTransport(
           )
             return;
           try {
-            browser.send(publicNativeStreamFrame(data.toString()));
+            const frame = publicNativeStreamFrame(data.toString(), opened);
+            if (frame !== undefined) browser.send(frame);
           } catch {
             close();
           }
@@ -533,6 +530,7 @@ export async function registerNativeTransport(
               },
               opened,
             );
+            if (frame === undefined) return;
             if (
               runtime.native.modelEgress === 'paused' &&
               frame.type === 'open' &&

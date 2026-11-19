@@ -321,7 +321,11 @@ class ObservedLoginHost extends ControlledHost {
     return Response.json({
       type: 'server-response',
       rpcId: JSON.parse(String(init.body)).rpcId,
-      result: { ok: true, value: { accepted: true } },
+      result: {
+        ok: true,
+        value:
+          path === '/api/session/list' ? { items: [] } : { accepted: true },
+      },
     });
   }
 }

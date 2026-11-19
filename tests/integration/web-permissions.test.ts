@@ -182,7 +182,11 @@ test('BFF requirement creation and reads honor project roles and participation',
 });
 
 test('native mux frames are parsed once and half-close carries no uplink data', async () => {
-  const { authorizeStreamFrame } = await import('@rdws/dsh/wire');
+  const {
+    authorizeStreamFrame,
+    createNativeStreamState,
+    publicNativeStreamFrame,
+  } = await import('@rdws/dsh/wire');
   const grant: Grant = {
     aud: 'test',
     purpose: 'browser',
@@ -190,7 +194,7 @@ test('native mux frames are parsed once and half-close carries no uplink data', 
     expiresAt: Date.now() + 10000,
     nonce: 'n',
   };
-  const opened = new Set<string>();
+  const opened = createNativeStreamState();
   expect(
     authorizeStreamFrame(
       JSON.stringify({
@@ -201,14 +205,14 @@ test('native mux frames are parsed once and half-close carries no uplink data', 
       }),
       grant,
       opened,
-    ).type,
+    )?.type,
   ).toBe('open');
   expect(
     authorizeStreamFrame(
       JSON.stringify({ type: 'end', streamId: 's' }),
       grant,
       opened,
-    ).type,
+    )?.type,
   ).toBe('end');
   expect(() =>
     authorizeStreamFrame(
@@ -217,6 +221,61 @@ test('native mux frames are parsed once and half-close carries no uplink data', 
       opened,
     ),
   ).toThrow();
+  expect(
+    authorizeStreamFrame(
+      JSON.stringify({ type: 'cancel', streamId: 's' }),
+      grant,
+      opened,
+    )?.type,
+  ).toBe('cancel');
+  for (const frame of [
+    { type: 'item', streamId: 's', value: { type: 'emit' } },
+    {
+      type: 'error',
+      streamId: 's',
+      error: { code: 'gateway/internal', message: 'Late', details: {} },
+    },
+    { type: 'end', streamId: 's' },
+  ])
+    expect(
+      publicNativeStreamFrame(JSON.stringify(frame), opened),
+    ).toBeUndefined();
+  expect(() =>
+    authorizeStreamFrame(
+      JSON.stringify({
+        type: 'open',
+        streamId: 's',
+        endpoint: 'remoteAccess/follow',
+        payload: { args: {} },
+      }),
+      grant,
+      opened,
+    ),
+  ).toThrow();
+  const openEvent = (streamId: string) =>
+    authorizeStreamFrame(
+      JSON.stringify({
+        type: 'open',
+        streamId,
+        endpoint: '$events',
+        payload: { args: {} },
+      }),
+      grant,
+      opened,
+    );
+  expect(openEvent('neighbor')?.type).toBe('open');
+  expect(() => openEvent('x'.repeat(129))).toThrow();
+  for (let index = 0; index < 1022; index++) {
+    const streamId = String(index);
+    expect(openEvent(streamId)?.type).toBe('open');
+    expect(
+      publicNativeStreamFrame(
+        JSON.stringify({ type: 'end', streamId }),
+        opened,
+      ),
+    ).toBeDefined();
+  }
+  expect(() => openEvent('overflow')).toThrow();
 });
 
 test('native prompt accepts its documented timezone while rejecting extra control fields', () => {

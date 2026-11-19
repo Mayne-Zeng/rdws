@@ -922,7 +922,20 @@ test('pending demand fences independently stop wire frames in both directions', 
       second = await bridge(wireSecond),
       other = await bridge(wireNeighbor);
     const outbound = (id: string) =>
-      JSON.stringify({ type: 'item', streamId: id, value: 'synthetic ' + id });
+      JSON.stringify({
+        type: 'item',
+        streamId: id,
+        value: { type: 'ready', clientId: id, host: { home: '/synthetic' } },
+      });
+    const notice = JSON.stringify({
+      type: 'item',
+      streamId: 'active-before',
+      value: {
+        type: 'emit',
+        event: 'api-session/removed',
+        args: ['blocked-session'],
+      },
+    });
     const inbound = (id: string) =>
       JSON.stringify({
         type: 'open',
@@ -937,11 +950,12 @@ test('pending demand fences independently stop wire frames in both directions', 
       const sent = once(bridge.peer, 'message'),
         received = once(bridge.client, 'message');
       bridge.client.send(inbound(id));
-      bridge.peer.send(outbound(id));
       expect(String((await sent)[0])).toBe(inbound(id));
+      bridge.peer.send(outbound(id));
       expect(String((await received)[0])).toBe(outbound(id));
     }
     await exchange(first, 'active-before');
+    await exchange(second, 'active-before');
     const seen: string[] = [];
     for (const side of [first, second]) {
       side.client.on('message', (data) => seen.push(String(data)));
@@ -962,7 +976,7 @@ test('pending demand fences independently stop wire frames in both directions', 
     await Promise.all([firstReady.wait, secondReady.wait]);
     for (const side of [first, second]) {
       side.client.send(inbound('blocked'));
-      side.peer.send(outbound('blocked'));
+      side.peer.send(notice);
     }
     await exchange(other, 'neighbor-before');
     await sleep(100);
@@ -971,12 +985,16 @@ test('pending demand fences independently stop wire frames in both directions', 
     expect((await one).statusCode).toBe(503);
     await exchange(first, 'after-rollback');
     second.client.send(inbound('blocked'));
-    second.peer.send(outbound('blocked'));
+    second.peer.send(notice);
     await exchange(other, 'neighbor-during');
     await sleep(100);
-    expect(seen.some((frame) => frame.includes('"streamId":"blocked"'))).toBe(
-      false,
-    );
+    expect(
+      seen.some(
+        (frame) =>
+          frame.includes('"streamId":"blocked"') ||
+          frame.includes('"blocked-session"'),
+      ),
+    ).toBe(false);
     const closed = once(second.client, 'close');
     releaseSecond.open();
     expect((await two).statusCode).toBe(503);

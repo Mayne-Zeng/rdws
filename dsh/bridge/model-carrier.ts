@@ -104,7 +104,7 @@ export function snapshotModelRoutes(routes: Readonly<Record<string, string>>) {
   return result;
 }
 
-function businessHeader(name: string) {
+export function businessHeader(name: string) {
   return (
     !name.startsWith(':') &&
     !name.startsWith('x-rdws-carrier-') &&

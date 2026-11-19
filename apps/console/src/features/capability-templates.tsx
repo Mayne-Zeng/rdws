@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Loading } from 'tdesign-react';
 import {
   capabilityKey,
+  capabilityKindLabels,
   type CapabilityTemplateList,
   type CapabilityTemplateManagement,
   type CapabilityVersion,
@@ -26,9 +27,8 @@ type Editor = {
     status: NonNullable<ManagementResult['template']>['status'];
   };
 };
-const labels = { plugin: '插件', skill: '技能', mcp: 'MCP' };
 function label(item: CapabilityVersion) {
-  return `${labels[item.kind]} · ${item.reference} · ${item.revision}`;
+  return `${capabilityKindLabels[item.kind]} · ${item.reference} · ${item.revision}`;
 }
 
 export function CapabilityTemplates({

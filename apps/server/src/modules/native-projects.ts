@@ -65,6 +65,10 @@ export function createProjectRuntimes(
     const project = native.projectId;
     const runtime = {
       native,
+      catalogModel: policy && {
+        provider: policy.provider,
+        model: policy.model,
+      },
       sessions: createSessionOperations(db, business, native),
       runs: new ContextRuns(
         native.contextGeneration,
@@ -199,6 +203,7 @@ export function createProjectRuntimes(
 }
 export interface ProjectRuntime {
   native: NativeWebHost;
+  catalogModel?: Pick<MainModelPolicy, 'provider' | 'model'>;
   sessions: ReturnType<typeof createSessionOperations>;
   runs: ContextRuns;
   inFlightPrompts: Set<string>;

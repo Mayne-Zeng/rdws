@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { getCACertificates, setDefaultCACertificates } from 'node:tls';
 import { hashPassword } from 'better-auth/crypto';
 import { Pool, type PoolClient } from 'pg';
+import { NativeWebHost } from '@rdws/dsh/web';
 import { buildApp } from '@rdws/server';
 import { afterEach, expect, test, vi } from 'vitest';
 import { authorityDatabase } from '../helpers/authority-database.ts';
@@ -89,6 +90,8 @@ test.skipIf(process.platform !== 'darwin')(
     const originalCAs = getCACertificates('default');
     const provider = 'rdws-glm',
       model = 'fixture-model';
+    const otherModel = 'fixture-other-model';
+    const otherProvider = 'rdws-secondary';
     const requirementId = randomUUID(),
       userId = randomUUID(),
       managerId = randomUUID();
@@ -233,7 +236,7 @@ test.skipIf(process.platform !== 'darwin')(
                   api: 'openai-completions',
                   baseURL: url,
                   apiKeyEnv: 'FIXTURE_MODEL',
-                  models: [{ id: model }],
+                  models: [{ id: model }, { id: otherModel }],
                   retryPolicy: {
                     mode: 'normal',
                     maxRetries: 1,
@@ -243,6 +246,12 @@ test.skipIf(process.platform !== 'darwin')(
                       jitterRatio: 0,
                     },
                   },
+                },
+                [otherProvider]: {
+                  api: 'openai-completions',
+                  baseURL: url,
+                  apiKeyEnv: 'FIXTURE_MODEL',
+                  models: [{ id: model }],
                 },
               },
             },
@@ -333,7 +342,7 @@ test.skipIf(process.platform !== 'darwin')(
         expect(response.statusCode, response.body).toBe(200);
         return response.json<{ sessionId: string }>().sessionId;
       }
-      function rpc(login: Login, method: string, request: object) {
+      function rpc(login: Login, method: string, request?: object) {
         return bff.inject({
           method: 'POST',
           url: `/api/dsh/${requirementId}/native/api/session/${method}`,
@@ -347,7 +356,7 @@ test.skipIf(process.platform !== 'darwin')(
             type: 'client-request',
             rpcId: randomUUID(),
             method: 'session/' + method,
-            payload: { args: { request } },
+            payload: { args: request ? { request } : {} },
           },
         });
       }
@@ -374,6 +383,24 @@ test.skipIf(process.platform !== 'darwin')(
         );
       const events = (login: Login, sessionId: string) =>
         rpc(login, 'events', { address: { kind: 'session', sessionId } });
+      type Catalog = {
+        default: { provider: string; model: string };
+        groups: { id: string; models: { id: string }[] }[];
+        routableProviders: string[];
+        failures: { id: string; name: string; message: string }[];
+      };
+      async function readCatalog(login: Login): Promise<Catalog> {
+        const response = await rpc(login, 'modelCatalog');
+        expect(response.statusCode).toBe(200);
+        const result = response.json().result;
+        expect(result.ok).toBe(true);
+        return result.value;
+      }
+      const listedModels = (catalog: Catalog) =>
+        catalog.groups.map(({ id, models }) => [
+          id,
+          models.map((entry) => entry.id),
+        ]);
       async function nativeLastUsed(login: Login, sessionId: string) {
         const response = await rpc(login, 'projections', { sessionId });
         expect(response.statusCode).toBe(200);
@@ -412,6 +439,68 @@ test.skipIf(process.platform !== 'darwin')(
       const before = await login(),
         after = await login(),
         observer = await login();
+      const managedCatalog = await readCatalog(observer);
+      expect(listedModels(managedCatalog)).toEqual([[provider, [model]]]);
+      expect(managedCatalog.routableProviders).toEqual([provider]);
+
+      const nativeFetch = NativeWebHost.prototype.fetch;
+      let catalogCase: 'different-default' | 'missing-model' | 'unroutable' =
+        'different-default';
+      const override = vi
+        .spyOn(NativeWebHost.prototype, 'fetch')
+        .mockImplementation(async function (
+          this: NativeWebHost,
+          path,
+          ...parameters
+        ) {
+          const response = await nativeFetch.call(this, path, ...parameters);
+          if (path !== '/api/session/modelCatalog') return response;
+          const envelope = await response.json();
+          const catalog: Catalog = envelope.result.value;
+          catalog.default = { provider, model: otherModel };
+          if (catalogCase === 'missing-model')
+            catalog.groups = catalog.groups.map((group) =>
+              group.id === provider
+                ? {
+                    ...group,
+                    models: group.models.filter(({ id }) => id !== model),
+                  }
+                : group,
+            );
+          if (catalogCase === 'unroutable') {
+            catalog.routableProviders = [otherProvider];
+            catalog.failures = [provider, otherProvider].map((id) => ({
+              id,
+              name: id,
+              message: 'Synthetic provider diagnostic',
+            }));
+          }
+          return Response.json(envelope);
+        });
+      try {
+        const mismatched = await readCatalog(observer);
+        expect(mismatched.default).toEqual({ provider, model: otherModel });
+        expect(listedModels(mismatched)).toEqual([[provider, [model]]]);
+        expect(mismatched.routableProviders).toEqual([provider]);
+        catalogCase = 'missing-model';
+        const unavailable = await readCatalog(observer);
+        expect(unavailable).toEqual({
+          default: { provider, model: otherModel },
+          groups: [],
+          routableProviders: [],
+          failures: [],
+        });
+        catalogCase = 'unroutable';
+        expect(await readCatalog(observer)).toEqual({
+          ...unavailable,
+          failures: [
+            { id: provider, name: provider, message: '供应商模型目录暂不可用' },
+          ],
+        });
+      } finally {
+        override.mockRestore();
+      }
+
       const deniedSession = await create(before);
       expect(await nativeLastUsed(observer, deniedSession)).toBeNull();
       const deniedGate = gates.arm('before-lock');
@@ -861,6 +950,16 @@ test.skipIf(process.platform !== 'darwin')(
         ...manager,
         binding: await bootstrapNative(bff, manager.cookie, requirementId),
       };
+      const pausedCatalog = await readCatalog(paused);
+      expect(listedModels(pausedCatalog)).toEqual(
+        expect.arrayContaining([
+          [provider, [model, otherModel]],
+          [otherProvider, [model]],
+        ]),
+      );
+      expect(pausedCatalog.routableProviders).toEqual(
+        expect.arrayContaining([provider, otherProvider]),
+      );
       const rejected = await prompt(
         paused,
         unavailableSession,

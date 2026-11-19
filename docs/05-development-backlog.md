@@ -174,7 +174,7 @@
   - 前置：T11、T14。
   - 来源：I3-CONTEXT、D21；已有上下文同步契约。
 
-- [ ] **T13 · 模型与供应商管理**（进行中：文本主推理已通过正式 BFF 本机定序验收，待选模、其它用途与具名部署）
+- [ ] **T13 · 模型与供应商管理**（进行中：文本主推理及受管目录通过本机验收，待选模、其它用途与具名部署）
   - 说明：适配 DSH 原生配置界面和授权作用域，支持平台、项目和个人的分层选择。
   - 可验收目标：配置使用原生 Provider／Profile／Credentials；项目只使用允许集合；个人只在允许范围选择本次会话模型；平台锁定项不能被下级覆盖；普通 DTO、日志与页面不暴露凭据；不另建模型调用权威。
   - 已确认的选模验收：本人可在同一会话反复选择允许的模型，在下次本人有权发送时重验并应用。已选模型被停用或移出允许集合时，保留待发送输入，提示重新选择可用模型，由用户再次发送，无自动默认回退。验收分别核对保存、实际 Native 生效、撤权和其他会话隔离。详见[时点和验收](02-directory-and-engineering-design.html#t13-send-time-acceptance-20261118)。
@@ -209,6 +209,7 @@
   - 已补验：[正式 BFF 退避中撤权与诊断采样](02-directory-and-engineering-design.html#t13-main-bff-backoff-evidence)。原登录在 429 退避时退出后，供应商 HTTP 和完整正文均零新增；有权对照正常重试。父 BFF 与隔离库日志的双标记检查、独立复审均通过。
   - 已补验：[同一步跨登录](02-directory-and-engineering-design.html#t13-main-bff-login-batch-evidence)。真实 Native 第二步同时领取两个登录的输入。较早登录撤权后，第二步零应用写入及零 HTTP 到达，有权对照含两条正文并完成。独立复审及 28 项聚焦测试通过。动态选模方向和待核对行为见[交叉评审记录](02-directory-and-engineering-design.html#t13-dynamic-model-technical-review-20261120)。
   - 实现前补验：[Native 模型投影与实际外发](02-directory-and-engineering-design.html#t13-native-last-used-evidence-20261120)。在真实首写前撤权后，读取原生 `lastUsed` 可见模型，供应商仍零到达。派生验收以实际首写证据判断既有选择是否已经外发。
+  - 已交付子项：[受管项目模型目录](02-directory-and-engineering-design.html#t13-mediated-model-catalog-20261120)。公开入口按当前项目的冻结策略和 Native 可路由记录公布精确模型。实例默认保留原生配置，受管 paused 沿用原生目录。方案和交付独立复审、整仓 268 项、浏览器 44 项、真实 Native 本机模式切换及基线校验通过。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。

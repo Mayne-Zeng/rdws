@@ -1009,6 +1009,16 @@
   <p id="t13-native-last-used-evidence-20261120"><strong>Native 投影与实际外发补验（2026-11-20）。</strong>从 <code>f33fc71</code> 出发，由协调者在 <code>main</code> 串行补验两个不同证据来源。正式 BFF 新建会话后，同账号另一有效登录读到 <code>session/projections</code> 的 <code>lastUsed</code> 为空。第一次真实锁定 Native 推理已准备 TLS 密文，在最终写入前撤销原登录；同一会话随后显示此模型为 <code>lastUsed</code>，回环连接门控后零字节、供应商 HTTP 入口和完整正文都为零。该投影可说明 Native 为本步记录了模型，实际外发仍取首写证据。用例沿用冻结的单模型正式 BFF 策略，动态保存和派生逻辑各自留在原验收项。<code>caffeinate -i pnpm test tests/integration/bff-main-model-egress.test.ts tests/integration/project-native-paths.test.ts</code> 返回 0（2 文件、3 项）。</p>
   <p>独立证据复审 APPROVE。类型、lint、格式、构建及基线校验通过。本地交付修订 <code>test: distinguish native model state from egress</code>。</p>
 
+  <h4 id="t13-mediated-model-catalog-20261120">11.16.30 受管项目模型目录</h4>
+  <p>Change / R2，基线 <code>0a03086</code>，单一可回退的浏览器 RPC 入口。依据 D19、§11.16.3 和 §11.16.29，正式受管项目当前只允许一个配置中的 Provider／Model，但模型目录仍公布该 Native 实例的其他候选。这个切片在 BFF 目录读路径公布 Native 目录、可路由供应商与同代冻结出口模型的交集。分层策略写入、会话选模、次级用途和具名部署仍各自验收。</p>
+  <ul>
+    <li>仅由实际以 <code>mediated</code> 注册的目标项目运行时保存有效冻结策略的最小 Provider／Model 引用。使用已授权 <code>scope.runtime</code> 的引用，HTTP <code>session/modelCatalog</code> 先按原生字段规则脱敏，再取策略模型、原生分组及原生可路由供应商的交集。可路由列表只保留交集后仍有模型的组。失败项只保留策略供应商原生返回的通用项目。缺少允许模型时返回空目录和可路由列表，目录故障状态继续沿用现有通用响应。原生 <code>default</code> 仅描述实例配置，工作台可据此显示现状。普通 direct、受管 paused 及同一 BFF 的其他暂停项目维持原生目录语义。正式首写仍依赖原授权和路由核查。</li>
+    <li>复用正式 BFF 一次性 PostgreSQL 和真实锁定 Native。让 Native 同时公布允许模型、同供应商另一模型及另一供应商的同名模型，用公开入口核对受管组和可路由集合。通过现有 paused 回退读取同一 Profile 的完整原生目录。在同一受管入口以受控 Native 回应核对两个边界：实例默认与策略模型不同时仍按策略过滤，策略模型缺失而供应商仍有其他模型时返回空结果且不合成失败。既有邻域回归继续核对脱敏和错误契约。先运行新增断言，再实施两个服务端文件中的定点改动。验证通过后运行全量、类型、lint、格式、构建、浏览器回归和基线。回退应用提交，无数据迁移。</li>
+  </ul>
+  <p>方案首审要求补足实例默认与冻结策略不同、允许模型缺失的对照，并限定策略读取来自当前请求已授权的项目运行时。两项均已采纳，独立复审 APPROVE。</p>
+  <p>新增真实 BFF 定点改前返回 1：目录同时列出同供应商的另一模型及另一供应商的同名模型。改后受管目录只公布允许的 Provider／Model 组合。原生默认不一致时按冻结策略过滤，原生默认值保留。允许模型缺失时目录和可路由列表为空，失败列表沿用原生信息。受管 paused 回退仍读取同一 Profile 的多模型、多供应商目录。<code>caffeinate -i pnpm test tests/integration/bff-main-model-egress.test.ts tests/integration/session-lifecycle.test.ts tests/integration/native-egress-mode.test.ts</code> 返回 0（3 文件、29 项通过、1 项既有条件跳过）。</p>
+  <p>交付首审要求覆盖策略模型仍在目录但供应商原生不可路由，以及不同供应商的诊断并存。补验确认目录和可路由集合为空，只保留策略供应商的通用失败提示。独立复审 APPROVE。最终 <code>caffeinate -i pnpm test</code> 返回 0（43 文件、268 项通过、1 项既有条件跳过）。两个 <code>pnpm test:e2e</code> 分片各通过 22 项，<code>pnpm test:web-live tests/web-live/model-egress-pause.spec.ts</code> 以真实 Native 与回环合成供应商通过 1 项。类型、lint、主工作树格式、构建与基线校验均返回 0。代码与文档随 <code>feat: scope the mediated model catalog to its policy</code> 本地提交。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

@@ -26,7 +26,11 @@ import {
   type ReadyAccess,
 } from './workbench-runtime.ts';
 
-function publicModelCatalog(response: Response, rpcId: unknown) {
+function publicModelCatalog(
+  response: Response,
+  rpcId: unknown,
+  allowed: ProjectRuntime['catalogModel'],
+) {
   const message = '模型目录暂不可用';
   return withNativeEnvelope(
     response,
@@ -39,7 +43,28 @@ function publicModelCatalog(response: Response, rpcId: unknown) {
         };
       if (result.ok !== true) return;
       const catalog = publicModelCatalogValue(result.value);
-      if (catalog) return { ok: true, value: catalog };
+      if (!catalog) return;
+      if (!allowed) return { ok: true, value: catalog };
+      const groups = catalog.groups.flatMap((group) => {
+        if (
+          group.id !== allowed.provider ||
+          !catalog.routableProviders.includes(group.id)
+        )
+          return [];
+        const models = group.models.filter(({ id }) => id === allowed.model);
+        return models.length ? [{ ...group, models }] : [];
+      });
+      return {
+        ok: true,
+        value: {
+          ...catalog,
+          groups,
+          routableProviders: groups.length ? [allowed.provider] : [],
+          failures: catalog.failures.filter(
+            ({ id }) => id === allowed.provider,
+          ),
+        },
+      };
     },
     () => fail(503, message),
   );
@@ -295,7 +320,11 @@ export async function registerNativeTransport(
           const rpcId = (request.body as { rpcId?: unknown }).rpcId;
           response =
             path === '/api/session/modelCatalog'
-              ? await publicModelCatalog(response, rpcId)
+              ? await publicModelCatalog(
+                  response,
+                  rpcId,
+                  scope.runtime.catalogModel,
+                )
               : await publicNativeSessionResponse(response, rpcId, path);
         }
         reply.code(response.status);

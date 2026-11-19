@@ -28,6 +28,7 @@ export function createProjectRuntimes(
   const pending = new Map<string, Promise<ProjectRuntime>>();
   const live = new Map<string, ProjectRuntime>();
   let closing = false;
+  let activeContextReads = 0;
   function register(native: NativeWebHost) {
     const project = native.projectId;
     const runtime = {
@@ -37,10 +38,21 @@ export function createProjectRuntimes(
         native.contextGeneration,
         (token) => native.verifyContext(token),
         async (who, id, sessionId, relatedActors) => {
-          const data = await business.read(who, id, sessionId, relatedActors);
-          if (data.requirement.projectId !== project)
-            businessError(403, '运行归属与项目不匹配');
-          return contextSnapshot(data);
+          if (activeContextReads >= 4) businessError(503, '需求上下文暂时繁忙');
+          activeContextReads++;
+          try {
+            const { detail, validBefore } = await business.readWithDeadline(
+              who,
+              id,
+              sessionId,
+              relatedActors,
+            );
+            if (detail.requirement.projectId !== project)
+              businessError(403, '运行归属与项目不匹配');
+            return { value: contextSnapshot(detail), validBefore };
+          } finally {
+            activeContextReads--;
+          }
         },
         (id, userId, requirementId) =>
           closingLogin(id, userId, project, requirementId),
@@ -49,6 +61,12 @@ export function createProjectRuntimes(
       acceptedPrompts: new Map<string, number>(),
       abandonedRuns: new Set<string>(),
     };
+    native.configureContext((input, token, reply) => {
+      if (closing) businessError(403, '原生项目正在停止');
+      return runtime.runs.handle(input, token, (result, validBefore) => {
+        if (!closing) reply(result, validBefore);
+      });
+    });
     live.set(project, runtime);
     return runtime;
   }

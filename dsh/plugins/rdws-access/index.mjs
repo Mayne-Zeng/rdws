@@ -15,6 +15,7 @@ import {
 import { bootInjections } from '@deepseek-ai/dsh-client-modules';
 import { RemoteStreamMuxServer } from '@deepseek-ai/dsh-api-gateway/src/stream-server.ts';
 import { installContext } from './context.mjs';
+import { openContextIpc } from '../../bridge/context-ipc.ts';
 import { installPresets } from './presets.mjs';
 import { isDemandPreset } from '../../host/presets.ts';
 export const name = 'rdws-access';
@@ -155,7 +156,15 @@ export function apply(ctx, config) {
       },
     });
   }
-  const revokeContext = installContext(ctx, config, key, route);
+  const context = openContextIpc(config.contextGeneration);
+  ctx.effect(() => context.close);
+  const revokeContext = installContext(
+    ctx,
+    config,
+    key,
+    route,
+    context.request,
+  );
   const presets = installPresets(ctx, config, route);
   route('health', () => ({
     ready: true,

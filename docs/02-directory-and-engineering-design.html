@@ -835,6 +835,20 @@
   <p>交付复核第二版 APPROVE。Files 改为以固定 SHA-256 核对上传的完整 90 字节 PNG。启用 Node 全局代理并指定不可达的本机代理时，调整前定点测试返回 1，父进程的回环请求尝试连接代理端口。模拟转发与 Native Web 读回改为显式回环直连，同一代理条件下定点测试返回 0（1 项）。清理阶段等待已开始的转发结束。</p>
   <p>最终 <code>caffeinate -i pnpm check</code> 返回 0（31 个测试文件、190 项），类型、lint、格式与构建通过，构建仍提示主包体积。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>test: verify local confinement of native model egress</code>。</p>
 
+  <h4 id="t13-native-context-ipc-20261119">11.16.19 Native 上下文回调的子进程通道</h4>
+  <p>Change / R3，基线 <code>e18d7b5</code>。T13 出口隔离要求 Native 只访问必要端点。迁移前正式 <code>prepared</code> 会把通用 BFF 监听地址写进 Native Profile。回调请求有原生签票，原生接收结果依赖该回环监听的身份，沙箱也须给该端口主动连接权限。正式 Host 已继承 Node 子进程 IPC 并用它通知 Web 就绪，本切片沿该通道迁移上下文读及释放，去掉下一阶段对通用 BFF 端口的依赖。</p>
+  <ol>
+    <li><code>native-projects.ts</code> 在启动前为每个 Host 绑定项目的 <code>ContextRuns.handle</code>。请求接收与响应入队都检查捕获的 ChildProcess 仍是当前已就绪实例、通道连接正常且未关停。保留签名 operation、正文摘要、nonce、本人需求／会话及原登录授权。业务读取在内部携带整批原登录的最早到期时间，浏览器详情与 Native 快照不携带该时间。ContextRuns 读后由同一同步段重验每一项运行与撤权栅栏，并交付已检查结果，实际 <code>child.send</code> 紧前再次核对登录／运行最早截止、回调时限和实例。去掉旧两个 HTTP 回调与 Profile 地址字段，保持 Native Web 握手和浏览器 HTTP／WS。</li>
+    <li>请求、响应、就绪按类型分别处理。IPC 只交换数据，意外句柄不进入业务并关闭。消息类型、固定 UUID 回调 ID、Host 代次和信封字节数在 Node 解码后校验，响应只回到原 ChildProcess 的对应等待项。回调 ID 用于分发，授权以签名正文、nonce 和 operation 为准。Native 每次等待仍限制两秒并尊重 AbortSignal，BFF 丢弃过期回调的成功正文。过期、取消、关闭或断开清理 Native 等待，拒绝走原被阻止提示。两端分别限制活跃回调和实际未完成发送。发送返回 false 仍可能排队，保持槽位至发送回调或通道销毁，禁止重发。父侧处理槽位还须等待实际业务任务完成。每个 BFF 共用四个已授权上下文读取槽，公共池为五连接，给其他业务留出容量。释放不占读取槽，过载未释放的绑定按原有过期回收。只传上下文 JSON，此切片不传模型请求或外发许可。</li>
+    <li>真实锁定版 Native 与正式 BFF 回归使用 <code>app.ready()</code> 且 <code>server.address() === null</code>，合成主模型实际收到唯一的当前需求文字，两个旧 POST 以正确 Origin 得到 404。迁移 <code>project-native-paths</code>、<code>context-sync</code> 和 <code>context-denied</code> 夹具，验证项目隔离、回复前撤权和 relatedRuns 最早登录到期。协议测试覆盖乱序、错代／陌生 ID、过期／重复信封、拒绝或超限、销毁和发送积压，确认迟到结果无法进入已取消等待项、槽位按真实工作归还。跑定点、<code>pnpm check</code>、<code>pnpm test:e2e</code>、<code>pnpm test:web-live tests/web-live/context-denied.spec.ts</code> 和基线。浏览器故障验收用合成供应商，检查拒绝和超时后重填，以及两种场景实际供应商均零到达。暂无生产接线授权，无新增依赖或迁移。</li>
+    <li>BFF 与 Native 插件同一源码随子进程启动，无混版握手。回退前关闭本代 Host，切回成对 BFF 与原生适配再启动，旧版恢复回环回调。强制隔离与模型逐次授权仍按 §11.16.17 配套启用和回退，不能依赖兼容回调降级。</li>
+  </ol>
+  <p>第二版方案双面独立复审均 APPROVE。首轮补足了与 <code>child.send</code> 同步的最终护栏、批次最早登录截止、父子发送积压的槽位管理、跨项目读取预算及实际浏览器故障验收。</p>
+  <p>改前 <code>caffeinate -i pnpm test tests/integration/native-queued-recovery.test.ts</code> 返回 1（2 项），BFF 无监听时两种冷恢复新发送均是 <code>blocked</code>。改后同命令返回 0。BFF 与真实 Native 在无 BFF HTTP 监听时经 IPC 完成两条场景，合成供应商的主请求实际包含当前需求字段。原生日志、旧键与首次新请求继续核对，两个旧回调 URL 均返回 404。</p>
+  <p>聚焦回归覆盖 <code>context-ipc</code>、<code>context-sync</code>、<code>project-native-paths</code> 和 <code>native-queued-recovery</code>（4 文件、19 项）。浏览器的拒绝和超时用例均保留并验证重新填入原文，合成供应商的实际到达计数为零。协议夹具及实际 Native 项目夹具均使用独立测试输入。</p>
+  <p>交付复审第二版 APPROVE。用真实 PostgreSQL 事务核对同账号两次登录的较早截止时间，同时验证 HTTP 详情不暴露内部期限字段。通过确定性时钟与运行栅栏验证到期或撤权后的成功回复为零。IPC 夹具分别验证 64 KiB 信封限制和 64 个在途槽位、发送回调失败、乱序关联、断开及丢弃更换进程或超时的结果。跨项目读取预算测试中，第五个未完成的读取在四槽耗尽时拒绝，释放请求仍可执行。已完成的读取归还槽位。</p>
+  <p><code>caffeinate -i pnpm check</code> 返回 0（32 文件、195 项，类型、lint、格式和构建通过），构建保留主包体积提示。<code>caffeinate -i pnpm test:e2e</code> 返回 0（39 项）。补审后 <code>caffeinate -i pnpm test tests/integration/business-flow.test.ts -t 'the context snapshot'</code> 返回 0（聚焦 1 项），同次 <code>caffeinate -i pnpm test:web-live tests/web-live/context-denied.spec.ts</code> 返回 0（2 项），精确核对清空输入框后按钮恢复原文以及供应商零到达。类型、lint、格式和 <code>pnpm validate:baseline</code> 随补审复跑通过。本地修订为 <code>refactor: route native context through inherited IPC</code>。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

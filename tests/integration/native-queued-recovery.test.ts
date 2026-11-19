@@ -207,7 +207,8 @@ test.each([
         nativeHost: host,
         repositoryHome: join(root, 'repository-unconfigured'),
       });
-      await app.listen({ host: '127.0.0.1', port: 0 });
+      await app.ready();
+      expect(app.server.address()).toBeNull();
       return { app, host };
     }
     try {
@@ -264,7 +265,7 @@ test.each([
       const first = await start(true);
       const oldLogin = await login(first.app, '192.0.2.10');
       await pool.query(
-        "insert into requirement(id,project_id,title,description,acceptance,lead_id,created_by) values($1,'poc','Queued recovery fixture','','',$2,$2)",
+        "insert into requirement(id,project_id,title,description,acceptance,lead_id,created_by) values($1,'poc','Queued recovery fixture','Fixture context via inherited channel','',$2,$2)",
         [requirementId, oldLogin.userId],
       );
       await pool.query(
@@ -488,6 +489,21 @@ test.each([
           ({ body }) => body.includes(newText) && !body.includes(oldText),
         ),
       ).toBe(true);
+      expect(
+        provider.find(({ model }) => model === 'fixture-main')?.body,
+      ).toContain('Fixture context via inherited channel');
+      for (const url of [
+        '/internal/rdws/context',
+        '/internal/rdws/context/poc',
+      ]) {
+        const response = await second.app.inject({
+          method: 'POST',
+          url,
+          headers: { origin },
+          payload: {},
+        });
+        expect(response.statusCode).toBe(404);
+      }
       const final = await readJournal(root, sessionId);
       expect(final.events.slice(0, saved.events.length)).toEqual(saved.events);
       expect(

@@ -14,6 +14,7 @@ import {
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseDocument } from 'yaml';
+import { serveContextIpc, type ContextHandler } from '../bridge/context-ipc.ts';
 import {
   signGrant,
   verifyGrant,
@@ -128,9 +129,9 @@ export async function projectNativeConfiguration(
 
 export class NativeWebHost {
   readonly contextGeneration = randomUUID();
-  private contextSource?: { url: string; origin: string };
-  configureContext(url: string, origin: string) {
-    this.contextSource = { url, origin };
+  private contextHandler?: ContextHandler;
+  configureContext(handle: ContextHandler) {
+    this.contextHandler = handle;
   }
   verifyContext(token: unknown) {
     return this.key
@@ -378,7 +379,6 @@ export class NativeWebHost {
                   presetRuntimeHome: root,
                   projectId: this.projectId,
                   releasedCapabilities: this.releasedCapabilities,
-                  contextSource: this.contextSource,
                   contextGeneration: this.contextGeneration,
                   contextEvidenceFile: join(
                     this.runtimeHome,
@@ -442,7 +442,18 @@ export class NativeWebHost {
       this.process = child;
       let exited = false;
       let port = 0;
+      const stopContext = serveContextIpc(
+        child,
+        this.contextGeneration,
+        this.contextHandler,
+        () =>
+          this.process === child &&
+          this.ready &&
+          !this.closing &&
+          !this.invalidation.signal.aborted,
+      );
       const invalidate = () => {
+        stopContext();
         exited = true;
         this.origin = '';
         if (this.ready) this.invalidation.abort();
@@ -451,8 +462,9 @@ export class NativeWebHost {
       child.once('error', invalidate);
       child.once('exit', invalidate);
       child.once('disconnect', invalidate);
-      child.on('message', (message: unknown) => {
-        if (exited || port || !message || typeof message !== 'object') return;
+      child.on('message', (message: unknown, handle) => {
+        if (handle || exited || port || !message || typeof message !== 'object')
+          return;
         const value = message as Record<string, unknown>;
         if (
           value.type === 'rdws-ready' &&

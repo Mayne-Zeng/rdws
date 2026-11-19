@@ -4,7 +4,15 @@ import { createServer as createNetServer } from 'node:net';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
@@ -23,42 +31,71 @@ for (const failure of ['denied', 'timeout'] as const)
       await new Promise<void>((resolve) => reservation.close(() => resolve()));
       const origin = 'http://127.0.0.1:' + frontPort;
       let frontend: { close: () => Promise<void> } | undefined;
-      const denied = createServer((_req, res) => {
-        if (failure === 'denied') {
-          res.writeHead(403);
-          res.end();
-        } else
-          setTimeout(() => {
-            if (!res.destroyed) {
-              res.writeHead(503);
-              res.end();
-            }
-          }, 2600).unref();
+      let supplierHits = 0;
+      const supplier = createServer((_req, res) => {
+        supplierHits++;
+        res.writeHead(500).end();
       });
       await new Promise<void>((resolve) =>
-        denied.listen(0, '127.0.0.1', resolve),
+        supplier.listen(0, '127.0.0.1', resolve),
       );
-      const port = (denied.address() as { port: number }).port;
+      const port = (supplier.address() as { port: number }).port;
       class DeniedHost extends NativeWebHost {
-        override configureContext(_url: string, origin: string) {
-          super.configureContext(`http://127.0.0.1:${port}/context`, origin);
+        override configureContext() {
+          super.configureContext(async (_body, _token, reply) => {
+            if (failure === 'denied')
+              throw new Error('Synthetic callback denial');
+            await new Promise<void>((resolve) => setTimeout(resolve, 2600));
+            reply({ snapshot: {}, digest: 'late-context-fixture' }, Infinity);
+          });
         }
       }
-      const root = join(runtimeHome, 'testing-context-' + failure);
-      const native = new DeniedHost(
-        root,
-        join(runtimeHome, 'runtime/dsh/project-poc'),
+      const root = await mkdtemp(
+        join(await realpath(tmpdir()), 'rdws-context-failure-'),
       );
+      const configuration = join(root, 'configuration');
+      const native = new DeniedHost(root, configuration);
       const app = buildApp({
         databaseUrl: process.env.DATABASE_URL!,
         secret: process.env.BETTER_AUTH_SECRET!,
         origin: origin,
         nativeHost: native,
+        repositoryHome: join(root, 'unconfigured-repositories'),
       });
       const pool = new Pool({
         connectionString: process.env.DATABASE_MIGRATION_URL,
       });
       try {
+        const profile = join(configuration, 'profiles', 'rdws');
+        await mkdir(profile, { recursive: true, mode: 0o700 });
+        await writeFile(
+          join(configuration, '.credentials.yaml'),
+          JSON.stringify({
+            version: 1,
+            refs: { FIXTURE_MODEL: 'fixture-only' },
+          }),
+          { mode: 0o600 },
+        );
+        await writeFile(
+          join(profile, 'cordis.patch.yml'),
+          JSON.stringify([
+            {
+              id: 'llm-pi-ai',
+              config: {
+                providers: {
+                  'rdws-glm': {
+                    api: 'openai-completions',
+                    apiKeyEnv: 'FIXTURE_MODEL',
+                    baseURL: `http://127.0.0.1:${port}/v1`,
+                    models: [{ id: 'fixture-context-model' }],
+                  },
+                },
+              },
+            },
+            { id: 'session-title-llm', disabled: true },
+          ]),
+          { mode: 0o600 },
+        );
         const backend = await app.listen({ host: '127.0.0.1', port: 0 });
         const resolver = createRequire(
           new URL('../../apps/console/package.json', import.meta.url),
@@ -184,7 +221,7 @@ for (const failure of ['denied', 'timeout'] as const)
           headers: { cookie, origin: origin },
           payload: { runId: randomUUID() },
         });
-        expect(unauthorized.statusCode).toBe(403);
+        expect(unauthorized.statusCode).toBe(404);
         await page.goto(origin);
         const account = accounts.find((a) => a.username === 'lead')!;
         await page.getByLabel('账号', { exact: true }).fill(account.username);
@@ -203,25 +240,35 @@ for (const failure of ['denied', 'timeout'] as const)
         await expect(
           page.getByText(/上下文获取失败|本轮未执行/).first(),
         ).toBeVisible({ timeout: 10000 });
-        await expect(page.getByLabel('消息', { exact: true })).toHaveValue(
-          message,
-        );
-        await expect(
-          page.getByRole('button', { name: '重新填入未执行消息', exact: true }),
-        ).toBeVisible();
+        const input = page.getByLabel('消息', { exact: true });
+        await expect(input).toHaveValue(message);
+        await input.fill('');
+        await expect(input).toHaveValue('');
+        await page
+          .getByRole('button', { name: '重新填入未执行消息', exact: true })
+          .click();
+        await expect(input).toHaveValue(message);
         expect(
           (await evidence()).filter((r) => r.phase === 'model-call'),
         ).toHaveLength(0);
-        console.log(
-          'Native context denial: model calls 0; callback denied; Web error and retry text preserved.',
-        );
+        expect(supplierHits).toBe(0);
       } finally {
-        await app.close();
-        await frontend?.close();
-        await pool.end();
-        await new Promise<void>((resolve, reject) =>
-          denied.close((e) => (e ? reject(e) : resolve())),
-        );
+        try {
+          await app.close();
+        } finally {
+          const closed = await Promise.allSettled([
+            frontend?.close(),
+            pool.end(),
+            new Promise<void>((resolve, reject) => {
+              supplier.close((error) => (error ? reject(error) : resolve()));
+              supplier.closeAllConnections();
+            }),
+          ]);
+          await rm(root, { recursive: true, force: true });
+          expect(closed.every((result) => result.status === 'fulfilled')).toBe(
+            true,
+          );
+        }
       }
     },
   );

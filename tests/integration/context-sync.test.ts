@@ -1,4 +1,4 @@
-import { test, expect } from 'vitest';
+import { test, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import {
   ContextRuns,
@@ -6,6 +6,11 @@ import {
 } from '../../apps/server/src/modules/runtime-context.ts';
 import { signGrant, verifyGrant, bodyHash } from '@rdws/dsh/access';
 import { installContext } from '../../dsh/plugins/rdws-access/context.mjs';
+import { NativeWebHost } from '@rdws/dsh/web';
+import {
+  createProjectRuntimes,
+  type ProjectRuntime,
+} from '../../apps/server/src/modules/native-projects.ts';
 test('the native stream observer preserves the AsyncIterable contract', () => {
   const callbacks = new Map<string, unknown>();
   installContext(
@@ -13,6 +18,7 @@ test('the native stream observer preserves the AsyncIterable contract', () => {
     { contextEvidenceFile: '/dev/null' },
     'synthetic',
     () => {},
+    async () => ({}),
   );
   const stream = callbacks.get('llm/stream') as (
     options: { messages: unknown[] },
@@ -35,7 +41,7 @@ test('context reads bind the actual login, native request and Agent generation',
     (token) => verifyGrant(key, token, aud),
     async (who) => {
       seen = who.authSessionId;
-      return { stage: 'testing' };
+      return { value: { stage: 'testing' }, validBefore: Infinity };
     },
     () => false,
   );
@@ -56,7 +62,11 @@ test('context reads bind the actual login, native request and Agent generation',
       runId: run.runId,
       hostGeneration: generation,
     });
-  expect(await runs.handle(input, ticket(input))).toEqual({ stage: 'testing' });
+  const firstTicket = ticket(input);
+  expect(await runs.handle(input, firstTicket)).toEqual({ stage: 'testing' });
+  await expect(runs.handle(input, firstTicket)).rejects.toMatchObject({
+    statusCode: 403,
+  });
   expect(seen).toBe('login');
   for (const invalid of [
     { ...input, sessionId: 'other' },
@@ -91,7 +101,7 @@ test.each(['logout', 'demand fence'] as const)(
       (t) => verifyGrant(key, t, aud),
       async (_who, requirementId) => {
         if (requirementId === 'r') await barrier;
-        return { requirementId };
+        return { value: { requirementId }, validBefore: Infinity };
       },
       (_authSession, _userId, requirementId) =>
         closing && (kind === 'logout' || requirementId === 'r'),
@@ -112,10 +122,12 @@ test.each(['logout', 'demand fence'] as const)(
       runId: run.runId,
       hostGeneration: generation,
     });
-    const result = runs.handle(body, token);
+    const reply = vi.fn();
+    const result = runs.handle(body, token, reply);
     closing = true;
     release();
     await expect(result).rejects.toMatchObject({ statusCode: 403 });
+    expect(reply).not.toHaveBeenCalled();
     if (kind === 'demand fence') {
       const neighbor = runs.admit(
         { userId: 'u', authSessionId: 'login' },
@@ -144,19 +156,24 @@ test.each(['logout', 'demand fence'] as const)(
 test('an invalid earlier input cannot borrow the final prompt identity', async () => {
   const callbacks = new Map<string, unknown>(),
     routes = new Map<string, (input: Record<string, unknown>) => unknown>();
+  const request = vi.fn(async (_body: unknown, token: string) => {
+    if (
+      verifyGrant('synthetic', token, 'rdws:bff:host')?.operation ===
+      'context-read'
+    )
+      throw new Error('The invalid batch must never request context');
+    return { released: true };
+  });
   installContext(
     { on: (name: string, handler: unknown) => callbacks.set(name, handler) },
     {
       contextGeneration: 'host',
-      contextSource: {
-        url: 'http://127.0.0.1/synthetic',
-        origin: 'http://127.0.0.1',
-      },
       contextEvidenceFile: '/dev/null',
     },
     'synthetic',
     (name: string, handler: (input: Record<string, unknown>) => unknown) =>
       routes.set(name, handler),
+    request,
   );
   routes.get('run')!({
     runId: 'current',
@@ -171,43 +188,38 @@ test('an invalid earlier input cannot borrow the final prompt identity', async (
     input: unknown,
     next: () => Promise<unknown>,
   ) => Promise<{ kind: string }>;
-  const original = globalThis.fetch;
-  globalThis.fetch = async () =>
-    new Response(
-      JSON.stringify({
-        snapshot: { requirementId: 'r', contextVersion: 1 },
-        digest: 'fixture',
-      }),
-    );
-  try {
-    const result = await enter(
-      { agent, turn: 1, step: 1, signal: new AbortController().signal },
-      async () => ({
-        kind: 'enter',
-        messages: [
-          {
-            id: 'old-message',
-            source: {
-              kind: 'user',
-              rpcId: 'old',
-              principal: { kind: 'rdws', nonce: 'old-peer' },
-            },
+  const result = await enter(
+    { agent, turn: 1, step: 1, signal: new AbortController().signal },
+    async () => ({
+      kind: 'enter',
+      messages: [
+        {
+          id: 'old-message',
+          source: {
+            kind: 'user',
+            rpcId: 'old',
+            principal: { kind: 'rdws', nonce: 'old-peer' },
           },
-          {
-            id: 'new-message',
-            source: {
-              kind: 'user',
-              rpcId: 'new',
-              principal: { kind: 'rdws', nonce: 'new-peer' },
-            },
+        },
+        {
+          id: 'new-message',
+          source: {
+            kind: 'user',
+            rpcId: 'new',
+            principal: { kind: 'rdws', nonce: 'new-peer' },
           },
-        ],
-      }),
-    );
-    expect(result.kind).toBe('reject');
-  } finally {
-    globalThis.fetch = original;
-  }
+        },
+      ],
+    }),
+  );
+  expect(result.kind).toBe('reject');
+  expect(
+    request.mock.calls.every(
+      ([, token]) =>
+        verifyGrant('synthetic', token, 'rdws:bff:host')?.operation ===
+        'context-release',
+    ),
+  ).toBe(true);
 });
 test('related inputs are checked against every original login', async () => {
   const key = randomUUID(),
@@ -216,7 +228,7 @@ test('related inputs are checked against every original login', async () => {
   const runs = new ContextRuns(
     generation,
     (t) => verifyGrant(key, t, aud),
-    async () => ({ ok: true }),
+    async () => ({ value: { ok: true }, validBefore: Infinity }),
     () => false,
   );
   const old = runs.admit(
@@ -251,6 +263,160 @@ test('related inputs are checked against every original login', async () => {
   await expect(runs.handle(body, token)).rejects.toMatchObject({
     statusCode: 403,
   });
+});
+test('earliest related-login expiry rejects the context before synchronous reply', async () => {
+  const key = randomUUID(),
+    generation = randomUUID();
+  const aud = 'rdws:bff:' + generation;
+  let release!: () => void;
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.useFakeTimers();
+  try {
+    const oldExpiry = Date.now() + 100;
+    const read = vi.fn(
+      async (
+        _actor,
+        _requirement,
+        _session,
+        related: { authSessionId: string }[] = [],
+      ) => {
+        const validBefore = related.some(
+          (actor) => actor.authSessionId === 'old',
+        )
+          ? oldExpiry
+          : Infinity;
+        await barrier;
+        return { value: { snapshot: 'authorized content' }, validBefore };
+      },
+    );
+    const runs = new ContextRuns(
+      generation,
+      (token) => verifyGrant(key, token, aud),
+      read,
+      () => false,
+    );
+    const old = runs.admit(
+      { userId: 'u', authSessionId: 'old' },
+      'r',
+      's',
+      'old-key',
+      'peer',
+    );
+    const current = runs.admit(
+      { userId: 'u', authSessionId: 'current' },
+      'r',
+      's',
+      'new-key',
+      'peer',
+    );
+    const body = {
+      ...current,
+      turn: 1,
+      agentGeneration: 'a',
+      relatedRuns: [{ ...old, turn: 1, agentGeneration: 'a' }],
+    };
+    const sign = (input: typeof body | Omit<typeof body, 'relatedRuns'>) =>
+      signGrant(key, {
+        aud,
+        purpose: 'service',
+        operation: 'context-read',
+        hostGeneration: generation,
+        runId: current.runId,
+        bodyHash: bodyHash(input),
+      });
+    const reply = vi.fn();
+    const response = runs
+      .handle(body, sign(body), reply)
+      .catch((error) => error);
+    expect(read.mock.calls[0]?.[3]).toEqual([
+      { userId: 'u', authSessionId: 'old' },
+    ]);
+    vi.setSystemTime(oldExpiry);
+    release();
+    expect(await response).toMatchObject({ statusCode: 403 });
+    expect(reply).not.toHaveBeenCalled();
+    const single = { ...current, turn: 1, agentGeneration: 'a' };
+    await expect(runs.handle(single, sign(single), reply)).resolves.toEqual({
+      snapshot: 'authorized content',
+    });
+    expect(reply).toHaveBeenCalledOnce();
+  } finally {
+    release();
+    vi.useRealTimers();
+  }
+});
+
+test('project runtimes share four context reads while release can still complete', async () => {
+  const key = randomUUID();
+  const release: (() => void)[] = [];
+  const pending: Promise<unknown>[] = [];
+  const read = vi.fn(async () => {
+    await new Promise<void>((resolve) => release.push(resolve));
+    throw new Error('Synthetic database completion');
+  });
+  const fixtureRoot = '/tmp/rdws-context-budget-test';
+  const verifier = vi
+    .spyOn(NativeWebHost.prototype, 'verifyContext')
+    .mockImplementation(function (this: NativeWebHost, token) {
+      return verifyGrant(key, token, 'rdws:bff:' + this.contextGeneration);
+    });
+  const projects = createProjectRuntimes(
+    fixtureRoot,
+    undefined,
+    new NativeWebHost(fixtureRoot),
+    {} as Parameters<typeof createProjectRuntimes>[3],
+    { readWithDeadline: read } as unknown as Parameters<
+      typeof createProjectRuntimes
+    >[4],
+    () => false,
+    new Map([['neighbor', fixtureRoot]]),
+  );
+  try {
+    const first = await projects.get('poc'),
+      neighbor = await projects.get('neighbor');
+    function request(runtime: ProjectRuntime) {
+      const run = runtime.runs.admit(
+        { userId: 'u', authSessionId: 's' },
+        'd',
+        randomUUID(),
+        'prompt',
+        'peer',
+      );
+      const body = { ...run, turn: 1, agentGeneration: 'a' };
+      return (operation = 'context-read') =>
+        runtime.runs.handle(
+          body,
+          signGrant(key, {
+            aud: 'rdws:bff:' + run.hostGeneration,
+            purpose: 'service',
+            operation,
+            hostGeneration: run.hostGeneration,
+            runId: run.runId,
+            bodyHash: bodyHash(body),
+          }),
+        );
+    }
+    for (const project of [first, neighbor, first, neighbor])
+      pending.push(request(project)().catch((error) => error));
+    expect(read).toHaveBeenCalledTimes(4);
+    const busy = request(neighbor);
+    await expect(busy()).rejects.toMatchObject({ statusCode: 503 });
+    await expect(busy('context-release')).resolves.toEqual({ released: true });
+    expect(read).toHaveBeenCalledTimes(4);
+    release[0]!();
+    expect(await pending[0]).toEqual(
+      new Error('Synthetic database completion'),
+    );
+    pending.push(request(neighbor)().catch((error) => error));
+    expect(read).toHaveBeenCalledTimes(5);
+  } finally {
+    for (const finish of release) finish();
+    await Promise.all(pending);
+    await projects.close();
+    verifier.mockRestore();
+  }
 });
 test('summaries mark truncated fields, keep a complete-view link and enforce a byte budget', () => {
   const data = {
@@ -295,6 +461,7 @@ test.each(['before-pre-step', 'downstream-reject'] as const)(
       'synthetic',
       (name: string, handler: (input: Record<string, unknown>) => unknown) =>
         routes.set(name, handler),
+      async () => ({ released: true }),
     );
     const emit = (name: string, args: unknown) =>
       (callbacks.get(name) as ((args: unknown) => unknown) | undefined)?.(args);
@@ -358,6 +525,7 @@ test('an authorized insertion retires only its Agent’s recovered RDWS inputs w
     'synthetic',
     (name: string, handler: (input: Record<string, unknown>) => unknown) =>
       routes.set(name, handler),
+    async () => ({ released: true }),
   );
   const emit = (name: string, args: unknown) => callbacks.get(name)!(args);
   const admit = (id: string, sessionId = 'recovered') =>

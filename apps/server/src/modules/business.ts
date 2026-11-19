@@ -1353,7 +1353,7 @@ export function createBusiness(db: Database) {
       { isolationLevel: 'read committed' },
     );
   }
-  async function read(
+  async function readWithDeadline(
     who: Actor,
     id: string,
     sessionId?: string,
@@ -1364,8 +1364,11 @@ export function createBusiness(db: Database) {
         await tx.execute(sql`set local statement_timeout='1800ms'`);
         const state = await scope(tx, who, id);
         const authority = await identity(tx, who, state.item.projectId);
-        for (const actor of relatedActors)
-          await identity(tx, actor, state.item.projectId);
+        let validBefore = authority.session.expiresAt.getTime();
+        for (const actor of relatedActors) {
+          const { session } = await identity(tx, actor, state.item.projectId);
+          validBefore = Math.min(validBefore, session.expiresAt.getTime());
+        }
         if (sessionId) {
           const [mapping] = await tx
             .select()
@@ -1458,7 +1461,7 @@ export function createBusiness(db: Database) {
               eq(schema.projectMember.role, 'developer'),
             ),
           );
-        return {
+        const detail = {
           requirement: state.item,
           tasks,
           assignmentNames: Object.fromEntries(
@@ -1521,9 +1524,18 @@ export function createBusiness(db: Database) {
             codeWrite: false,
           },
         };
+        return { detail, validBefore };
       },
       { isolationLevel: 'repeatable read', accessMode: 'read only' },
     );
+  }
+  async function read(
+    who: Actor,
+    id: string,
+    sessionId?: string,
+    relatedActors: Actor[] = [],
+  ) {
+    return (await readWithDeadline(who, id, sessionId, relatedActors)).detail;
   }
   async function sessionTransaction<T>(
     who: Actor,
@@ -2291,6 +2303,7 @@ export function createBusiness(db: Database) {
     findCreatedRequirement,
     execute,
     read,
+    readWithDeadline,
     sessionTransaction,
     sessionTemplate,
     approvedTemplateReferences,

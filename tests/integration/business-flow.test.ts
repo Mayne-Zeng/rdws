@@ -475,6 +475,14 @@ test('the context snapshot cannot mix versions when a task changes between queri
       headers: headers.get('lead'),
     })
   ).json();
+  expect((await pool.query('select current_database() db')).rows[0]?.db).toBe(
+    'rdws_test',
+  );
+  const related = randomUUID();
+  const relatedExpiry = new Date(Date.now() + 60_000);
+  expect(new Date(auth.session.expiresAt).getTime()).toBeGreaterThan(
+    relatedExpiry.getTime(),
+  );
   const database = connectDatabase(process.env.DATABASE_URL!);
   let enter = () => {},
     release = () => {};
@@ -500,9 +508,16 @@ test('the context snapshot cannot mix versions when a task changes between queri
     }) as typeof client.query;
   });
   try {
-    const pending = createBusiness(database.db).read(
+    const added = await pool.query(
+      'insert into auth_session(id,token,expires_at,user_id,auth_epoch,created_at,updated_at) select $2,$3,$4,user_id,auth_epoch,now(),now() from auth_session where id=$1',
+      [auth.session.id, related, randomUUID(), relatedExpiry],
+    );
+    expect(added.rowCount).toBe(1);
+    const pending = createBusiness(database.db).readWithDeadline(
       { userId: auth.user.id, authSessionId: auth.session.id },
       id,
+      undefined,
+      [{ userId: auth.user.id, authSessionId: related }],
     );
     await entered;
     expect(
@@ -515,12 +530,14 @@ test('the context snapshot cannot mix versions when a task changes between queri
       ).statusCode,
     ).toBe(200);
     release();
-    const snapshot = await pending;
+    const { detail: snapshot, validBefore } = await pending;
+    expect(validBefore).toBe(relatedExpiry.getTime());
     expect(snapshot.requirement.contextVersion).toBe(
       initial.requirement.contextVersion,
     );
     expect(snapshot.tasks[0]!.title).toBe(task.title);
     const fresh = await detail(id);
+    expect(fresh).not.toHaveProperty('validBefore');
     expect(fresh.requirement.contextVersion).toBe(
       initial.requirement.contextVersion + 1,
     );
@@ -528,6 +545,7 @@ test('the context snapshot cannot mix versions when a task changes between queri
   } finally {
     release();
     await database.pool.end();
+    await pool.query('delete from auth_session where id=$1', [related]);
   }
 });
 test('stage reachability survives a large recent task activity window', async () => {

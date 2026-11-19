@@ -291,19 +291,6 @@ export async function registerWorkbench(
       blocked(userId, projectId, undefined, requirementId),
     nativeProfiles,
   );
-  const context = (request: FastifyRequest, projectId: string) => {
-    const runtime = projects.peek(projectId);
-    if (!runtime || stopping) fail(403, '未知原生项目');
-    return runtime.runs.handle(
-      request.body,
-      request.headers.authorization?.replace(/^RDWS /, ''),
-    );
-  };
-  app.post('/internal/rdws/context', (request) => context(request, 'poc'));
-  app.post<{ Params: { projectId: string } }>(
-    '/internal/rdws/context/:projectId',
-    (request) => context(request, request.params.projectId),
-  );
   async function retireRun(runtime: ProjectRuntime, runId: string) {
     runtime.runs.discard(runId);
     runtime.abandonedRuns.add(runId);
@@ -529,12 +516,6 @@ export async function registerWorkbench(
     if (stale(scope)) fail(401, '授权已变化');
     const existingOnly = await worktreeReady(scope);
     const runtime = await projects.get(scope.item.projectId);
-    const address = app.server.address();
-    if (address && typeof address !== 'string')
-      runtime.native.configureContext(
-        `http://127.0.0.1:${address.port}/internal/rdws/context/${scope.item.projectId}`,
-        expectedOrigin,
-      );
     if (stale(scope)) fail(401, '授权已变化');
     const value = await runtime.native.workspace(
       scope.item.id,

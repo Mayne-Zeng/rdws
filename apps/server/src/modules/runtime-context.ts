@@ -108,7 +108,7 @@ export class ContextRuns {
       id: string,
       sessionId: string,
       relatedActors?: Actor[],
-    ) => Promise<unknown>,
+    ) => Promise<{ value: unknown; validBefore: number }>,
     private closing: (
       authSessionId: string,
       userId: string,
@@ -204,7 +204,11 @@ export class ContextRuns {
     const keep = new Set(active);
     for (const id of candidates) if (!keep.has(id)) this.runs.delete(id);
   }
-  async handle(input: unknown, token: unknown) {
+  async handle(
+    input: unknown,
+    token: unknown,
+    reply?: (result: unknown, validBefore: number) => void,
+  ) {
     const cap = this.verify(token),
       now = Date.now();
     for (const [nonce, expiry] of this.nonces)
@@ -238,7 +242,9 @@ export class ContextRuns {
         )
           this.runs.delete(existing.runId);
       }
-      return { released: true };
+      const result = { released: true };
+      reply?.(result, cap.expiresAt);
+      return result;
     }
     const batch: Run[] = [];
     for (const binding of inputs) {
@@ -290,21 +296,27 @@ export class ContextRuns {
       r.agentGeneration = String(input.agentGeneration);
       r.turn = Number(input.turn);
     }
-    const result = await this.read(
+    const { value, validBefore: loginExpiresAt } = await this.read(
       run.who,
       run.requirementId,
       run.sessionId,
       batch.slice(1).map((r) => r.who),
     );
+    const validBefore = Math.min(
+      loginExpiresAt,
+      cap.expiresAt,
+      ...batch.map((r) => r.expiresAt),
+    );
     if (
+      !(validBefore > Date.now()) ||
       batch.some(
         (r) =>
           this.runs.get(r.runId) !== r ||
-          this.closing(r.who.authSessionId, r.who.userId, r.requirementId) ||
-          r.expiresAt <= Date.now(),
+          this.closing(r.who.authSessionId, r.who.userId, r.requirementId),
       )
     )
       businessError(403, '当前运行绑定已失效');
-    return result;
+    reply?.(value, validBefore);
+    return value;
   }
 }

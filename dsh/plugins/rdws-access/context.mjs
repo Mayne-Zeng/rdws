@@ -1,7 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import { signGrant, bodyHash } from '../../bridge/access.ts';
-export function installContext(ctx, config, key, route) {
+export function installContext(ctx, config, key, route, requestContext) {
   const authorized = new Map(),
     agents = new WeakMap(),
     earlyInsertions = new WeakMap();
@@ -184,7 +184,6 @@ export function installContext(ctx, config, key, route) {
     { global: true },
   );
   async function service(operation, body, signal) {
-    if (!config.contextSource) throw new Error('Context source is unavailable');
     const token = signGrant(key, {
       aud: 'rdws:bff:' + config.contextGeneration,
       purpose: 'service',
@@ -193,20 +192,7 @@ export function installContext(ctx, config, key, route) {
       runId: body.runId,
       hostGeneration: config.contextGeneration,
     });
-    const response = await fetch(config.contextSource.url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: 'RDWS ' + token,
-        origin: config.contextSource.origin,
-      },
-      body: JSON.stringify(body),
-      signal: signal
-        ? AbortSignal.any([signal, AbortSignal.timeout(2000)])
-        : AbortSignal.timeout(2000),
-    });
-    if (!response.ok) throw new Error('Current context authorization failed');
-    return response.json();
+    return requestContext(body, token, signal);
   }
   function release(state) {
     if (!state?.binding) return;

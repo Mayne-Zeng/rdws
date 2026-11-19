@@ -98,13 +98,6 @@ test('native model choices survive restarts, reach actual dispatch, and can ente
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const input = JSON.parse(Buffer.concat(chunks).toString());
-      if (request.url === '/context') {
-        const token = request.headers.authorization?.replace(/^RDWS /, '');
-        const result = await runs.handle(input, token);
-        response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify(result));
-        return;
-      }
       if (request.url === '/dispatch') {
         const title = input.purpose === 'session-title';
         const retry =
@@ -206,7 +199,7 @@ test('native model choices survive restarts, reach actual dispatch, and can ente
   let host = new NativeWebHost(root, configuration, 'team-b');
   function newHost() {
     const native = new NativeWebHost(root, configuration, 'team-b');
-    runs = new ContextRuns(
+    const context = new ContextRuns(
       native.contextGeneration,
       (token) => native.verifyContext(token),
       async (_who, _requirementId, sessionId) => {
@@ -215,13 +208,19 @@ test('native model choices survive restarts, reach actual dispatch, and can ente
           throw new Error('Fixture authorization revoked');
         }
         return {
-          snapshot: { requirementId, contextVersion: 1 },
-          digest: 'fixture-context',
+          value: {
+            snapshot: { requirementId, contextVersion: 1 },
+            digest: 'fixture-context',
+          },
+          validBefore: Infinity,
         };
       },
       () => false,
     );
-    native.configureContext(`${base}/context`, base);
+    runs = context;
+    native.configureContext((input, token, reply) =>
+      context.handle(input, token, reply),
+    );
     return native;
   }
   try {

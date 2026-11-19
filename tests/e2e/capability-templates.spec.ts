@@ -1,10 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
-import { Pool } from 'pg';
-import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 test('template recovery preserves confirmed revisions and project members see retired references', async ({
   page,
@@ -16,12 +14,9 @@ test('template recovery preserves confirmed revisions and project members see re
   const changed = name + ' v2';
   const recovered = name + ' v3';
   const item = { kind: 'skill', reference, revision: '1.0.0' };
-  const accounts: { username: string; password: string }[] = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  );
-  const migration = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const accounts: { username: string; password: string }[] =
+    await readTestAccounts();
+  const migration = createTestPool('migration');
   const commands: string[] = [];
   const saves: { commandId: string }[] = [];
   let dropBeforeCommit = false;

@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Pool } from 'pg';
 import WebSocket, { WebSocketServer } from 'ws';
 import { buildApp } from '@rdws/server';
 import { fixtureBinding, observedLogin } from '../helpers/native-browser.ts';
@@ -11,9 +10,11 @@ import { NativeWebHost } from '@rdws/dsh/web';
 import { actionAllowed, type Grant } from '@rdws/dsh/access';
 import { forkBoundary } from '@rdws/dsh/sessions';
 import { parseRemoteStreamServerMessage } from '@rdws/dsh/wire';
-import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
+import { loadEnvironment } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 loadEnvironment('test');
-const pool = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
+const pool = createTestPool('migration');
 let account: { username: string; password: string };
 let owner: string;
 const ids: string[] = [];
@@ -21,9 +22,9 @@ beforeAll(async () => {
   owner = (
     await pool.query("select id from auth_user where username='manager'")
   ).rows[0].id;
-  account = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ).find((row: { username: string }) => row.username === 'manager');
+  account = (await readTestAccounts()).find(
+    (row) => row.username === 'manager',
+  )!;
 });
 afterAll(async () => {
   for (const id of ids) {

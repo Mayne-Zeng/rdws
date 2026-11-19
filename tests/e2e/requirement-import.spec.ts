@@ -1,23 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
-import { Pool } from 'pg';
 import type {
   RequirementImportInput,
   RequirementImportRow,
 } from '@rdws/contracts';
 import { prepareSession } from '../helpers/auth-session.ts';
-import { runtimeHome } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 test('CSV and XLSX can be corrected, validated and committed with recoverable per-row results', async ({
   page,
   baseURL,
 }, testInfo) => {
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const pool = createTestPool('migration');
   const project = 'import-browser-' + randomUUID();
   const source = fileURLToPath(
     new URL('../fixtures/requirement-import.xlsx', import.meta.url),
@@ -34,9 +30,7 @@ test('CSV and XLSX can be corrected, validated and committed with recoverable pe
   const sent: RequirementImportInput[] = [];
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   const login = (username: string) =>
     prepareSession(
       page.context(),

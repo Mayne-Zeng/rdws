@@ -1,22 +1,17 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
-import { Pool } from 'pg';
-import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 test('platform approval recovery reads the current retired version without resubmitting changed content', async ({
   page,
   baseURL,
 }) => {
   const reference = `platform/browser-${randomUUID()}`;
-  const accounts: { username: string; password: string }[] = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  );
-  const migration = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const accounts: { username: string; password: string }[] =
+    await readTestAccounts();
+  const migration = createTestPool('migration');
   const writes: { commandId: string; kind: string }[] = [];
   const retireId = randomUUID();
   const lateId = randomUUID();

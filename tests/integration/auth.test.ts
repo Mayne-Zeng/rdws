@@ -1,10 +1,10 @@
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { afterAll, beforeAll, expect, test, vi } from 'vitest';
 import { Pool } from 'pg';
 import { buildApp } from '@rdws/server';
 import { NativeWebHost } from '@rdws/dsh/web';
-import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
+import { loadEnvironment } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 const lookupFault = vi.hoisted(() => ({
   column: undefined as 'token' | 'id' | undefined,
@@ -55,14 +55,10 @@ const options = {
   origin: process.env.RDWS_ORIGIN!,
 };
 const app = buildApp(options);
-const migrator = new Pool({
-  connectionString: process.env.DATABASE_MIGRATION_URL,
-});
+const migrator = createTestPool('migration');
 let accounts: { username: string; password: string }[];
 beforeAll(async () => {
-  accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets', 'test-accounts.json'), 'utf8'),
-  );
+  accounts = await readTestAccounts();
   await app.ready();
 });
 afterAll(async () => {
@@ -482,7 +478,7 @@ test('public signup and untrusted origins are rejected', async () => {
   expect(forged.statusCode).toBe(403);
 });
 test('application role cannot create tables or connect to development database', async () => {
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const pool = createTestPool('application');
   try {
     await expect(
       pool.query('create table forbidden_table(id text)'),

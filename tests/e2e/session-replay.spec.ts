@@ -1,14 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
-import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
 
 async function replayFixture(page: Page, origin: string) {
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   await prepareSession(
     page.context(),
     origin,

@@ -1,27 +1,25 @@
 import { beforeAll, afterAll, test, expect } from 'vitest';
-import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { buildApp } from '@rdws/server';
 import { connectDatabase } from '@rdws/db';
 import { createBusiness } from '../../apps/server/src/modules/business.ts';
-import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
+import { loadEnvironment } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 loadEnvironment('test');
 const app = buildApp({
   databaseUrl: process.env.DATABASE_URL!,
   secret: process.env.BETTER_AUTH_SECRET!,
   origin: process.env.RDWS_ORIGIN!,
 });
-const pool = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
+const pool = createTestPool('migration');
 const headers = new Map<string, { cookie: string; origin: string }>();
 const users = new Map<string, string>();
 const created: string[] = [];
 const commands: string[] = [];
 beforeAll(async () => {
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   await app.ready();
   for (const name of ['manager', 'pm', 'lead', 'dev', 'tester', 'admin']) {
     const response = await app.inject({

@@ -1,21 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  readdir,
-  rm,
-  writeFile,
-} from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildApp } from '@rdws/server';
 import { importLimits, type RequirementImportRow } from '@rdws/contracts';
 import { Pool, type PoolClient } from 'pg';
 import { afterAll, beforeAll, expect, test, vi } from 'vitest';
-import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
+import { loadEnvironment } from '@rdws/runtime-config';
 import { httpsGitFixture } from '../helpers/https-git.ts';
 import { RepositoryMirrors } from '@rdws/syncer/mirror';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 loadEnvironment('test');
 const config = {
@@ -23,7 +18,7 @@ const config = {
   databaseUrl: process.env.DATABASE_URL!,
   secret: process.env.BETTER_AUTH_SECRET!,
 };
-const db = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
+const db = createTestPool('migration');
 const project = 'import-' + randomUUID(),
   mirrorProject = 'import-mirror-' + randomUUID();
 const users = new Map<
@@ -104,9 +99,7 @@ beforeAll(async () => {
     }
     return payload;
   });
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   for (const [i, user] of [
     'pm',
     'lead',

@@ -7,9 +7,10 @@ import { signGrant } from '@rdws/dsh/access';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { Pool } from 'pg';
 import WebSocket from 'ws';
 import { runtimeHome } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 class LostNotification extends NativeWebHost {
   override async revoke() {
     throw new Error('Controlled transport outage');
@@ -41,16 +42,9 @@ test('native notification outage stops BFF immediately and closes native at leas
   const address = await app.listen({ host: '127.0.0.1', port: 0 });
   let bff: WebSocket | undefined;
   let direct: WebSocket | undefined;
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const pool = createTestPool('migration');
   try {
-    const accounts = JSON.parse(
-      await readFile(
-        join(runtimeHome, 'secrets', 'test-accounts.json'),
-        'utf8',
-      ),
-    ) as { username: string; password: string }[];
+    const accounts = await readTestAccounts();
     const login = await app.inject({
       method: 'POST',
       url: '/api/auth/sign-in/username',

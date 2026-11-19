@@ -18,8 +18,10 @@ import { NativeWebHost } from '@rdws/dsh/web';
 import { buildApp } from '@rdws/server';
 import { Pool } from 'pg';
 import { expect, test } from 'vitest';
-import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
+import { loadEnvironment } from '@rdws/runtime-config';
 import { bootstrapNative, observedLogin } from '../helpers/native-browser.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 loadEnvironment('test');
 
@@ -69,9 +71,7 @@ test.each([
   'cold $queue recovery retains the input and lets the first newly authorized send finish',
   async ({ mode, queue, replayBeforeSending }) => {
     const databaseUrl = process.env.DATABASE_URL!;
-    const pool = new Pool({
-      connectionString: process.env.DATABASE_MIGRATION_URL,
-    });
+    const pool = createTestPool('migration');
     const root = await mkdtemp(
       join(await realpath(tmpdir()), 'rdws-queued-recovery-'),
     );
@@ -227,9 +227,7 @@ test.each([
         await application.end();
       }
       testDatabase = true;
-      const accounts = JSON.parse(
-        await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-      ) as { username: string; password: string }[];
+      const accounts = await readTestAccounts();
       const manager = accounts.find(
         (account) => account.username === 'manager',
       );

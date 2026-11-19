@@ -4,11 +4,9 @@ import {
   type APIResponse,
   type WebSocketRoute,
 } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
 
 function latch() {
   let open!: () => void;
@@ -21,9 +19,7 @@ test('an open conversation keeps its original login and isolates the draft after
   baseURL,
 }) => {
   const context = page.context();
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   const manager = accounts.find((account) => account.username === 'manager')!;
   const lead = accounts.find((account) => account.username === 'lead')!;
   await prepareSession(context, baseURL!, manager);
@@ -205,9 +201,7 @@ test('session create keeps its observed login and the original account can retry
 }) => {
   const origin = baseURL!;
   const context = page.context();
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   const manager = accounts.find((account) => account.username === 'manager')!;
   const lead = accounts.find((account) => account.username === 'lead')!;
   const original = await prepareSession(context, origin, manager);
@@ -323,9 +317,7 @@ for (const { view, replacementAccount } of [
   }) => {
     const origin = baseURL!;
     const context = page.context();
-    const accounts = JSON.parse(
-      await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-    ) as { username: string; password: string }[];
+    const accounts = await readTestAccounts();
     const original = await prepareSession(
       context,
       origin,

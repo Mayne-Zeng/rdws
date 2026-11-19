@@ -1,19 +1,16 @@
 import { test, expect } from '@playwright/test';
-import { readFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
 
 test('five real workbench entries preserve the Demo geometry and readable themes', async ({
   page,
   baseURL,
 }) => {
   test.setTimeout(120000);
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   await prepareSession(
     page.context(),
     baseURL!,

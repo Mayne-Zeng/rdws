@@ -17,11 +17,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { zstdDecompressSync } from 'node:zlib';
-import { Pool } from 'pg';
 import WebSocket from 'ws';
 import { buildApp } from '@rdws/server';
-import { runtimeHome } from '@rdws/runtime-config';
 import { bootstrapNative, observedLogin } from '../helpers/native-browser.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 async function freePort() {
   const reserved = reserveServer().listen(0, '127.0.0.1');
@@ -65,9 +65,7 @@ test('macOS pause confines the real Native Host and the same browser can resume'
     api = await freePort();
   const origin = `http://127.0.0.1:${port}`;
   const backend = `http://127.0.0.1:${api}`;
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const pool = createTestPool('migration');
   const supplierCalls: string[] = [];
   const supplierDiagnostic = 'synthetic-model-response-diagnostic';
   let supplierFailure = false;
@@ -160,9 +158,7 @@ test('macOS pause confines the real Native Host and the same browser can resume'
         .rows[0],
     ).toEqual({ db: 'rdws_test', role: 'rdws_test_migrator' });
     isolatedDatabase = true;
-    const application = new Pool({
-      connectionString: process.env.DATABASE_URL,
-    });
+    const application = createTestPool('application');
     try {
       expect(
         (
@@ -221,9 +217,7 @@ test('macOS pause confines the real Native Host and the same browser can resume'
     );
 
     const direct = await boot('direct');
-    const accounts = JSON.parse(
-      await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-    ) as { username: string; password: string }[];
+    const accounts = await readTestAccounts();
     async function login(username: string, remoteAddress: string) {
       const response = await direct.inject({
         method: 'POST',

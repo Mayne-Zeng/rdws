@@ -7,6 +7,8 @@ import { Pool } from 'pg';
 import WebSocket from 'ws';
 import { signGrant } from '@rdws/dsh/access';
 import { runtimeHome } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 let base: string;
 let cookie: string;
 let leadCookie: string;
@@ -34,9 +36,7 @@ async function send(path: string, init: RequestInit = {}, identity = cookie) {
   });
 }
 async function login(username: string) {
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets', 'test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   const response = await send(
     '/api/auth/sign-in/username',
     {
@@ -109,7 +109,7 @@ function next(ws: WebSocket) {
 }
 test.beforeAll(async ({ baseURL }) => {
   base = baseURL!;
-  pool = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
+  pool = createTestPool('migration');
   cookie = await login('manager');
   leadCookie = await login('lead');
   const actor = await (await send('/api/auth/get-session')).json();

@@ -1,12 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  realpath,
-  rm,
-  writeFile,
-} from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { join } from 'node:path';
@@ -22,7 +15,9 @@ import {
 } from '@rdws/contracts';
 import { Pool, type PoolClient } from 'pg';
 import { afterAll, beforeAll, expect, test, vi } from 'vitest';
-import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
+import { loadEnvironment } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 loadEnvironment('test');
 const config = {
@@ -30,7 +25,7 @@ const config = {
   secret: process.env.BETTER_AUTH_SECRET!,
   databaseUrl: process.env.DATABASE_URL!,
 };
-const db = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
+const db = createTestPool('migration');
 const app = buildApp(config);
 const project = 'personnel-' + randomUUID();
 const demand = randomUUID(),
@@ -193,9 +188,7 @@ beforeAll(async () => {
     'rdws_test_app',
   ]);
   isolated = true;
-  accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets', 'test-accounts.json'), 'utf8'),
-  );
+  accounts = await readTestAccounts();
   for (const username of ['pm', 'manager', 'lead', 'dev', 'tester', 'admin'])
     people.set(username, await login(username));
   await db.query('insert into project(id,name) values($1,$2)', [

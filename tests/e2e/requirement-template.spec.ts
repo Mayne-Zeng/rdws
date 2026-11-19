@@ -1,17 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
-import { Pool } from 'pg';
 import type { TemplateBindingInput } from '@rdws/contracts';
-import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 test('requirement template recovery stays with the same command and the current authorized view', async ({
   page,
   baseURL,
 }, testInfo) => {
-  const db = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
+  const db = createTestPool('migration');
   const id = randomUUID(),
     other = randomUUID(),
     templateId = randomUUID();
@@ -22,9 +20,7 @@ test('requirement template recovery stays with the same command and the current 
   const project = 'binding-browser-' + randomUUID();
   const path = `/api/requirements/${id}/capability-template`;
   const url = `/?project=${project}&view=context&requirement=${id}`;
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   const login = (username: string) =>
     prepareSession(
       page.context(),

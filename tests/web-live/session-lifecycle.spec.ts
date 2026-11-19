@@ -4,7 +4,6 @@ import { test, expect } from '@playwright/test';
 import { readFile, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
-import { Pool } from 'pg';
 import { runtimeHome } from '@rdws/runtime-config';
 import { signGrant } from '@rdws/dsh/access';
 import { zstdDecompressSync, zstdCompressSync } from 'node:zlib';
@@ -14,6 +13,8 @@ import { createServer as createNetServer } from 'node:net';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { prepareSession } from '../helpers/auth-session.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 function decodeJournal(bytes: Buffer) {
   let offset = 0,
     text = '';
@@ -59,12 +60,8 @@ test('five real sessions support owned fork, passive replay and current context'
   baseURL,
 }) => {
   test.setTimeout(240000);
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const pool = createTestPool('migration');
+  const accounts = await readTestAccounts();
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   async function login(name: string) {
@@ -423,12 +420,8 @@ test('cold restart preserves five ids and separates durable logs from interrupte
     const address = await app.listen({ host: '127.0.0.1', port: apiPort });
     apiPort = Number(new URL(address).port);
   }
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const accounts = await readTestAccounts();
+  const pool = createTestPool('migration');
   let cookie = '';
   async function request(path: string, body?: unknown, binding?: string) {
     return app.inject({

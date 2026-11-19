@@ -16,7 +16,9 @@ import { bootstrapNative } from '../helpers/native-browser.ts';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, expect, test, vi } from 'vitest';
-import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
+import { loadEnvironment } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 loadEnvironment('test');
 const options = {
@@ -24,7 +26,7 @@ const options = {
   secret: process.env.BETTER_AUTH_SECRET!,
   origin: process.env.RDWS_ORIGIN!,
 };
-const pool = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
+const pool = createTestPool('migration');
 const app = buildApp(options);
 const project = 'details-' + randomUUID(),
   foreignProject = 'details-' + randomUUID();
@@ -120,9 +122,7 @@ beforeAll(async () => {
     await application.end();
   }
   isolated = true;
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   for (const [index, username] of [
     'admin',
     'pm',

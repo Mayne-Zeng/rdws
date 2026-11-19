@@ -2,8 +2,9 @@ import { test, expect } from '@playwright/test';
 import { readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
-import { Pool } from 'pg';
 import { runtimeHome } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 function assistantTexts(value: unknown): string[] {
   const result: string[] = [];
   const visit = (v: unknown) => {
@@ -31,12 +32,8 @@ test('real requests receive new requirement facts at each native step', async ({
   baseURL,
   page,
 }) => {
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const pool = createTestPool('migration');
+  const accounts = await readTestAccounts();
   async function send(
     path: string,
     body?: unknown,

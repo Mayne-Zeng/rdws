@@ -1,16 +1,12 @@
 import { test, expect } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
 
 test('repository navigation displays the empty state for a real unconfigured project', async ({
   page,
   baseURL,
 }) => {
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   await prepareSession(
     page.context(),
     baseURL!,
@@ -30,9 +26,7 @@ test('the repository view reconciles a lost response with the same command and e
   page,
   baseURL,
 }) => {
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   await prepareSession(
     page.context(),
     baseURL!,

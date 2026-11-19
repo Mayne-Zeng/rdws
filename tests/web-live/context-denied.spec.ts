@@ -15,10 +15,10 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { Pool } from 'pg';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { buildApp } from '@rdws/server';
-import { runtimeHome } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 for (const failure of ['denied', 'timeout'] as const)
   test(
     'native context ' + failure + ' stops model and preserves retry text',
@@ -62,9 +62,7 @@ for (const failure of ['denied', 'timeout'] as const)
         nativeHost: native,
         repositoryHome: join(root, 'unconfigured-repositories'),
       });
-      const pool = new Pool({
-        connectionString: process.env.DATABASE_MIGRATION_URL,
-      });
+      const pool = createTestPool('migration');
       try {
         const profile = join(configuration, 'profiles', 'rdws');
         await mkdir(profile, { recursive: true, mode: 0o700 });
@@ -119,12 +117,7 @@ for (const failure of ['denied', 'timeout'] as const)
         });
         frontend = vite;
         await vite.listen();
-        const accounts = JSON.parse(
-          await readFile(
-            join(runtimeHome, 'secrets/test-accounts.json'),
-            'utf8',
-          ),
-        ) as { username: string; password: string }[];
+        const accounts = await readTestAccounts();
         const login = await app.inject({
           method: 'POST',
           url: '/api/auth/sign-in/username',

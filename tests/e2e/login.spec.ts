@@ -1,21 +1,15 @@
 import { test, expect } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
 for (const colorScheme of ['light', 'dark'] as const) {
   test(`preset account login and logout (${colorScheme})`, async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.emulateMedia({ colorScheme });
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
-    const accounts: { username: string; password: string }[] = JSON.parse(
-      await readFile(
-        join(runtimeHome, 'secrets', 'test-accounts.json'),
-        'utf8',
-      ),
-    );
+    const accounts: { username: string; password: string }[] =
+      await readTestAccounts();
     const lead = accounts.find((a) => a.username === 'lead')!;
     const photo = page.waitForResponse(
       (response) =>
@@ -147,9 +141,8 @@ for (const colorScheme of ['light', 'dark'] as const) {
 }
 
 async function logoutTestAccount(username: string) {
-  const accounts: { username: string; password: string }[] = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets', 'test-accounts.json'), 'utf8'),
-  );
+  const accounts: { username: string; password: string }[] =
+    await readTestAccounts();
   return accounts.find((entry) => entry.username === username)!;
 }
 

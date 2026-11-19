@@ -1,19 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
-import { Pool } from 'pg';
 import type { RequirementPersonnelInput } from '@rdws/contracts';
-import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 test('personnel form requires explicit task handoffs and restores the original saved edit after reload', async ({
   page,
   baseURL,
 }, testInfo) => {
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const pool = createTestPool('migration');
   const project = 'personnel-browser-' + randomUUID(),
     id = randomUUID();
   const url = `/?project=${project}&requirement=${id}&view=overview`;
@@ -22,9 +18,7 @@ test('personnel form requires explicit task handoffs and restores the original s
     lost = false,
     failRead = false;
   const received: RequirementPersonnelInput[] = [];
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   const login = (username: string) =>
     prepareSession(
       page.context(),

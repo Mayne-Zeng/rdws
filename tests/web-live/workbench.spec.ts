@@ -3,13 +3,13 @@ import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
-import { Pool } from 'pg';
 import { signGrant } from '@rdws/dsh/access';
 import { runtimeHome } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 test('real native Web session and streaming', async ({ page }) => {
-  const accounts: { username: string; password: string }[] = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets', 'test-accounts.json'), 'utf8'),
-  );
+  const accounts: { username: string; password: string }[] =
+    await readTestAccounts();
   const manager = accounts.find((row) => row.username === 'manager')!;
   const errors: string[] = [];
   let socketGenerations = 0;
@@ -192,9 +192,7 @@ test('real native Web session and streaming', async ({ page }) => {
     const response = await fetch('/api/auth/get-session');
     return response.json();
   });
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const pool = createTestPool('migration');
   let workspaceId: string;
   try {
     workspaceId = (

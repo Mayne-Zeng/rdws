@@ -1,19 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
-import { Pool } from 'pg';
 import type { RequirementDetailsInput } from '@rdws/contracts';
-import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 test('requirement details preserve the original edit across reload and discard stale authorized views', async ({
   page,
   baseURL,
 }, testInfo) => {
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const pool = createTestPool('migration');
   const id = randomUUID(),
     second = randomUUID(),
     project = 'details-browser-' + randomUUID();
@@ -39,9 +35,7 @@ test('requirement details preserve the original edit across reload and discard s
   const exit = new Promise<void>((resolve) => {
     accepted = resolve;
   });
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   const login = (username: string) =>
     prepareSession(
       page.context(),

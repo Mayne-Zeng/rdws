@@ -1,13 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { readFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
-import { runtimeHome } from '@rdws/runtime-config';
+import { mkdir } from 'node:fs/promises';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
 test('tasks, assignments and button stages follow the Demo workspace', async ({
   page,
 }) => {
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   async function login(name: string) {

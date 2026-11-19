@@ -18,10 +18,11 @@ import { expect, test, vi } from 'vitest';
 import { buildApp } from '@rdws/server';
 import { connectDatabase } from '@rdws/db';
 import { NativeWebHost } from '@rdws/dsh/web';
-import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
+import { loadEnvironment } from '@rdws/runtime-config';
 import { fixtureGit, httpsGitFixture } from '../helpers/https-git.ts';
 import { DemandWorktrees } from '@rdws/orchestrator';
 import { createBusiness } from '../../apps/server/src/modules/business.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
 
 loadEnvironment('test');
 
@@ -84,9 +85,7 @@ test('the accepted demand keeps its frozen worktree through failure, source adva
     nativeHost: native,
     nativeRuntimeRoot: f.root,
   });
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   let createdId: string | undefined;
   try {
     const identity = await pool.query(

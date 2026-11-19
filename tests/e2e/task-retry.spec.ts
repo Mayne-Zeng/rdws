@@ -1,15 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { runtimeHome } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
 for (const failure of ['abort', 'invalid-json'] as const)
   test(
     'task result ' + failure + ' preserves its intent and recovers editing',
     async ({ page, baseURL }) => {
-      const accounts = JSON.parse(
-        await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-      ) as { username: string; password: string }[];
+      const accounts = await readTestAccounts();
       await page.request.post('/api/auth/sign-in/username', {
         headers: { origin: baseURL! },
         data: accounts.find((a) => a.username === 'manager'),

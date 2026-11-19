@@ -1,17 +1,13 @@
 import { test, expect } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
 for (const failure of ['abort', 'invalid-json', 'reconnect'] as const)
   test(`session ${failure} preserves one operation across reload`, async ({
     page,
     baseURL,
   }) => {
-    const accounts = JSON.parse(
-      await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-    ) as { username: string; password: string }[];
+    const accounts = await readTestAccounts();
     await prepareSession(
       page.context(),
       baseURL!,
@@ -146,9 +142,7 @@ test('a paused prompt preserves the draft and can be sent after recovery', async
   page,
   baseURL,
 }) => {
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   await prepareSession(
     page.context(),
     baseURL!,
@@ -246,9 +240,7 @@ test('a late catalog from the previous requirement cannot replace the current se
   page,
   baseURL,
 }) => {
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   await prepareSession(
     page.context(),
     baseURL!,

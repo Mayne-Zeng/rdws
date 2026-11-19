@@ -17,11 +17,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildApp } from '@rdws/server';
 import { bootstrapNative } from '../helpers/native-browser.ts';
 import { NativeWebHost } from '@rdws/dsh/web';
-import { Pool } from 'pg';
 import WebSocket from 'ws';
 import { expect, test, vi } from 'vitest';
-import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
+import { loadEnvironment } from '@rdws/runtime-config';
 import { DemandPresets } from '../../dsh/host/presets.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 loadEnvironment('test');
 
@@ -58,7 +59,7 @@ test('released capability versions stay scoped through binding changes, replay a
   const root = await mkdtemp(
     join(await realpath(tmpdir()), 'rdws-preset-session-'),
   );
-  const db = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
+  const db = createTestPool('migration');
   const project = 'preset-' + randomUUID();
   const demand = randomUUID(),
     template = randomUUID(),
@@ -235,9 +236,7 @@ test('released capability versions stay scoped through binding changes, replay a
     testDatabase = true;
     provider.listen(0, '127.0.0.1');
     await once(provider, 'listening');
-    const accounts = JSON.parse(
-      await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-    ) as { username: string; password: string }[];
+    const accounts = await readTestAccounts();
     const manager = accounts.find((row) => row.username === 'manager')!;
     const actor = (
       await db.query("select id from auth_user where username='manager'")

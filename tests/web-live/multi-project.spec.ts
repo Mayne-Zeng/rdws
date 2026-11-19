@@ -8,10 +8,11 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildApp } from '@rdws/server';
 import { bodyHash, signGrant } from '@rdws/dsh/access';
-import { Pool } from 'pg';
 import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
 import { nativeReady } from '../helpers/native-ready.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 test('one login sends and reads in two isolated project runtimes', async ({
   page,
@@ -20,9 +21,7 @@ test('one login sends and reads in two isolated project runtimes', async ({
   const project = 'team-' + randomUUID();
   const root = join(runtimeHome, 'testing-projects', randomUUID());
   const configuration = join(runtimeHome, 'runtime/dsh/project-poc');
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const pool = createTestPool('migration');
   const temp = createServer();
   await new Promise<void>((resolve) => temp.listen(0, '127.0.0.1', resolve));
   const frontPort = (temp.address() as { port: number }).port;
@@ -75,9 +74,7 @@ test('one login sends and reads in two isolated project runtimes', async ({
     const leadId = (
       await pool.query("select id from auth_user where username='lead'")
     ).rows[0].id;
-    const accounts = JSON.parse(
-      await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-    ) as { username: string; password: string }[];
+    const accounts = await readTestAccounts();
     await prepareSession(
       page.context(),
       origin,

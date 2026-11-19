@@ -1,13 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
-import { mkdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { runtimeHome } from '@rdws/runtime-config';
+import { mkdir } from 'node:fs/promises';
 import { prepareSession } from '../helpers/auth-session.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
 
 async function login(page: Page, origin: string, username: string) {
-  const accounts: { username: string; password: string }[] = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets', 'test-accounts.json'), 'utf8'),
-  );
+  const accounts: { username: string; password: string }[] =
+    await readTestAccounts();
   await prepareSession(
     page.context(),
     origin,

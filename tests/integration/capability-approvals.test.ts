@@ -1,16 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { hashPassword } from 'better-auth/crypto';
-import { Pool } from 'pg';
 import { afterAll, beforeAll, expect, test, vi } from 'vitest';
 import { buildApp } from '@rdws/server';
 import { currentAccount } from '../../apps/server/src/modules/auth.ts';
-import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
+import { loadEnvironment } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 loadEnvironment('test');
 const origin = process.env.RDWS_ORIGIN!;
-const pool = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
+const pool = createTestPool('migration');
 const app = buildApp({
   databaseUrl: process.env.DATABASE_URL!,
   secret: process.env.BETTER_AUTH_SECRET!,
@@ -68,9 +67,8 @@ afterAll(async () => {
 });
 
 async function login(username: string) {
-  const accounts: { username: string; password: string }[] = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  );
+  const accounts: { username: string; password: string }[] =
+    await readTestAccounts();
   const response = await app.inject({
     method: 'POST',
     url: '/api/auth/sign-in/username',

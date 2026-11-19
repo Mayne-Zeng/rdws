@@ -1,17 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from 'vitest';
-import { Pool } from 'pg';
 import { buildApp } from '@rdws/server';
 import type { ManagementCommand, TemplateBindingInput } from '@rdws/contracts';
 import { grantApplication } from '../../scripts/db-migrate.ts';
-import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
+import { loadEnvironment } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 loadEnvironment('test');
 const origin = process.env.RDWS_ORIGIN!;
-const pool = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
-const application = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = createTestPool('migration');
+const application = createTestPool('application');
 const app = buildApp({
   databaseUrl: process.env.DATABASE_URL!,
   secret: process.env.BETTER_AUTH_SECRET!,
@@ -128,9 +127,7 @@ beforeAll(async () => {
     db: 'rdws_test',
     role: 'rdws_test_app',
   });
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   for (const [index, username] of [
     'admin',
     'pm',

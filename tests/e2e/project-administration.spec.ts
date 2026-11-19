@@ -1,22 +1,16 @@
 import { expect, test } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { Pool } from 'pg';
-import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 test('platform registers a project and the assigned administrator manages its members', async ({
   page,
   baseURL,
 }) => {
   const project = 'team-' + randomUUID();
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
-  const migration = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const accounts = await readTestAccounts();
+  const migration = createTestPool('migration');
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   async function login(name: string) {

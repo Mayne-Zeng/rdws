@@ -1,13 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { expect, test, vi } from 'vitest';
-import { Pool } from 'pg';
 import { buildApp } from '@rdws/server';
 import { connectDatabase } from '@rdws/db';
 import { createBusiness } from '../../apps/server/src/modules/business.ts';
-import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
+import { loadEnvironment } from '@rdws/runtime-config';
 import { httpsGitFixture } from '../helpers/https-git.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 loadEnvironment('test');
 const origin = process.env.RDWS_ORIGIN!;
@@ -23,18 +22,14 @@ function latch() {
 test('repository summaries and synchronization use current project roles and a final revocation gate', async () => {
   const project = 'repo-' + randomUUID();
   const f = await httpsGitFixture(project);
-  const database = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const database = createTestPool('migration');
   const app = buildApp({
     databaseUrl: process.env.DATABASE_URL!,
     secret: process.env.BETTER_AUTH_SECRET!,
     origin,
     repositoryHome: f.root,
   });
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   async function login(username: string) {
     const response = await app.inject({
       method: 'POST',
@@ -155,9 +150,7 @@ test('repository summaries and synchronization use current project roles and a f
 test('a publication that obtains the authorization gate first orders role removal after the local action', async () => {
   const project = 'repo-' + randomUUID();
   const db = connectDatabase(process.env.DATABASE_URL!);
-  const migrator = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const migrator = createTestPool('migration');
   const row = await migrator.connect();
   const business = createBusiness(db.db);
   const sessionId = randomUUID();

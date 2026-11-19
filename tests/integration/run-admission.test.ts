@@ -1,12 +1,11 @@
 import { test, expect } from 'vitest';
-import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { buildApp } from '@rdws/server';
 import { fixtureBinding } from '../helpers/native-browser.ts';
 import { NativeWebHost } from '@rdws/dsh/web';
-import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
+import { loadEnvironment } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 loadEnvironment('test');
 class FailedAdmissionHost extends NativeWebHost {
   mode: 'sideband' | 'rejected' | 'accepted' = 'sideband';
@@ -159,9 +158,7 @@ test.each([false, true])(
       origin,
       nativeHost: native,
     });
-    const pool = new Pool({
-      connectionString: process.env.DATABASE_MIGRATION_URL,
-    });
+    const pool = createTestPool('migration');
     const requirementId = randomUUID(),
       sessionId = 'session-' + randomUUID();
     const requestId = randomUUID(),
@@ -181,9 +178,7 @@ test.each([false, true])(
         role: 'rdws_test_migrator',
       });
       testDatabase = true;
-      const accounts = JSON.parse(
-        await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-      ) as { username: string }[];
+      const accounts = (await readTestAccounts()) as { username: string }[];
       const login = await app.inject({
         method: 'POST',
         url: '/api/auth/sign-in/username',
@@ -311,13 +306,11 @@ test('failed sideband and rejected RPC admissions release their global quota', a
       origin: process.env.RDWS_ORIGIN!,
       nativeHost: native,
     }),
-    pool = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
+    pool = createTestPool('migration');
   const id = randomUUID(),
     sid = 'admission-' + randomUUID();
   try {
-    const accounts = JSON.parse(
-      await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-    );
+    const accounts = await readTestAccounts();
     const login = await app.inject({
       method: 'POST',
       url: '/api/auth/sign-in/username',

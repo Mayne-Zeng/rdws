@@ -1,8 +1,5 @@
 import { beforeAll, afterAll, test, expect } from 'vitest';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { Pool } from 'pg';
 import { buildApp } from '@rdws/server';
 import {
   signGrant,
@@ -11,20 +8,20 @@ import {
   resourceRoles,
   type Grant,
 } from '@rdws/dsh/access';
-import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
+import { loadEnvironment } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 loadEnvironment('test');
 const app = buildApp({
   databaseUrl: process.env.DATABASE_URL!,
   secret: process.env.BETTER_AUTH_SECRET!,
   origin: process.env.RDWS_ORIGIN!,
 });
-const pool = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
+const pool = createTestPool('migration');
 let accounts: { username: string; password: string }[];
 const ids: string[] = [];
 beforeAll(async () => {
-  accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets', 'test-accounts.json'), 'utf8'),
-  );
+  accounts = await readTestAccounts();
   await app.ready();
 });
 afterAll(async () => {

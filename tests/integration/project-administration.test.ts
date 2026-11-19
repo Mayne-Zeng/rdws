@@ -3,22 +3,20 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import WebSocket, { WebSocketServer } from 'ws';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { test, expect, vi } from 'vitest';
 import { Pool } from 'pg';
 import { hashPassword } from 'better-auth/crypto';
 import { buildApp } from '@rdws/server';
 import { fixtureBinding } from '../helpers/native-browser.ts';
-import { runtimeHome, loadEnvironment } from '@rdws/runtime-config';
+import { loadEnvironment } from '@rdws/runtime-config';
 import type { ManagementCommand } from '@rdws/contracts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 loadEnvironment('test');
 let loginClient = 0;
 
 test('administrators register projects, manage scoped roles and revoke existing logins without changing history', async () => {
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const pool = createTestPool('migration');
   const origin = process.env.RDWS_ORIGIN!;
   const app = buildApp({
     databaseUrl: process.env.DATABASE_URL!,
@@ -30,9 +28,7 @@ test('administrators register projects, manage scoped roles and revoke existing 
   const email = username + '@example.invalid',
     password = randomUUID();
   const project = 'project-' + randomUUID();
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   const selection = (name: string) =>
     accounts.find((row) => row.username === name)!;
   function signIn(input: object, kind = 'username') {
@@ -212,9 +208,7 @@ test('administrators register projects, manage scoped roles and revoke existing 
 });
 
 test('a login blocked at session insertion cannot cross a disable and enable transition', async () => {
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const pool = createTestPool('migration');
   const holding = await pool.connect();
   const origin = process.env.RDWS_ORIGIN!;
   const app = buildApp({
@@ -351,9 +345,7 @@ function interceptCommit(
 
 test('an unknown self-command is recoverable by its original receipt, including a confirmed no-op', async () => {
   const origin = process.env.RDWS_ORIGIN!;
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const pool = createTestPool('migration');
   const app = buildApp({
     databaseUrl: process.env.DATABASE_URL!,
     secret: process.env.BETTER_AUTH_SECRET!,
@@ -361,9 +353,7 @@ test('an unknown self-command is recoverable by its original receipt, including 
   });
   const project = 'receipt-' + randomUUID();
   const id = randomUUID();
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   async function login(name: string) {
     const response = await app.inject({
       method: 'POST',
@@ -440,9 +430,7 @@ test('an unknown self-command is recoverable by its original receipt, including 
 
 test('a temporary project fence suppresses output without revoking a socket when the transaction rolls back', async () => {
   const origin = process.env.RDWS_ORIGIN!;
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_MIGRATION_URL,
-  });
+  const pool = createTestPool('migration');
   const project = 'fence-' + randomUUID(),
     requirement = randomUUID(),
     commandId = randomUUID();
@@ -472,9 +460,7 @@ test('a temporary project fence suppresses output without revoking a socket when
     origin,
     nativeHost: native,
   });
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   async function login(name: string) {
     const response = await app.inject({
       method: 'POST',

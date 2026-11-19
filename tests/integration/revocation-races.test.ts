@@ -1,9 +1,6 @@
 import { test, expect, beforeAll, afterAll, vi } from 'vitest';
-import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import WebSocket, { WebSocketServer } from 'ws';
 import { buildApp } from '@rdws/server';
 import {
@@ -13,9 +10,11 @@ import {
 } from '../helpers/native-browser.ts';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { LEASE_MS } from '@rdws/dsh/access';
-import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
+import { loadEnvironment } from '@rdws/runtime-config';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 loadEnvironment('test');
-const pool = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
+const pool = createTestPool('migration');
 let manager: string;
 let accounts: { username: string; password: string }[];
 const ids: string[] = [];
@@ -24,9 +23,7 @@ beforeAll(async () => {
   manager = (
     await pool.query('select id from auth_user where username=$1', ['manager'])
   ).rows[0].id;
-  accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets', 'test-accounts.json'), 'utf8'),
-  );
+  accounts = await readTestAccounts();
 });
 afterAll(async () => {
   for (const id of ids) {
@@ -138,7 +135,7 @@ async function login(app: ReturnType<typeof buildApp>, username = 'manager') {
 test('the passive session observer checks its read routes before Native preparation', async () => {
   const host = new ControlledHost();
   const app = appFor(host);
-  const application = new Pool({ connectionString: process.env.DATABASE_URL });
+  const application = createTestPool('application');
   const historyText = 'Fixture authorized history content';
   let began!: () => void;
   let release!: () => void;

@@ -20,22 +20,20 @@ import {
   NativeWebHost,
   type ModelCarrierRequest,
 } from '@rdws/dsh/web';
-import { Pool } from 'pg';
 import { expect, test } from 'vitest';
 import { createBusiness } from '../../apps/server/src/modules/business.ts';
 import { createProjectContextReader } from '../../apps/server/src/modules/native-projects.ts';
 import { ContextRuns } from '../../apps/server/src/modules/runtime-context.ts';
 import { loadEnvironment } from '@rdws/runtime-config';
 import { modelTlsCertificate } from '../helpers/model-tls.ts';
+import { createTestPool } from '../helpers/test-pool.ts';
 
 test.skipIf(process.platform !== 'darwin')(
   'the locked Agent retries through fresh authority while independent streams cannot reuse its Note',
   async () => {
     loadEnvironment('test');
     const { db, pool } = connectDatabase(process.env.DATABASE_URL!);
-    const fixtures = new Pool({
-      connectionString: process.env.DATABASE_MIGRATION_URL,
-    });
+    const fixtures = createTestPool('migration');
     const readContext = createProjectContextReader(createBusiness(db));
     const root = await mkdtemp(
       join(await realpath(tmpdir()), 'rdws-model-attempt-'),

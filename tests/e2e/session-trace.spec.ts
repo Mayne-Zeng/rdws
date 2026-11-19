@@ -1,9 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { test, expect } from '@playwright/test';
-import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
+import { readTestAccounts } from '../helpers/test-accounts.ts';
 
 test('the passive trace shows one authorized session and exports only its loaded event summary', async ({
   page,
@@ -11,9 +10,7 @@ test('the passive trace shows one authorized session and exports only its loaded
   baseURL,
 }) => {
   test.setTimeout(60000);
-  const accounts = JSON.parse(
-    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
-  ) as { username: string; password: string }[];
+  const accounts = await readTestAccounts();
   const origin = baseURL!;
   await prepareSession(
     page.context(),

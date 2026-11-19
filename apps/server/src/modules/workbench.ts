@@ -109,7 +109,10 @@ function fail(statusCode: number, message: string): never {
 }
 async function publicModelCatalog(response: Response, rpcId: unknown) {
   const message = '模型目录暂不可用';
-  if (!response.ok || typeof rpcId !== 'string') fail(503, message);
+  if (!response.ok || typeof rpcId !== 'string') {
+    await response.body?.cancel().catch(() => {});
+    fail(503, message);
+  }
   const incoming: unknown = await response.json().catch(() => undefined);
   if (
     !isRecord(incoming) ||
@@ -2376,7 +2379,10 @@ export async function registerWorkbench(
       '/api/rdws/bootstrap',
       grant(scope),
     );
-    if (!response.ok) fail(503, '会话运行时暂不可用');
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      fail(503, '会话运行时暂不可用');
+    }
     const data = await response.json();
     const fresh = await confirmAccess(request.headers, original);
     return { ...data, loginBinding: loginBinding(fresh) };
@@ -2388,7 +2394,10 @@ export async function registerWorkbench(
       '/api/rdws/bootstrap',
       grant(scope),
     );
-    if (!response.ok) return false;
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      return false;
+    }
     const data = (await response.json()) as {
       graph: {
         entries: { id: string; url: string }[];
@@ -2666,6 +2675,8 @@ export async function registerWorkbench(
           return;
         }
         upstream = new WebSocket(native.socketUrl(), {
+          agent: false,
+          followRedirects: false,
           headers: {
             'x-rdws-delegation': lease(scope, generation),
             origin: new URL(native.socketUrl()).origin.replace('ws:', 'http:'),

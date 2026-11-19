@@ -189,6 +189,7 @@
   - 已交付修复：[冷恢复后首次新发送](02-directory-and-engineering-design.html#t13-queued-recovery-evidence-20261119)。已刷盘的旧输入保留在 Native 原始日志。新的有效入箱才取消缺少运行绑定的旧活动项，首次新发送完成，旧键在再次冷启后仍可核对。独立复审、整仓 187 项、浏览器 34 项、本机 Native 通知故障回归及基线通过。
   - 实现前验证：[Native 模型出口的本机隔离](02-directory-and-engineering-design.html#t13-native-egress-confinement-20261119)。锁定版 DSH 在 macOS IPv4 回环中可经出口完成 PiAi、DeepSeek Files 和 Messages，系统拒绝计划外直连，出口关闭后同进程发起新请求失败。同一 Native 进程的 Web 端点持续可访问。独立复审、整仓 190 项及基线通过。正式 Host 接线、端点身份与撤权定序按 §11.16.17 继续验证。
   - 已交付子项：[Native 上下文回调迁移](02-directory-and-engineering-design.html#t13-native-context-ipc-20261119)。上下文读和释放走正式 Host 继承的 IPC，移除了后续隔离对 BFF HTTP 回调端口的依赖。无 BFF 监听时的真实 Native、两种故障后原文重填及合成供应商零到达通过。独立复审、整仓 195 项、浏览器 39 项、故障浏览器 2 项及基线通过。模型外发与其授权定序继续按 §11.16.17 实施。
+  - 已交付子项：[正式 Native 环回传输直连](02-directory-and-engineering-design.html#t13-native-loopback-direct-20261119)。BFF 的 HTTP 和 WebSocket 上游直达已选 Native 环回地址。代理开启时真实启动、历史和跟随可用，合成供应商收到当前上下文，代理无新增到达。独立复审、整仓 198 项、浏览器 39 项及基线通过。正式暂停与模型出口接线仍按 §11.16.17 推进。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。

@@ -584,7 +584,10 @@ test('the model catalog forwards available models without exposing Native diagno
   };
   host.ticket = () => 'synthetic-catalog-ticket';
   const binding = await fixtureBinding(app, cookie, 'poc', id);
-  async function requestCatalog(response: Response) {
+  async function requestCatalog(
+    response: Response,
+    requestId: unknown = rpcId,
+  ) {
     host.fetch = async () => response;
     return app.inject({
       method: 'POST',
@@ -597,7 +600,7 @@ test('the model catalog forwards available models without exposing Native diagno
       },
       payload: {
         type: 'client-request',
-        rpcId,
+        rpcId: requestId,
         method: 'session/modelCatalog',
         payload: { args: {} },
       },
@@ -664,6 +667,23 @@ test('the model catalog forwards available models without exposing Native diagno
       );
       expect(malformed.statusCode).toBe(503);
       expect(malformed.body).not.toContain(diagnostic);
+    }
+    for (const [status, requestId] of [
+      [502, rpcId],
+      [200, 17],
+    ] as const) {
+      let canceled = false;
+      const body = new ReadableStream({
+        cancel() {
+          canceled = true;
+        },
+      });
+      const rejected = await requestCatalog(
+        new Response(body, { status }),
+        requestId,
+      );
+      expect(rejected.statusCode).toBe(503);
+      expect(canceled).toBe(true);
     }
     const mismatched = await requestCatalog(
       Response.json({

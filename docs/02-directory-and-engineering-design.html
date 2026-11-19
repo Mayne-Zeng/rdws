@@ -849,6 +849,19 @@
   <p>交付复审第二版 APPROVE。用真实 PostgreSQL 事务核对同账号两次登录的较早截止时间，同时验证 HTTP 详情不暴露内部期限字段。通过确定性时钟与运行栅栏验证到期或撤权后的成功回复为零。IPC 夹具分别验证 64 KiB 信封限制和 64 个在途槽位、发送回调失败、乱序关联、断开及丢弃更换进程或超时的结果。跨项目读取预算测试中，第五个未完成的读取在四槽耗尽时拒绝，释放请求仍可执行。已完成的读取归还槽位。</p>
   <p><code>caffeinate -i pnpm check</code> 返回 0（32 文件、195 项，类型、lint、格式和构建通过），构建保留主包体积提示。<code>caffeinate -i pnpm test:e2e</code> 返回 0（39 项）。补审后 <code>caffeinate -i pnpm test tests/integration/business-flow.test.ts -t 'the context snapshot'</code> 返回 0（聚焦 1 项），同次 <code>caffeinate -i pnpm test:web-live tests/web-live/context-denied.spec.ts</code> 返回 0（2 项），精确核对清空输入框后按钮恢复原文以及供应商零到达。类型、lint、格式和 <code>pnpm validate:baseline</code> 随补审复跑通过。本地修订为 <code>refactor: route native context through inherited IPC</code>。</p>
 
+  <h4 id="t13-native-loopback-direct-20261119">11.16.20 正式 Native 环回传输直连</h4>
+  <p>Change / R3，基线 <code>c67a7ce</code>。T13 暂停外发方案的两面初审发现，BFF 的 Native HTTP 控制及读取依赖全局 <code>fetch</code>。§11.16.18 已证实 Node 全局代理可接收本应限于回环的请求。正式 Host 在取得就绪证明、准备工作区及恢复会话时都会携带 Native 签票。锁定 <code>ws</code> 在本机 Node 24.20.0 已由其直连函数绕过默认 agent，本切片显式固化这一行为。完成后再继续暂停启动、统一模型运输和撤权定序。</p>
+  <ol>
+    <li>Native Host HTTP 控制和数据路径逐次使用 <code>http.request</code> 的 <code>agent: false</code>。只接受解析后与本代选定 <code>http://127.0.0.1</code> 完整 origin 一致且无用户信息的路径，校验通过后才写出既有签票。保留现有 origin、Host 生命周期和 AbortSignal。拒绝 301、302、303、307、308 及 HTTP upgrade，保留其他状态。用标准 Request 归一化 headers 和请求体，用 Web ReadableStream 转交响应，HEAD 及 204、205、304 留空体。正式 Native 请求 identity，若收到了有正文的其他编码，拒绝并关闭连接。上传错误、响应头后中止、响应流取消和不读取的失败响应均回收连接。全局代理配置沿原规则。</li>
+    <li>BFF→Native 的上游 WebSocket 显式直连并关闭重定向，仍验证最初登录、当前授权和原生握手。浏览器、供应商、镜像和上下文 IPC 各自沿原边界。回退到 <code>c67a7ce</code> 前须先停相关 BFF，或实际验证旧版的代理环境排除了本机 Native 端点。</li>
+    <li>聚焦核对实际请求头及正文、响应流、空体、目标端口和异常响应、上传故障、已收到响应头的取消及连接实际关闭。以默认 <code>fetch</code> 和默认 Node HTTP 进入受控代理作两项阳性，代理分别计 HTTP、CONNECT 和 Upgrade。开启代理后启动正式 BFF 与锁版 Native，在受管项目上核对真实签名就绪、HTTP 历史、<code>session/follow</code> 收到快照及合成供应商实际收到唯一需求标记，代理不得新增到达。测试恢复原代理设置。程序化代理的实证使用仓库锁定的 Node 24.20.0。支持范围内较旧且没有程序化接口时，项目旅程仍运行，并省略代理专用断言。执行聚焦、<code>pnpm check</code>、<code>pnpm test:e2e</code> 与基线。</li>
+  </ol>
+  <p>后续暂停方案还需约束回退目标。如果回至不支持暂停的修订，需要保持 Native 停止，或先有独立验证的部署层外发阻断。独立 SDK 探针、暂停期间的同键核对与显式工作台提示仍须按其范围验收。</p>
+  <p>第二版方案双面独立复审均 APPROVE。首轮补齐完整 origin 校验、资源关闭、两类代理正对照、实际冷启动与快照、Node 版本和回退边界。改前，在已启动的真实 Host 上启用受控代理后运行 <code>caffeinate -i pnpm test tests/integration/session-capability-preset.test.ts -t 'released capability'</code> 返回 1，正式发送响应缺少原生受理结果。</p>
+  <p>改后，同命令返回 0（聚焦 1 项）。在 Node 24.20.0 下，启动正式 BFF 和受管项目 Native 前已启用代理。默认 fetch 到达代理的 CONNECT，默认 Node HTTP 到达代理的普通请求。随后完成真实签名启动、合成供应商实际请求与唯一需求上下文、历史、冷启动及 WebSocket follow 快照。代理的 HTTP、CONNECT 和 Upgrade 计数无新增。<code>caffeinate -i pnpm test tests/integration/native-loopback-http.test.ts</code> 返回 0（3 项），复核流水式读取、空体、拒绝响应和上传／下载取消的对端连接关闭。</p>
+  <p>独立交付第二版复审 APPROVE。模型目录上游非成功或请求 ID 无效时，BFF 会先取消未读取的正文。模型目录定点用例在处理保持打开的失败流时改前返回 1，补上取消后通过。协议夹具以第二个实际监听端口为错误目标及重定向目标，首跳实收合成票据，第二端口零访问。补审后合并复跑 <code>caffeinate -i pnpm test tests/integration/session-lifecycle.test.ts tests/integration/native-loopback-http.test.ts tests/integration/session-capability-preset.test.ts</code> 返回 0（3 文件、27 项）。</p>
+  <p>最终 <code>caffeinate -i pnpm check</code> 返回 0（33 个测试文件、198 项，类型、lint、格式和构建通过），构建仍提示主包体积。<code>caffeinate -i pnpm test:e2e</code> 返回 0（39 项）。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>fix: keep Native loopback traffic off global proxies</code>。T13 暂停启动、正式模型通道和逐次授权均继续按各自验收判据推进。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

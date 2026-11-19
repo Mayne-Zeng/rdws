@@ -14,6 +14,7 @@ import {
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseDocument } from 'yaml';
+import { nativeLoopbackRequest } from './loopback-http.ts';
 import { serveContextIpc, type ContextHandler } from '../bridge/context-ipc.ts';
 import {
   signGrant,
@@ -558,18 +559,24 @@ export class NativeWebHost {
       operation,
       bodyHash: bodyHash(body),
     });
-    const response = await fetch(this.origin + '/_rdws/' + operation, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-rdws-delegation': token,
-        origin: this.origin,
+    const response = await nativeLoopbackRequest(
+      this.origin,
+      '/_rdws/' + operation,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-rdws-delegation': token,
+          origin: this.origin,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(operation === 'health' ? 500 : 5000),
       },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(operation === 'health' ? 500 : 5000),
-      redirect: 'error',
-    });
-    if (!response.ok) throw new Error('Native control unavailable');
+    );
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      throw new Error('Native control unavailable');
+    }
     return response.json();
   }
   async preparePreset(requirementId: string, selection: PresetSelection) {
@@ -600,26 +607,26 @@ export class NativeWebHost {
     init: RequestInit = {},
   ) {
     await this.start();
-    return fetch(
-      this.origin +
-        (path === '/api/rdws/bootstrap'
-          ? '/_rdws/bootstrap'
-          : path.startsWith('/api/')
-            ? '/_rdws' + path
-            : path),
+    const headers = new Headers(init.headers);
+    headers.set(
+      'x-rdws-delegation',
+      typeof grant === 'string' ? grant : this.ticket(grant),
+    );
+    headers.set('origin', this.origin);
+    return nativeLoopbackRequest(
+      this.origin,
+      path === '/api/rdws/bootstrap'
+        ? '/_rdws/bootstrap'
+        : path.startsWith('/api/')
+          ? '/_rdws' + path
+          : path,
       {
         ...init,
-        headers: {
-          ...init.headers,
-          'x-rdws-delegation':
-            typeof grant === 'string' ? grant : this.ticket(grant),
-          origin: this.origin,
-        },
+        headers,
         signal: AbortSignal.any([
           this.signal,
           init.signal ?? AbortSignal.timeout(30000),
         ]),
-        redirect: 'error',
       },
     );
   }

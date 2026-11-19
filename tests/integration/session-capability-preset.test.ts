@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
+import * as http from 'node:http';
 import {
   mkdir,
   mkdtemp,
@@ -66,6 +67,22 @@ test('released capability versions stay scoped through binding changes, replay a
   const profile = join(config, 'profiles', 'rdws');
   const origin = process.env.RDWS_ORIGIN!;
   const calls: string[] = [];
+  const contextMarker = 'Native proxy isolation context ' + randomUUID();
+  const proxyHits = { request: 0, connect: 0, upgrade: 0 };
+  let positiveProxyHits: typeof proxyHits | undefined;
+  let restoreProxy: (() => void) | undefined;
+  const proxy = createServer((_request, response) => {
+    proxyHits.request++;
+    response.writeHead(502).end();
+  });
+  proxy.on('connect', (_request, socket) => {
+    proxyHits.connect++;
+    socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+  });
+  proxy.on('upgrade', (_request, socket) => {
+    proxyHits.upgrade++;
+    socket.destroy();
+  });
   const provider = createServer(async (request, reply) => {
     if (request.url !== '/v1/chat/completions') {
       reply.writeHead(404).end();
@@ -279,8 +296,8 @@ test('released capability versions stay scoped through binding changes, replay a
       [project, actor],
     );
     await db.query(
-      "insert into requirement(id,project_id,title,description,acceptance,lead_id,created_by) values($1,$2,'Preset','test','test',$3,$3),($4,$2,'Neighbor','test','test',$3,$3)",
-      [demand, project, actor, neighbor],
+      "insert into requirement(id,project_id,title,description,acceptance,lead_id,created_by) values($1,$2,'Preset',$5,'test',$3,$3),($4,$2,'Neighbor','test','test',$3,$3)",
+      [demand, project, actor, neighbor, contextMarker],
     );
     for (const entry of [...references, missing, mismatched, dependent])
       await db.query(
@@ -303,6 +320,35 @@ test('released capability versions stay scoped through binding changes, replay a
       'insert into requirement_capability_binding(requirement_id,project_id,template_id,revision) values($1,$2,$3,1)',
       [demand, project, template],
     );
+    if (typeof http.setGlobalProxyFromEnv === 'function') {
+      proxy.listen(0, '127.0.0.1');
+      await once(proxy, 'listening');
+      restoreProxy = http.setGlobalProxyFromEnv({
+        HTTP_PROXY: `http://127.0.0.1:${(proxy.address() as { port: number }).port}`,
+        NO_PROXY: '',
+      });
+      const port = (provider.address() as { port: number }).port;
+      const control = `http://127.0.0.1:${port}/proxy-positive-control`;
+      const response = await fetch(control, {
+        signal: AbortSignal.timeout(2000),
+      }).catch(() => undefined);
+      await response?.body?.cancel();
+      expect(proxyHits.connect).toBeGreaterThan(0);
+      const httpStatus = await new Promise<number | undefined>(
+        (resolve, reject) => {
+          http
+            .get(control, { signal: AbortSignal.timeout(2000) }, (incoming) => {
+              incoming.resume();
+              incoming.once('end', () => resolve(incoming.statusCode));
+              incoming.once('error', reject);
+            })
+            .once('error', reject);
+        },
+      );
+      expect(httpStatus).toBe(502);
+      expect(proxyHits.request).toBeGreaterThan(0);
+      positiveProxyHits = { ...proxyHits };
+    }
     await boot();
     const login = await app!.inject({
       method: 'POST',
@@ -486,7 +532,7 @@ test('released capability versions stay scoped through binding changes, replay a
           '/api/dsh/' +
           demand +
           `/native/api/remote.mux?generation=${randomUUID()}&login=${binding}`,
-        { headers: { origin, cookie } },
+        { headers: { origin, cookie }, agent: false },
       );
       const streamId = randomUUID();
       let item: unknown;
@@ -554,6 +600,7 @@ test('released capability versions stay scoped through binding changes, replay a
     );
     expect(calls.length).toBe(2);
     for (const call of calls) {
+      expect(call).toContain(contextMarker);
       const { tools } = JSON.parse(call);
       expect(tools ?? []).toEqual([]);
     }
@@ -740,9 +787,13 @@ test('released capability versions stay scoped through binding changes, replay a
       { sessionId: session1, error: expect.any(String) },
       observed.values[1],
     ]);
+    if (positiveProxyHits) expect(proxyHits).toEqual(positiveProxyHits);
   } finally {
     vi.unstubAllEnvs();
+    restoreProxy?.();
     await app?.close();
+    if (proxy.listening)
+      await new Promise<void>((resolve) => proxy.close(() => resolve()));
     await new Promise<void>((resolve) => provider.close(() => resolve()));
     if (testDatabase) {
       await db.query(

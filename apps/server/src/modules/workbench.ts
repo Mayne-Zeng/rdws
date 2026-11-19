@@ -105,7 +105,10 @@ const isSessionWrite = (request: FastifyRequest) =>
   (request.routeOptions.url === sessionsPath ||
     request.routeOptions.url === sessionForkPath);
 function fail(statusCode: number, message: string): never {
-  throw Object.assign(new Error(message), { statusCode });
+  throw Object.assign(new Error(message), {
+    statusCode,
+    publicMessage: message,
+  });
 }
 async function publicModelCatalog(response: Response, rpcId: unknown) {
   const message = '模型目录暂不可用';

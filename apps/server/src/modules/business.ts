@@ -1994,7 +1994,11 @@ export function createBusiness(db: Database) {
     const key = projectId ? 'project:' + projectId : 'platform';
     let fenced = false;
     try {
-      return await transaction(async (tx) => {
+      // Management commands deliberately keep one explicit attempt: the fence
+      // tests (project-administration) require a forced failure to surface as-is,
+      // and recovery replays the original command instead of auto-retrying.
+      return await db.transaction(async (tx) => {
+        await tx.execute(sql`set local lock_timeout='3s'`);
         const [session] = await tx
           .select()
           .from(schema.session)

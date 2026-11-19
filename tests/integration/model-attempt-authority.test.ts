@@ -6,7 +6,7 @@ import { ContextRuns } from '../../apps/server/src/modules/runtime-context.ts';
 const route = 'https://fixture.invalid/v1/chat/completions';
 const model = { provider: 'fixture', model: 'fixture-default' };
 
-function fixture() {
+function fixture(titleEnabled = false) {
   const generation = randomUUID();
   const key = randomUUID();
   const aud = 'rdws:bff:' + generation;
@@ -45,6 +45,13 @@ function fixture() {
           revision === state.revision && destination === state.destination,
       };
     },
+    titleEnabled
+      ? async (who, _requirement, _session, _related, write) => {
+          reads.push([who.authSessionId]);
+          return write(state.expires);
+        }
+      : undefined,
+    titleEnabled,
   );
   const older = runs.admit(
     { userId: 'owner', authSessionId: 'first-login' },
@@ -142,8 +149,92 @@ function fixture() {
     openStep,
     release,
     attempt,
+    position,
+    signed,
   };
 }
+
+async function prepareFirstTitle() {
+  const f = fixture(true);
+  await f.step(1);
+  const source = {
+    ...f.position.relatedRuns[0]!,
+    sourceSeq: 12,
+    sourceId: randomUUID(),
+  };
+  const origin = (await f.runs.handle(
+    source,
+    f.signed(source, 'model-title-origin'),
+  )) as { originId: string; expiresAt: number };
+  const release = { ...f.position, titleDisposition: 'normal' };
+  await f.runs.handle(release, f.signed(release, 'context-release'));
+  const prepare = {
+    ...source,
+    originId: origin.originId,
+    callId: randomUUID(),
+  };
+  const ready = (await f.runs.handle(
+    prepare,
+    f.signed(prepare, 'model-title-prepare'),
+  )) as { bindingId: string };
+  await expect(
+    f.runs.handle(prepare, f.signed(prepare, 'model-title-prepare')),
+  ).rejects.toThrow();
+  const attempt = f.attempt(ready.bindingId);
+  const request = {
+    ...attempt,
+    call: { ...attempt.call, id: prepare.callId, purpose: 'session-title' },
+  };
+  return { f, origin, prepare, request };
+}
+
+test('a prepared first-message title keeps only its original login after the main run retires', async () => {
+  const { f, request } = await prepareFirstTitle();
+  const write = vi.fn(() => 'submitted' as const);
+  await expect(
+    f.runs.authorizeModelWireAttempt(
+      { ...request, call: { ...request.call, id: randomUUID() } },
+      write,
+    ),
+  ).rejects.toMatchObject({ statusCode: 403 });
+  const commit = await f.runs.authorizeModelWireAttempt(request, write);
+  expect(commit.outcome).toBe('submitted');
+  expect(f.reads.at(-1)).toEqual(['first-login']);
+  commit.accept429();
+  await expect(
+    f.runs.authorizeModelWireAttempt(
+      { ...request, attemptId: randomUUID() },
+      write,
+    ),
+  ).rejects.toThrow();
+  expect(write).toHaveBeenCalledOnce();
+});
+
+test.each(['expired', 'closed', 'cold'] as const)(
+  'a %s title cannot use a prepared connection or be prepared again',
+  async (reason) => {
+    const { f, origin, prepare, request } = await prepareFirstTitle();
+    const write = vi.fn(() => 'submitted' as const);
+    let clock: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      if (reason === 'expired')
+        clock = vi.spyOn(Date, 'now').mockReturnValue(origin.expiresAt);
+      if (reason === 'closed') {
+        await f.runs.handle(prepare, f.signed(prepare, 'model-title-close'));
+      }
+      if (reason === 'cold') f.runs.clear();
+      await expect(
+        f.runs.authorizeModelWireAttempt(request, write),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      await expect(
+        f.runs.handle(prepare, f.signed(prepare, 'model-title-prepare')),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      clock?.mockRestore();
+    }
+  },
+);
 
 test('only the exact current model, route, session and attempt use the original login batch', async () => {
   const { runs, reads, step, attempt } = fixture();

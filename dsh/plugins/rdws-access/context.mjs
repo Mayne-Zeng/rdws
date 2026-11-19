@@ -1,10 +1,12 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import { signGrant, bodyHash } from '../../bridge/access.ts';
+import { cancelTitleOrigins, rememberTitleOrigin } from './title-binding.mjs';
 export function installContext(ctx, config, key, route, requestContext) {
   const authorized = new Map(),
     agents = new WeakMap(),
     earlyInsertions = new WeakMap(),
+    completedTitleTurns = new WeakMap(),
     modelSteps = new Map();
   let modelSequence = 0;
   const lookup = (r) => r.sessionId + ':' + r.requestId + ':' + r.peerNonce;
@@ -99,6 +101,8 @@ export function installContext(ctx, config, key, route, requestContext) {
     return { authorized: true };
   });
   route('run.cancel', (input) => {
+    if (config.firstMessageTitle)
+      cancelTitleOrigins((origin) => origin.runId === input.runId);
     for (const [id, r] of authorized)
       if (r.runId === input.runId) authorized.delete(id);
     return { cancelled: true };
@@ -144,12 +148,15 @@ export function installContext(ctx, config, key, route, requestContext) {
     },
     { global: true },
   );
-  function retire(run, agent, turn) {
+  function retire(run, agent, normal = false) {
     authorized.delete(lookup(run));
+    if (config.firstMessageTitle && !normal)
+      cancelTitleOrigins((origin) => origin.runId === run.runId);
     void service('context-release', {
       ...run,
       agentGeneration: agents.get(agent)?.generation ?? 'retired',
-      turn: turn ?? run.claimedTurn ?? 0,
+      turn: run.claimedTurn ?? 0,
+      ...(normal && { titleDisposition: 'normal' }),
     }).catch(() => {});
   }
   ctx.on(
@@ -196,6 +203,83 @@ export function installContext(ctx, config, key, route, requestContext) {
     });
     return requestContext(body, token, signal);
   }
+  if (config.firstMessageTitle) {
+    ctx.on(
+      'session/disposed',
+      (session) =>
+        cancelTitleOrigins((_origin, id) => id === String(session.id)),
+      { global: true },
+    );
+    ctx.on(
+      'session/event',
+      (session, event) => {
+        const sessionId = String(session.id);
+        if (event.type === 'turn/end') {
+          const { turn, reason } = event.data;
+          if (reason.kind === 'completed' || reason.kind === 'max-tokens')
+            completedTitleTurns.set(session, turn);
+          else
+            cancelTitleOrigins(
+              (origin, id) => id === sessionId && origin.turn === turn,
+            );
+          return;
+        }
+        if (event.type !== 'user/message' || session.header.isSeeded) return;
+        const { source, id: sourceId } = event.data;
+        if (source?.kind !== 'user' || source.principal?.kind !== 'rdws')
+          return;
+        const run = authorized.get(
+          lookup({
+            sessionId,
+            requestId: source.rpcId,
+            peerNonce: source.principal.nonce,
+          }),
+        );
+        if (
+          !run?.claimed ||
+          !run.agentGeneration ||
+          run.expiresAt <= Date.now()
+        )
+          return;
+        const body = {
+          runId: run.runId,
+          hostGeneration: run.hostGeneration,
+          requirementId: run.requirementId,
+          sessionId,
+          requestId: run.requestId,
+          peerNonce: run.peerNonce,
+          agentGeneration: run.agentGeneration,
+          turn: run.claimedTurn,
+          sourceSeq: event.seq,
+          sourceId,
+        };
+        rememberTitleOrigin(sessionId, () => {
+          const early = service('model-title-origin', body).catch(
+            () => undefined,
+          );
+          return {
+            ...body,
+            authSessionId: run.authSessionId,
+            admittedAt: run.admittedAt,
+            expiresAt: run.expiresAt,
+            async prepare(callId) {
+              const origin = await early;
+              if (origin?.originId)
+                return service('model-title-prepare', {
+                  ...body,
+                  originId: origin.originId,
+                  callId,
+                });
+            },
+            async close() {
+              if (await early) await service('model-title-close', body);
+            },
+          };
+        });
+      },
+      { global: true },
+    );
+  }
   function closeModelStep(record) {
     if (!record || modelSteps.get(record.body.sessionId) !== record) return;
     modelSteps.delete(record.body.sessionId);
@@ -216,19 +300,33 @@ export function installContext(ctx, config, key, route, requestContext) {
       )
     );
   }
-  function release(state) {
+  function release(state, allowNormalFor) {
     if (!state?.binding) return;
     const binding = state.binding;
     state.binding = undefined;
-    for (const r of [binding, ...(binding.relatedRuns ?? [])])
-      authorized.delete(lookup(r));
-    void service('context-release', binding).catch(() => {});
+    const batch = [binding, ...(binding.relatedRuns ?? [])];
+    const normal =
+      allowNormalFor !== undefined && allowNormalFor === binding.turn;
+    const runIds = new Set(batch.map((run) => run.runId));
+    if (config.firstMessageTitle && !normal)
+      cancelTitleOrigins((origin) => runIds.has(origin.runId));
+    for (const r of batch) authorized.delete(lookup(r));
+    void service(
+      'context-release',
+      normal ? { ...binding, titleDisposition: 'normal' } : binding,
+    ).catch(() => {});
   }
   ctx.on(
     'agent/created',
     ({ agent, source }) => {
-      const state = { generation: randomUUID() };
+      const state = agents.get(agent) ?? { generation: randomUUID() };
       agents.set(agent, state);
+      if (config.firstMessageTitle)
+        cancelTitleOrigins(
+          (origin, id) =>
+            id === String(agent.session.id) &&
+            origin.agentGeneration !== state.generation,
+        );
       const early = earlyInsertions.get(agent);
       earlyInsertions.delete(agent);
       if (source !== 'resume') return;
@@ -263,6 +361,12 @@ export function installContext(ctx, config, key, route, requestContext) {
     'agent/disposed',
     ({ agent }) => {
       closeAgentModelStep(agent);
+      if (config.firstMessageTitle)
+        cancelTitleOrigins(
+          (origin, id) =>
+            id === String(agent.session.id) &&
+            origin.agentGeneration === agents.get(agent)?.generation,
+        );
       release(agents.get(agent));
       agents.delete(agent);
       earlyInsertions.delete(agent);
@@ -276,10 +380,11 @@ export function installContext(ctx, config, key, route, requestContext) {
     ({ agent, status }) => {
       if (status === 'idle') {
         closeAgentModelStep(agent);
-        release(agents.get(agent));
+        const completedTurn = completedTitleTurns.get(agent.session);
+        release(agents.get(agent), completedTurn);
         for (const run of authorized.values())
           if (run.sessionId === String(agent.session.id) && run.claimed)
-            retire(run, agent);
+            retire(run, agent, completedTurn === run.claimedTurn);
       }
     },
     { global: true },
@@ -315,7 +420,8 @@ export function installContext(ctx, config, key, route, requestContext) {
         const prompts = decision.messages.filter((m) =>
           ['user', 'retry'].includes(m.source?.kind),
         );
-        if (state.binding && state.binding.turn !== turn) release(state);
+        if (state.binding && state.binding.turn !== turn)
+          release(state, completedTitleTurns.get(agent.session));
         const bindings = state.binding
           ? [
               { ...state.binding, relatedRuns: undefined },
@@ -504,6 +610,14 @@ export function installContext(ctx, config, key, route, requestContext) {
   );
   return {
     revoke(authSessionId, requirementId, cutoff) {
+      if (config.firstMessageTitle)
+        cancelTitleOrigins(
+          (origin) =>
+            origin.authSessionId === authSessionId &&
+            origin.admittedAt <= cutoff &&
+            (!requirementId || origin.requirementId === requirementId),
+          { abortStream: false },
+        );
       for (const [id, run] of authorized)
         if (
           run.authSessionId === authSessionId &&

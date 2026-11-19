@@ -188,6 +188,7 @@ export function createModelHttpsRelay(
   destination: string,
   ca?: string | Buffer,
   projectBody?: (body: Buffer) => Buffer | undefined,
+  purpose?: 'session-title',
 ) {
   let url: URL;
   try {
@@ -215,7 +216,7 @@ export function createModelHttpsRelay(
       process.platform !== 'darwin' ||
       process.version !== 'v24.20.0' ||
       request.destination !== url.href ||
-      request.call.purpose !== undefined ||
+      request.call.purpose !== purpose ||
       !request.call.bindingId ||
       !request.isCurrent() ||
       request.signal.aborted ||

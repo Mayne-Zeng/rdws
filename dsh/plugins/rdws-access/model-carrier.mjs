@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { Socket } from 'node:net';
+import { titleCall } from './title-binding.mjs';
 import {
   openModelCarrier,
   snapshotModelRoutes,
@@ -54,8 +55,10 @@ export function installModelCarrier(
   ctx.on(
     'llm/stream',
     async function* (options, next) {
+      const title =
+        options.purpose === 'session-title' ? titleCall(options) : undefined;
       const call = {
-        id: randomUUID(),
+        id: title?.id ?? randomUUID(),
         provider: options.provider,
         model: options.model,
         sessionId: options.sessionId,
@@ -63,7 +66,7 @@ export function installModelCarrier(
         bindingId:
           options.purpose === undefined && isAgentLoopRequest(options)
             ? modelBindingFor(options)
-            : undefined,
+            : title?.bindingId,
       };
       const stream = calls.run(call, () => next()[Symbol.asyncIterator]());
       try {

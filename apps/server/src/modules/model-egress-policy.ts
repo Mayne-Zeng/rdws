@@ -10,7 +10,15 @@ const unavailable = () => new Error('Main model egress policy is not usable');
 export function mainModelPolicy(value: unknown) {
   if (
     !isRecord(value) ||
-    Object.keys(value).length !== 4 ||
+    !onlyKeys(value, [
+      'projectId',
+      'provider',
+      'model',
+      'destination',
+      'firstMessageTitle',
+    ]) ||
+    (value.firstMessageTitle !== undefined &&
+      typeof value.firstMessageTitle !== 'boolean') ||
     typeof value.projectId !== 'string' ||
     !validProjectId(value.projectId) ||
     typeof value.provider !== 'string' ||
@@ -43,6 +51,9 @@ export function mainModelPolicy(value: unknown) {
     provider: value.provider,
     model: value.model,
     destination: url.href,
+    ...(value.firstMessageTitle === true
+      ? { firstMessageTitle: true as const }
+      : {}),
   });
 }
 
@@ -164,4 +175,25 @@ export function prepareMainModelBody(body: Buffer, model: string) {
   } catch {
     return undefined;
   }
+}
+
+export function prepareTitleModelBody(body: Buffer, model: string) {
+  const projected = prepareMainModelBody(body, model);
+  if (!projected) return;
+  const request = JSON.parse(projected.toString('utf8')) as {
+    messages: { role: string }[];
+    max_completion_tokens?: number;
+    max_tokens?: number;
+  };
+  const budget = request.max_completion_tokens ?? request.max_tokens;
+  if (
+    request.messages.every(
+      ({ role }) => role === 'system' || role === 'user',
+    ) &&
+    request.messages.filter(({ role }) => role === 'user').length === 1 &&
+    Number.isInteger(budget) &&
+    budget! > 0 &&
+    budget! <= 4096
+  )
+    return projected;
 }

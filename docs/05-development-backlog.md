@@ -177,7 +177,7 @@
   - 前置：T11、T14。
   - 来源：I3-CONTEXT、D21；已有上下文同步契约。
 
-- [ ] **T13 · 模型与供应商管理**（进行中：文本主推理及受管目录通过本机验收，待选模、其它用途与具名部署）
+- [ ] **T13 · 模型与供应商管理**（进行中：文本主推理、受管目录及首消息标题通过本机验证，待选模、附件与具名部署）
   - 说明：适配 DSH 原生配置界面和授权作用域，支持平台、项目和个人的分层选择。
   - 可验收目标：配置使用原生 Provider／Profile／Credentials；项目只使用允许集合；个人只在允许范围选择本次会话模型；平台锁定项不能被下级覆盖；普通 DTO、日志与页面不暴露凭据；不另建模型调用权威。
   - 已确认的选模验收：本人可在同一会话反复选择允许的模型，在下次本人有权发送时重验并应用。已选模型被停用或移出允许集合时，保留待发送输入，提示重新选择可用模型，由用户再次发送，无自动默认回退。验收分别核对保存、实际 Native 生效、撤权和其他会话隔离。详见[时点和验收](02-directory-and-engineering-design.html#t13-send-time-acceptance-20261118)。
@@ -192,6 +192,7 @@
   - 已交付修复：[同键提示词提交竞争](02-directory-and-engineering-design.html#t13-prompt-overlap-evidence-20261119)。重叠发送只允许首个请求持有和清理运行，竞争返回 409，其余会话和串行原键沿用现有 Native 路径。独立复审、整仓 180 项、浏览器 32 项及追溯通过。
   - 已交付修复：[旧标签页的原登录绑定](02-directory-and-engineering-design.html#t13-native-login-binding-evidence-20261119)。Native HTTP 与 WebSocket 按页面原登录校验，Cookie 更换后旧页停发。同账号登录变化后的原草稿可在当前页复制，重新打开后以新登录读取。独立复审、整仓 183 项、浏览器 34 项、本机 Native 断连和追溯校验通过。逐次推理授权和本人选模入口仍待交付。
   - 实现前验证：[发出前的传输证据](02-directory-and-engineering-design.html#t13-provider-dispatch-probe-20261119)。已在锁定版本的 PiAi HTTP 路径核对首次推理、429 后重试及独立后台标题。夹具可阻断指定的实际请求，标题原生记录可追溯到原消息。产品授权方案继续按 §11.16.7 复审。
+  - 已交付子项：[首消息标题的受管出口](02-directory-and-engineering-design.html#t13-title-wiring-evidence-20261120)。锁定 Native、隔离受管 PostgreSQL 和本机 HTTPS 核对原消息刷盘、主轮释放、登录撤权与实际标题写出。双面交付复审、定点 20 项、整仓 278 项及两组浏览器共 44 项通过。开关限定在回环集成夹具，正式环境、附件外发和会话选模继续按各自判据验收。
   - 实现前验证：[DeepSeek Messages 与 Files](02-directory-and-engineering-design.html#t13-deepseek-messages-dispatch-probe-20261119)。回环实证核对上传、内联回退、缓存文件引用及扩展准备失败，确认 Files 与 Messages 各有实际外发边界。工作台图片输入及产品逐次授权未在此探针启用。
   - 实现前验证：[入箱领取选模与派生边界](02-directory-and-engineering-design.html#t13-claim-selection-probe-20261119)。实际排队发送确认本轮原模型及下轮目标模型，阻止后仍可能把未外发的选择带入派生。后续以已确认的出口及派生验收为准，现有证据用于实施方案。
   - 已交付修复：[冷恢复后首次新发送](02-directory-and-engineering-design.html#t13-queued-recovery-evidence-20261119)。已刷盘的旧输入保留在 Native 原始日志。新的有效入箱才取消缺少运行绑定的旧活动项，首次新发送完成，旧键在再次冷启后仍可核对。独立复审、整仓 187 项、浏览器 34 项、本机 Native 通知故障回归及基线通过。
@@ -213,7 +214,7 @@
   - 已补验：[同一步跨登录](02-directory-and-engineering-design.html#t13-main-bff-login-batch-evidence)。真实 Native 第二步同时领取两个登录的输入。较早登录撤权后，第二步零应用写入及零 HTTP 到达，有权对照含两条正文并完成。独立复审及 28 项聚焦测试通过。动态选模方向和待核对行为见[交叉评审记录](02-directory-and-engineering-design.html#t13-dynamic-model-technical-review-20261120)。
   - 实现前补验：[Native 模型投影与实际外发](02-directory-and-engineering-design.html#t13-native-last-used-evidence-20261120)。在真实首写前撤权后，读取原生 `lastUsed` 可见模型，供应商仍零到达。派生验收以实际首写证据判断既有选择是否已经外发。
   - 已交付子项：[受管项目模型目录](02-directory-and-engineering-design.html#t13-mediated-model-catalog-20261120)。公开入口按当前项目的冻结策略和 Native 可路由记录公布精确模型。实例默认保留原生配置，受管 paused 沿用原生目录。方案和交付独立复审、整仓 268 项、浏览器 44 项、真实 Native 本机模式切换及基线校验通过。
-  - 实现前核对：[Native 首消息标题的来源](02-directory-and-engineering-design.html#t13-title-origin-evidence-20261120)。独立技术裁决及安装包内存探针确认标题插件作用域内的实际调用可与原始消息序列关联。正式登录、冷代、撤权与首写验收待交付。
+  - 实现前核对：[Native 首消息标题的来源](02-directory-and-engineering-design.html#t13-title-origin-evidence-20261120)。独立技术裁决及安装包内存探针确认标题插件作用域内的实际调用可与原始消息序列关联。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。

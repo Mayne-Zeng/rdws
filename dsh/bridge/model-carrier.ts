@@ -98,6 +98,7 @@ export interface NativeModelTransport {
   routes: Readonly<Record<string, string>>;
   handle(request: ModelCarrierRequest): Promise<Response>;
   signal?: AbortSignal;
+  firstMessageTitle?: boolean;
 }
 
 const unavailable = () => new Error('Native model carrier unavailable');

@@ -12,6 +12,7 @@ import { ContextRuns, contextSnapshot } from './runtime-context.ts';
 import { createSessionOperations } from './session-operations.ts';
 import {
   prepareMainModelBody,
+  prepareTitleModelBody,
   type MainModelPolicy,
 } from './model-egress-policy.ts';
 
@@ -96,6 +97,7 @@ export function createProjectRuntimes(
                 write,
               )
           : undefined,
+        policy?.firstMessageTitle === true,
       ),
       inFlightPrompts: new Set<string>(),
       acceptedPrompts: new Map<string, number>(),
@@ -136,6 +138,14 @@ export function createProjectRuntimes(
           undefined,
           (body) => prepareMainModelBody(body, mainPolicy.model),
         );
+        const titleRelay = mainPolicy.firstMessageTitle
+          ? createModelHttpsRelay(
+              mainPolicy.destination,
+              undefined,
+              (body) => prepareTitleModelBody(body, mainPolicy.model),
+              'session-title',
+            )
+          : undefined;
         const native = new NativeWebHost(
           root,
           configuration,
@@ -144,8 +154,11 @@ export function createProjectRuntimes(
           'mediated',
           {
             routes: { main: mainPolicy.destination },
+            firstMessageTitle: mainPolicy.firstMessageTitle,
             handle: (request) =>
-              relay(request, (write) =>
+              (request.call.purpose === 'session-title' && titleRelay
+                ? titleRelay
+                : relay)(request, (write) =>
                 runtime.runs.authorizeModelWireAttempt(request, write),
               ),
           },

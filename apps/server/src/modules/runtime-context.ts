@@ -101,6 +101,7 @@ type Run = RunBinding & {
   agentGeneration?: string;
   turn?: number;
   submitted?: boolean;
+  titleCancelled?: true;
 };
 type EffectiveModel = {
   provider: string;
@@ -131,6 +132,15 @@ type ModelAttempt = Pick<
   ModelCarrierRequest,
   'routeId' | 'destination' | 'attemptId' | 'call' | 'signal' | 'isCurrent'
 >;
+type TitleOrigin = {
+  bindingId: string;
+  run: Run;
+  sourceSeq: number;
+  sourceId: string;
+  expiresAt: number;
+  phase: 'candidate' | 'prepared' | 'attempted' | 'closed';
+  callId?: string;
+};
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const invalidModel = () => businessError(403, '当前模型尝试未获授权');
 function parseStepMarker(input: unknown): StepMarker {
@@ -160,6 +170,7 @@ export class ContextRuns {
   private runs = new Map<string, Run>();
   private nonces = new Map<string, number>();
   private modelSteps = new Map<string, ModelStep>();
+  private titles = new Map<string, TitleOrigin>();
   constructor(
     readonly generation: string,
     private verify: (token: unknown) => Grant | undefined,
@@ -186,6 +197,7 @@ export class ContextRuns {
       relatedActors: Actor[],
       write: (validBefore: number) => T,
     ) => Promise<T>,
+    private allowTitles = false,
   ) {}
   admit(
     who: Actor,
@@ -241,6 +253,14 @@ export class ContextRuns {
     };
   }
   revoke(authSessionId: string, requirementId?: string) {
+    for (const title of this.titles.values()) {
+      const { run } = title;
+      if (
+        run.who.authSessionId === authSessionId &&
+        (!requirementId || run.requirementId === requirementId)
+      )
+        title.phase = 'closed';
+    }
     for (const [id, r] of this.runs)
       if (
         r.who.authSessionId === authSessionId &&
@@ -249,6 +269,14 @@ export class ContextRuns {
         this.discard(id);
   }
   revokeUser(userId: string, requirementId?: string) {
+    for (const title of this.titles.values()) {
+      const { run } = title;
+      if (
+        run.who.userId === userId &&
+        (!requirementId || run.requirementId === requirementId)
+      )
+        title.phase = 'closed';
+    }
     for (const [id, r] of this.runs)
       if (
         r.who.userId === userId &&
@@ -260,8 +288,18 @@ export class ContextRuns {
     this.runs.clear();
     this.nonces.clear();
     this.modelSteps.clear();
+    this.titles.clear();
   }
-  discard(runId: string) {
+  cancelTitle(sessionId: string) {
+    for (const run of this.runs.values())
+      if (run.sessionId === sessionId) run.titleCancelled = true;
+    const origin = this.titles.get(sessionId);
+    if (origin) origin.phase = 'closed';
+  }
+  discard(runId: string, normal = false) {
+    if (!normal)
+      for (const origin of this.titles.values())
+        if (origin.run.runId === runId) origin.phase = 'closed';
     const run = this.runs.get(runId);
     this.runs.delete(runId);
     if (!run) return;
@@ -307,6 +345,8 @@ export class ContextRuns {
     request: ModelAttempt,
     write: (validBefore: number) => ModelWireOutcome,
   ): Promise<ModelWireCommit> {
+    if (request.call.purpose === 'session-title')
+      return this.authorizeTitleWire(request, write);
     return this.withAuthorizedAttempt(request, (step, validBefore) => {
       const { attemptId } = request;
       step.wireAttempt = attemptId;
@@ -320,6 +360,142 @@ export class ContextRuns {
         },
       };
     });
+  }
+  private async authorizeTitleWire(
+    request: ModelAttempt,
+    write: (validBefore: number) => ModelWireOutcome,
+  ): Promise<ModelWireCommit> {
+    const { call, routeId, destination, signal } = request;
+    const title =
+      typeof call.sessionId === 'string'
+        ? this.titles.get(call.sessionId)
+        : undefined;
+    if (
+      !this.allowTitles ||
+      !title ||
+      title.phase !== 'prepared' ||
+      title.bindingId !== call.bindingId ||
+      title.callId !== call.id ||
+      !uuid.test(request.attemptId) ||
+      !this.selectModel ||
+      !this.lockModelAuthority
+    )
+      return invalidModel();
+    title.phase = 'attempted';
+    const { run } = title;
+    const current = () =>
+      this.titles.get(run.sessionId) === title &&
+      title.phase === 'attempted' &&
+      title.expiresAt > Date.now() &&
+      request.isCurrent() &&
+      !signal.aborted &&
+      !this.closing(run.who.authSessionId, run.who.userId, run.requirementId);
+    if (!current()) return invalidModel();
+    const selection = await this.selectModel(
+      run.who,
+      run.requirementId,
+      run.sessionId,
+    );
+    if (
+      !selection ||
+      selection.provider !== call.provider ||
+      selection.model !== call.model ||
+      !Object.hasOwn(selection.routes, routeId) ||
+      selection.routes[routeId] !== destination
+    )
+      return invalidModel();
+    return this.lockModelAuthority(
+      run.who,
+      run.requirementId,
+      run.sessionId,
+      [],
+      (loginDeadline) => {
+        const validBefore = Math.min(loginDeadline, title.expiresAt);
+        if (!(validBefore > Date.now()) || !current() || !selection.isCurrent())
+          return invalidModel();
+        title.phase = 'closed';
+        return { outcome: write(validBefore), accept429() {} };
+      },
+    );
+  }
+
+  private handleTitle(input: Record<string, unknown>, cap: Grant) {
+    if (
+      !this.allowTitles ||
+      !this.lockModelAuthority ||
+      typeof input.sessionId !== 'string'
+    )
+      return invalidModel();
+    const now = Date.now();
+    const exact = (run: Run) =>
+      Object.entries(this.binding(run)).every(
+        ([key, value]) => input[key] === value,
+      ) &&
+      run.agentGeneration === input.agentGeneration &&
+      run.turn === input.turn &&
+      !!run.agentGeneration &&
+      Number.isSafeInteger(input.sourceSeq) &&
+      Number(input.sourceSeq) > 0 &&
+      typeof input.sourceId === 'string' &&
+      uuid.test(input.sourceId);
+    if (cap.operation === 'model-title-origin') {
+      for (const [id, title] of this.titles)
+        if (title.run.expiresAt <= now) this.titles.delete(id);
+      const run = this.runs.get(String(input.runId));
+      if (!run || run.titleCancelled || !exact(run) || !this.current([run]))
+        return invalidModel();
+      const prior = this.titles.get(input.sessionId);
+      if (prior) {
+        if (
+          prior.phase !== 'candidate' ||
+          prior.expiresAt <= now ||
+          prior.run !== run ||
+          prior.sourceId !== input.sourceId ||
+          prior.sourceSeq !== input.sourceSeq
+        )
+          return invalidModel();
+        return { originId: prior.bindingId, expiresAt: prior.expiresAt };
+      }
+      if (this.titles.size >= 512) return invalidModel();
+      const title: TitleOrigin = {
+        bindingId: randomUUID(),
+        run,
+        sourceSeq: Number(input.sourceSeq),
+        sourceId: String(input.sourceId),
+        expiresAt: Math.min(cap.expiresAt, run.expiresAt),
+        phase: 'candidate',
+      };
+      this.titles.set(input.sessionId, title);
+      return { originId: title.bindingId, expiresAt: title.expiresAt };
+    }
+    const title = this.titles.get(input.sessionId);
+    if (
+      !title ||
+      !exact(title.run) ||
+      title.sourceId !== input.sourceId ||
+      title.sourceSeq !== input.sourceSeq
+    )
+      return invalidModel();
+    if (cap.operation === 'model-title-close') {
+      title.phase = 'closed';
+      return { closed: true };
+    }
+    if (
+      title.phase !== 'candidate' ||
+      title.bindingId !== input.originId ||
+      typeof input.callId !== 'string' ||
+      !uuid.test(input.callId) ||
+      title.expiresAt <= now ||
+      this.closing(
+        title.run.who.authSessionId,
+        title.run.who.userId,
+        title.run.requirementId,
+      )
+    )
+      return invalidModel();
+    title.phase = 'prepared';
+    title.callId = input.callId;
+    return { bindingId: title.bindingId, expiresAt: title.expiresAt };
   }
   private async withAuthorizedAttempt<T>(
     request: ModelAttempt,
@@ -409,9 +585,14 @@ export class ContextRuns {
     if (
       !cap ||
       cap.purpose !== 'service' ||
-      !['context-read', 'context-release', 'model-step-release'].includes(
-        cap.operation ?? '',
-      ) ||
+      ![
+        'context-read',
+        'context-release',
+        'model-step-release',
+        'model-title-origin',
+        'model-title-prepare',
+        'model-title-close',
+      ].includes(cap.operation ?? '') ||
       cap.hostGeneration !== this.generation ||
       !isRecord(input) ||
       cap.bodyHash !== bodyHash(input) ||
@@ -420,6 +601,11 @@ export class ContextRuns {
     )
       businessError(403, '上下文服务请求未获授权');
     this.nonces.set(cap.nonce, cap.expiresAt);
+    if (cap.operation?.startsWith('model-title-')) {
+      const result = this.handleTitle(input, cap);
+      reply?.(result, cap.expiresAt);
+      return result;
+    }
     const inputs = [
       input,
       ...(Array.isArray(input.relatedRuns) ? input.relatedRuns : []),
@@ -453,7 +639,12 @@ export class ContextRuns {
             ([key, value]) => binding[key] === value,
           )
         )
-          this.discard(existing.runId);
+          this.discard(
+            existing.runId,
+            input.titleDisposition === 'normal' &&
+              existing.agentGeneration === binding.agentGeneration &&
+              existing.turn === binding.turn,
+          );
       }
       const result = { released: true };
       reply?.(result, cap.expiresAt);

@@ -16,6 +16,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseDocument } from 'yaml';
 import { nativeLoopbackRequest } from './loopback-http.ts';
+import { firstMessageTitleOverlay } from './title-overlay.ts';
 import { serveContextIpc, type ContextHandler } from '../bridge/context-ipc.ts';
 import {
   serveModelCarrier,
@@ -194,6 +195,7 @@ export class NativeWebHost {
     routes: ReadonlyMap<string, string>;
     handle: NativeModelTransport['handle'];
     signal?: AbortSignal;
+    firstMessageTitle?: boolean;
   };
   private closeCarrier?: () => Promise<void>;
   get signal() {
@@ -215,6 +217,7 @@ export class NativeWebHost {
         routes: snapshotModelRoutes(modelTransport.routes),
         handle: modelTransport.handle,
         signal: modelTransport.signal,
+        firstMessageTitle: modelTransport.firstMessageTitle,
       };
     } else {
       resolveNativeModelEgress(modelEgress);
@@ -384,79 +387,78 @@ export class NativeWebHost {
         )
       )
         await verifyFile(overlay);
-      await writeFile(
-        overlay,
-        JSON.stringify([
-          ...(this.configurationHome
-            ? [
-                {
-                  id: 'credentials',
-                  config: {
-                    path: join(this.configurationHome, '.credentials.yaml'),
-                  },
-                },
-              ]
-            : []),
-          {
-            id: 'webserver',
-            config: { host: '127.0.0.1', port: 0, compression: 'gzip' },
-          },
-          {
-            id: 'web-runtime',
-            config: {
-              openBrowser: false,
-              printUrl: false,
-              surfaceContext: false,
-            },
-          },
-          ...(this.configurationHome &&
-          !rows.some((row) => row.id === 'agent-default-model')
-            ? [
-                {
-                  id: 'agent-default-model',
-                  config: { provider: 'rdws-glm', model },
-                },
-              ]
-            : []),
-          { id: 'desktop-product-telemetry', disabled: true },
-          { id: 'product-analytics', disabled: true },
-          { id: 'harness-dev-context', disabled: true },
-          {
-            insert: [
+      const overlayPatches = [
+        ...(this.configurationHome
+          ? [
               {
-                id: 'rdws-access',
-                name: fileURLToPath(
-                  new URL('../plugins/rdws-access/index.mjs', import.meta.url),
-                ),
+                id: 'credentials',
                 config: {
-                  keyFile,
-                  audience: this.audience,
-                  demandRoot: this.demandRoot,
-                  presetRuntimeHome: root,
-                  projectId: this.projectId,
-                  releasedCapabilities: this.releasedCapabilities,
-                  contextGeneration: this.contextGeneration,
-                  ...(this.modelTransport
-                    ? {
-                        modelRoutes: Object.fromEntries(
-                          this.modelTransport.routes,
-                        ),
-                      }
-                    : {}),
-                  contextEvidenceFile: join(
-                    this.runtimeHome,
-                    'runtime',
-                    this.projectId === LEGACY_POC_PROJECT_ID
-                      ? 'context-evidence.jsonl'
-                      : 'context-evidence-' + this.projectId + '.jsonl',
-                  ),
+                  path: join(this.configurationHome, '.credentials.yaml'),
                 },
               },
-            ],
+            ]
+          : []),
+        {
+          id: 'webserver',
+          config: { host: '127.0.0.1', port: 0, compression: 'gzip' },
+        },
+        {
+          id: 'web-runtime',
+          config: {
+            openBrowser: false,
+            printUrl: false,
+            surfaceContext: false,
           },
-        ]),
-        { mode: 0o600 },
-      );
+        },
+        ...(this.configurationHome &&
+        !rows.some((row) => row.id === 'agent-default-model')
+          ? [
+              {
+                id: 'agent-default-model',
+                config: { provider: 'rdws-glm', model },
+              },
+            ]
+          : []),
+        { id: 'desktop-product-telemetry', disabled: true },
+        { id: 'product-analytics', disabled: true },
+        { id: 'harness-dev-context', disabled: true },
+        {
+          insert: [
+            {
+              id: 'rdws-access',
+              name: fileURLToPath(
+                new URL('../plugins/rdws-access/index.mjs', import.meta.url),
+              ),
+              config: {
+                keyFile,
+                audience: this.audience,
+                demandRoot: this.demandRoot,
+                presetRuntimeHome: root,
+                projectId: this.projectId,
+                releasedCapabilities: this.releasedCapabilities,
+                contextGeneration: this.contextGeneration,
+                ...(this.modelTransport
+                  ? {
+                      modelRoutes: Object.fromEntries(
+                        this.modelTransport.routes,
+                      ),
+                      firstMessageTitle:
+                        this.modelTransport.firstMessageTitle === true,
+                    }
+                  : {}),
+                contextEvidenceFile: join(
+                  this.runtimeHome,
+                  'runtime',
+                  this.projectId === LEGACY_POC_PROJECT_ID
+                    ? 'context-evidence.jsonl'
+                    : 'context-evidence-' + this.projectId + '.jsonl',
+                ),
+              },
+            },
+          ],
+        },
+      ];
+      await writeFile(overlay, JSON.stringify(overlayPatches), { mode: 0o600 });
       const pkg = req.resolve('@deepseek-ai/dsh/package.json');
       const meta = JSON.parse(await readFile(pkg, 'utf8'));
       if (this.modelEgress === 'mediated' && meta.version !== '0.2.2-rc.3')
@@ -494,39 +496,63 @@ export class NativeWebHost {
             process.execPath,
           ]
         : [];
-      const child = spawn(
-        paused ? '/usr/bin/sandbox-exec' : process.execPath,
-        [
-          ...launch,
-          '--import',
-          req.resolve('tsx/esm'),
-          bin,
-          '--profile',
-          'rdws',
-          ...(this.configurationHome ? ['--patch', modelFile] : []),
-          '--patch',
-          fileURLToPath(
-            new URL('../profiles/probe-policy.cordis.yml', import.meta.url),
-          ),
-          '--patch',
-          fileURLToPath(
-            new URL('../profiles/web-readonly.cordis.yml', import.meta.url),
-          ),
-          '--patch',
-          overlay,
-        ],
-        {
-          cwd: this.demandRoot,
+      const executable = paused ? '/usr/bin/sandbox-exec' : process.execPath;
+      const args = [
+        ...launch,
+        '--import',
+        req.resolve('tsx/esm'),
+        bin,
+        '--profile',
+        'rdws',
+        ...(this.configurationHome ? ['--patch', modelFile] : []),
+        '--patch',
+        fileURLToPath(
+          new URL('../profiles/probe-policy.cordis.yml', import.meta.url),
+        ),
+        '--patch',
+        fileURLToPath(
+          new URL('../profiles/web-readonly.cordis.yml', import.meta.url),
+        ),
+        '--patch',
+        overlay,
+      ];
+      if (
+        this.modelTransport?.firstMessageTitle &&
+        !bundles.some(
+          (name) =>
+            name !== '@deepseek-ai/dsh-base' &&
+            name !== '@deepseek-ai/dsh-web-app',
+        ) &&
+        !Object.keys(manifest.dependencies ?? {}).some((name) =>
+          name.startsWith('@deepseek-ai/dsh-session-title'),
+        )
+      ) {
+        const title = await firstMessageTitleOverlay(
+          pkg,
+          executable,
+          args,
+          this.demandRoot,
           env,
-          stdio: [
-            'pipe',
-            'ignore',
-            'pipe',
-            'ipc',
-            ...(this.modelTransport ? ['pipe' as const] : []),
-          ],
-        },
-      );
+        );
+        if (title.length)
+          await writeFile(
+            overlay,
+            JSON.stringify([...overlayPatches, ...title]),
+            { mode: 0o600 },
+          );
+      }
+      if (this.closing) throw new Error('Native instance stopped');
+      const child = spawn(executable, args, {
+        cwd: this.demandRoot,
+        env,
+        stdio: [
+          'pipe',
+          'ignore',
+          'pipe',
+          'ipc',
+          ...(this.modelTransport ? ['pipe' as const] : []),
+        ],
+      });
       this.process = child;
       let exited = false;
       let port = 0;

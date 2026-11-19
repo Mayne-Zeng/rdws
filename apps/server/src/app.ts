@@ -49,6 +49,14 @@ export function buildApp(options: {
   const policy = mediated
     ? mainModelPolicy(options.mainModelPolicy)
     : undefined;
+  if (
+    policy?.firstMessageTitle &&
+    (process.env.RDWS_MODE !== 'test' ||
+      new URL(policy.destination).hostname !== '127.0.0.1')
+  )
+    throw new Error(
+      'Managed first-message title requires an isolated loopback supplier',
+    );
   if (mediated) assertModelCarrierDiagnostics();
   if (
     ticket !== undefined &&

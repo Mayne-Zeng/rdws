@@ -4,7 +4,7 @@ import WebSocket from 'ws';
 import { businessError } from './business.ts';
 import { type ProjectRuntime } from './native-projects.ts';
 import { type RunBinding } from './runtime-context.ts';
-import { actionAllowed, isRecord } from '@rdws/dsh/access';
+import { actionAllowed, isRecord, targetSession } from '@rdws/dsh/access';
 import {
   authorizeStreamFrame,
   createNativeStreamState,
@@ -231,6 +231,10 @@ export async function registerNativeTransport(
           )
         )
           fail(403, '无权执行该会话操作');
+        if (action === 'session/cancel') {
+          const session = targetSession(body.payload.args);
+          if (session) runs.cancelTitle(session);
+        }
       }
       const transfer = {
         ...scope.who,

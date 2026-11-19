@@ -1288,6 +1288,17 @@
   <p><code>node --import tsx --input-type=module -</code> 从项目锁包加载正式 LlmRuntime 与 PiAi，以 Node 24.20.0 和本机回环 HTTP 合成供应商发送三个请求。文本对照被现有 <code>prepareMainModelBody</code> 接受。带声明的真实请求含 <code>tools[].type/function</code>，<code>function</code> 含名称、说明和参数 schema。另一个请求已无当前声明，但带 <code>assistant.tool_calls</code> 和 <code>role:tool</code> 的历史，调用参数为 JSON 字符串，结果含 <code>tool_call_id</code> 与文本 <code>content</code>。现有正文校验拒绝这两种形态，探针退出 0。两个受影响时点都需自己的正反例，且真实工具声明的授权应一直延伸到第一实际外发。此探针观察锁定 SDK 形态，执行代理、真实 Seatbelt 结果、正式 TLS 定序和浏览器投影仍需联合验证。</p>
   <p>技术裁决先以合成模型核对工具链，再扩正式 mediated 的精确允许形状；两步都维持生产现有入口。涉及真实工作树文本、工具参数和结果的模型外发及历史保留，具名部署方按 R-B 与 §11.16.17 确认范围和数据处理。本机验证先使用合成内容。正式接线会分别核对当步声明与已持久历史，避免读回旧工具事件重新授权执行。</p>
 
+  <h4 id="t07-native-tool-boundary-plan-20261120">11.20.6 T07 Native 工具声明与执行的独立取证</h4>
+  <p>Change / R2，基线 <code>3f1d640</code>。沿 §11.20.2、§11.20.4 与 T06 的分工，在测试夹具中验证锁定 Native 的工具声明、模型回包、执行守卫和反馈互相独立。两位子代理交叉校对原包。原生 Agent 完整领取后固化模型，再解析工具声明和提示词，随后进入 <code>pre-step</code>。作用域 <code>restrict({allow:[]})</code> 过滤继承工具，同一 Agent 自有注册可参与 <code>when</code>。根 <code>guard</code> 为单向拒绝。锁包原生 <code>tool/call</code> 在实际 dispatch 前记录轮次、步骤和调用，<code>tool/result</code> 可用 <code>sourceEventSeqs</code> 对应它。执行对象的 signal 可被融合，不能作为步骤身份。</p>
+  <ol>
+    <li>用现有正式 <code>NativeWebHost</code> 的已签名运行及真实 non-owner 会话，临时 Profile 为 Agent 注册一个只返回常量且带夹具入口计数的工具。用已领取的精确原键驱动该工具的 <code>when</code>，实际日志/轨迹确认 <code>when</code> 早于 <code>pre-step</code>。对照未获夹具条件的消息没有声明。两者的回环 HTTP 供应商都返回同名调用。保留正式 Host 根守卫，核对确切调用进入原生记录，已声明场景仍返回根守卫错误，未声明场景无法执行历史名字，两者执行体入口零次。原生下一次实际模型请求携带与同一调用 ID 对应的工具结果。测试前后的对外地址均为回环合成端点。</li>
+    <li>在另一独立锁包 Cordis AgentLoop 与 NativeToolExecutor 装配中建立同类无副作用工具的许可对照。本机合成流在真实解析并形成声明后返回工具调用。合成守卫持续许可时只执行一次并写准确工具结果。对照在模型回复前使合成授权失效，声明事实保留但执行为零；测试只说明真正 Native 的管线时序。以真实 <code>tool/call</code> 事件和同一 Agent、轮次及步骤关联执行。模型调用 ID、参数、信号或历史不能自己产生执行授权。明确区分现有 RDWS 结果和这个原包对照。</li>
+    <li>复查工具结果关联并按测试路径独立统计。工具体只返回夹具数据，没有启动执行进程或写仓库。通过定点与相邻工具、类型、lint、格式、构建及基线。正式父 Broker 的实际启动、长流和停止、同库共享 BFF 撤权以及 R-B 具名供应商仍独立交付，默认模型正文和工具配置维持现有产品验收。回退单一测试和文档提交。</li>
+  </ol>
+
+  <p id="t07-native-tool-boundary-evidence-20261120">独立方案复审 APPROVE。现有正式 Host 的签名运行和 non-owner 输入得到真实回环 HTTP。夹具实际观察同一 Agent 的领取、<code>when</code> 和 <code>pre-step</code>。满足夹具条件时首请求只有指定工具，另一会话首请求工具数为零。相同测试工具名的两个模型调用均有真实 <code>tool/call</code> 和 <code>pre-execute</code>，夹具仅对该工具及合成调用标识给出前置放行，随后均被现有 RDWS 根守卫拒绝。两组执行体入口均为零，原生拒绝结果回指原调用，后续实际 HTTP 的 <code>role:tool</code> 关联相同调用 ID。</p>
+  <p>独立锁包运行时在模型适配器实际收到已声明工具后放行合成调用。持续许可时工具体执行一次，返回常量并产生原生关联结果。放回工具调用前撤销夹具许可时，guard 收到同一实时 ID 并拒绝，执行体入口为零。无声明组即使夹具 guard 允许，真实工具结果仍为 <code>UNKNOWN_TOOL</code>，执行体为零。去掉声明限制时未获条件的真实首 HTTP 错带工具声明。去掉独立 guard 的撤权拒绝时，撤权组错误执行了一次合成工具。两项故障注入均退出 1。恢复后 <code>pnpm test tests/integration/native-tool-authority-boundary.test.ts tests/integration/native-egress-confinement.test.ts tests/integration/local-execution.test.ts</code> 通过 3 文件、14 项。独立交付复审 APPROVE，类型、lint、格式、构建和基线通过。</p>
+
   <h3 id="t11-maintenance-acceptance-20261119">11.21 T11 已确认的导入与人员维护</h3>
   <p>2026-11-19 用户确认需求批量导入采用同页的上传、预览、修正与整批提交。上传后动态显示解析和校验进度，下方逐条呈现需求明细、状态与可定位的问题。用户可在同页修正并重新校验。预览和校验阶段不写业务数据。全部通过后由用户显式整批提交入库，提交结果继续在同页逐条呈现。</p>
   <p>参与者和开发负责人维护按当前项目角色授权。移除参与者或更换负责人时，相关未完成子任务须显式交给当前具备资格的接手人，并保留原分派记录。验收覆盖无资格接手、已有分派记录保留，以及原有阶段与任务按钮权限。</p>

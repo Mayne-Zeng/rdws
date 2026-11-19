@@ -142,6 +142,7 @@
   - 已确认规则：具有本项目和本需求开发角色、操作本人会话，并担任开发负责人或至少有一项未完成子任务。主动交接由当前持有者释放，新会话再申请。租约到期或撤权由系统发起停止，确认停稳后才授予下一写权。[决定台账](00-decision-ledger.html#t07-write-eligibility-20261120) · [首切片方案](02-directory-and-engineering-design.html#t07-isolated-write-handoff-plan-20261120)
   - 已交付子项：[隔离单写与停稳交接](02-directory-and-engineering-design.html#t07-isolated-write-handoff-evidence-20261120)。一次性受管 PostgreSQL、真实 T05 工作树与 macOS Seatbelt 核对一个写代、旧进程停稳及下一会话实际写入。定点 19 项、整仓 273 项、静态检查和基线通过。产品工具接线、运行状态恢复及编队 UI 继续按 T07 验收。
   - 接线前核对：[Native 工具与受管模型请求](02-directory-and-engineering-design.html#t07-native-tool-wire-evidence-20261120)。从锁定 SDK 的三个实际回环请求核对文本、工具声明及历史；现有 BFF 只接受文本。记录同库所有者复用、当步工具限定及后续联合验收。
+  - 接线前核对：[Native 声明与执行的独立边界](02-directory-and-engineering-design.html#t07-native-tool-boundary-evidence-20261120)。正式 Host 实际模型回包在已声明和无声明场景中都受现有根守卫，执行体零入口。锁包对照复验声明后撤权、无声明及许可执行一次。14 项邻域和故障反例通过。
   - 来源：I2-AUTH、I3-WRITE、I3-CONTEXT。
 
 - [ ] **T08 · 变更查看与交付快照**

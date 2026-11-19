@@ -3,7 +3,15 @@ import { authClient } from '../lib/auth.ts';
 import { Icon } from '../lib/ui.tsx';
 import './login-screen.css';
 
-export function LoginScreen({ checkingSession }: { checkingSession: boolean }) {
+export function LoginScreen({
+  checkingSession,
+  sessionNotice,
+  onLogin,
+}: {
+  checkingSession: boolean;
+  sessionNotice?: string;
+  onLogin?: () => void;
+}) {
   const account = useRef<HTMLInputElement>(null);
   const password = useRef<HTMLInputElement>(null);
   const submitting = useRef(false);
@@ -46,7 +54,10 @@ export function LoginScreen({ checkingSession }: { checkingSession: boolean }) {
               ? '暂时无法连接登录服务，请稍后重试。'
               : '登录失败，请检查账号与密码。',
         );
-      } else if (password.current) password.current.value = '';
+      } else {
+        if (password.current) password.current.value = '';
+        onLogin?.();
+      }
     } catch {
       setError('暂时无法连接登录服务，请稍后重试。');
     } finally {
@@ -77,6 +88,11 @@ export function LoginScreen({ checkingSession }: { checkingSession: boolean }) {
           <section className="login-content" aria-labelledby="login-title">
             <h1 id="login-title">登录工作台</h1>
             <p className="login-intro">使用已分配的本地账号登录。</p>
+            {sessionNotice && (
+              <p className="login-intro" role="status">
+                {sessionNotice}
+              </p>
+            )}
             <form
               className="login-form"
               onSubmit={login}

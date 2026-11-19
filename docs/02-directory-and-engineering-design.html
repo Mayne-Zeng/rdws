@@ -916,6 +916,20 @@
   <p>独立交付复审 APPROVE，关闭首审两项 P2。确认受控前缀和零长度试验分别证明真正的部分交付和零字节交付，真实网络背压及 EAGAIN 仍由正式传输接线验收。</p>
   <p>最终 <code>caffeinate -i pnpm check</code> 返回 0（39 文件、232 项通过、1 项按平台跳过，类型、lint、格式和构建通过），构建保留既有主包体积提示。<code>caffeinate -i pnpm test:e2e</code> 返回 0（40 项），<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>test: verify TLS model egress delivery ordering</code>。</p>
 
+  <h4 id="t13-confirmed-logout-20261119">11.16.25 退出登录的持久撤权确认</h4>
+  <p>Bug fix / R3，基线 <code>3e47295</code>，依据 §11.16.17 和 I2-AUTH。锁定 Better Auth 1.7.25 的 <code>/sign-out</code> 捕获删除会话异常后仍清 Cookie 并返回成功。现有 BFF 预先在本进程栅栏撤权，但其 <code>x-rdws-native-revocation</code> 只反映 Native 通知。本轮修正退出登录这一真实授权变更入口，使退出成功可以作为持久撤权结果使用。</p>
+  <ol>
+    <li>沿 Better Auth 官方 before/after 钩子，保留同 Origin 校验、原退出处理器与 Cookie 语义。before 用经验证的签名 Cookie 查询唯一原会话 ID，包括已失效但仍存在的原记录。该查询不刷新会话。客户端声明的 ID 只用于比对。同进程在原处理器前同步设置这条登录的退出栅栏，阻止工作台及当前运行的新动作，再通知原生。并发请求共享在途通知。原行仍在时可以用原 Cookie 重试删除。无观察头的 API 对已消失的登录继续支持幂等退出。其他登录及未命中签名 Cookie 的请求不触及授权记录。</li>
+    <li>after 仅对原处理器成功做确认。根据最初核对的会话 ID 使用 PostgreSQL 查无原行，才认可退出成功。before/after 读异常或行仍存在均使用固定文本 <code>APIError</code> 返回 503，数据库异常不传给认证库日志。Better Auth 的 after 错误仍可带旧 Cookie 指令，Fastify 对退出失败不转发任何 <code>Set-Cookie</code>，成功继续沿用 Better Auth 清 Cookie。端点自身的失败状态照转。退出带 <code>no-store</code>；工作台、设计页、平台管理、恢复、无项目及项目加载失败入口显示同一失败提示和可重试按钮。已知本地退出栅栏继续阻止同进程业务与后续授权。对端或重启以持久数据库状态为准。<code>x-rdws-native-revocation</code> 仅描述本实例，全部实际通知成功或本实例已知无待撤目标时为 confirmed。其余成功沿用 lease-expiry，含无 Cookie／错签及原行已删除的重试。</li>
+    <li>在隔离 PostgreSQL 对当前测试登录行持锁，并用测试 BFF 池连接的短 <code>lock_timeout</code> 造成真实删除失败。对照旧行为的成功、Cookie 清除及行仍存在；修后证实 503、Cookie 保留、本地拒绝、无关同人登录可用、独立 BFF 此时仍依数据库判断、解锁后原 Cookie 重试成功，独立及冷启 BFF 拒绝旧 Cookie。另用定点数据库读故障注入覆盖 before 无法查证和 DELETE 已提交、after 读回失败，两条真实退出响应均为 503 且无观察头的 API 可用原 Cookie 重试。核对同源限制、无 Cookie／错签、重复／并发。一个退出被阻于 Native 通知时，由同 Cookie 再发退出并使通知失败，核对两个结果与原行、头部及等待期间的准入。浏览器对工作台与至少一个兜底入口核对错误可见，并在同一浏览器重试实际退出。执行整仓和浏览器门禁、基线校验，双面方案和独立交付审阅。</li>
+    <li>本轮无迁移。回退按原应用版本执行，已删除的登录不恢复。原生实际供应商外发仍由 §11.16.17 的唯一在线所有者接线，账号、项目、需求、模型撤权来源也要纳入同一边界。</li>
+    <li>浏览器退出沿用页面第一次观察的登录 ID，通过现有 <code>x-rdws-edit-session</code> 请求头传递。服务端必须用该请求实际收到的签名 Cookie 查得同一个 ID，才能执行退出。Cookie 更换或查无行时无法证明原观察身份，返回 401 并提示刷新。无观察头的 API 维持按签名 Cookie 定位，查无行时可幂等结束，不能据此确认另一个观察 ID。移动导航打开时失败反馈展示在当前可访问导航内。退出未确认后，成功刷新显示浏览器当前没有有效登录时，登录页明确原退出结果仍未确认。原行删除只认退出持久读回。刷新故障时仍提示核对退出状态。用户本页主动登录成功后重建观察身份，自动收到另一登录不重绑旧页。验证先换 Cookie 后重试、替换 Cookie 已无行、移动端、真实删除后的浏览器刷新、本页再登录再退出。另页新 Cookie 与已经发出的旧退出响应可能发生同名响应顺序竞争，该竞争不删除新的数据库会话。</li>
+  </ol>
+  <p>方案双面二版均 APPROVE。首轮关闭 Better Auth after 失败仍附清 Cookie、兜底页漏失败提示及并发／幂等头部证据。改前 <code>pnpm test tests/integration/auth.test.ts -t 'locked login row'</code> 返回 1，实际 PostgreSQL 删除被锁阻止后，原行仍在、响应却是 200 且附清 Cookie。修后 503、原 Cookie 保留、同实例工作台拒绝，独立实例仍依持久状态。同 Cookie 解锁后重试，实际行消失，独立及冷启实例拒绝旧登录，同账号另一登录保持有效。</p>
+  <p>before 读取故障与 DELETE 已提交但 after 读回故障均通过 503／零清 Cookie 验证。并发退出共享一次故障通知，等待期间本地准入拒绝，成功和幂等回复正确使用租约头。交付评审发现旧页面可能退出换入的新登录，修复前实际红测为 200。补充方案 A/B 双面复审均 APPROVE。第二轮交付复审又复现替换 Cookie 已无行时返回 200，原观察登录仍在。两种情况最终均以 401 拒绝，工作台必须确证原观察身份，无观察头 API 继续支持原 Cookie 幂等核对。</p>
+  <p>定点集成返回 0（3 文件、24 项）。<code>caffeinate -i pnpm test:e2e tests/e2e/login.spec.ts</code> 返回 0（7 项）。浏览器真实退出重试覆盖移动导航、平台管理、另一标签换入新登录后旧页收到 401、新登录仍有效。真实删除后继续模拟原确认失败。刷新故障保持未确认，成功空会话仅说明浏览器无有效登录，本页主动再登录重建观察并成功退出。交付三版独立复审 APPROVE。</p>
+  <p><code>caffeinate -i pnpm check</code> 返回 0（39 文件、239 项通过、1 项按平台跳过，类型、lint、格式和构建通过）。构建保留主包体积提示。完整浏览器前两次各 43 项通过，最后一项布局测量失败。状态码诊断确认共用 BFF 的会话读取触发 429，布局用例单独通过。按真实 <code>X-Retry-After</code> 允许布局用例有界重试一次，再等待工作台。该夹具的独立复审 APPROVE，产品限流配置维持现状。修订后 <code>caffeinate -i pnpm test:e2e</code> 返回 0（44 项，布局用例执行约 1.1 分钟）。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>fix: confirm durable logout before clearing session cookies</code>。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

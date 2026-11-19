@@ -417,6 +417,9 @@ export function ProjectWorkspace({
             </p>
           )}
         </div>
+        {error && mobile && smallScreen && (
+          <Alert theme="error" message={error} />
+        )}
         <div className="rail-foot">
           <span className="avatar">{username.slice(0, 1).toUpperCase()}</span>
           <div>
@@ -560,7 +563,9 @@ export function ProjectWorkspace({
           </div>
         )}
         <div className="workspace-scroll">
-          {error && <Alert theme="error" message={error} />}
+          {error && !(mobile && smallScreen) && (
+            <Alert theme="error" message={error} />
+          )}
           <div
             className="content-width"
             id="workspace-panel"

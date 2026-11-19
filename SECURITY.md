@@ -32,6 +32,8 @@ BFF 到本代 Native Web 的 HTTP 和 WebSocket 使用进程就绪时选定的�
 
 停用与恢复写入账号代次，登录会话保存发行时的代次。数据库在插入时定序，业务读取和执行检查当前代次。旧登录不会在恢复后重新有效。单项目成员变动对该账号的同项目会话和连接生效。通知失败保留 BFF 截止与 Native 短租约两层不同的证据，已获准的外部请求可能完成。
 
+退出登录通过签名 Cookie 定位原会话。工作台请求另带页面观察的登录 ID。查得会话与观察 ID 匹配后，才关闭本进程的工作台和运行准入。BFF 在 PostgreSQL 确认原会话行消失后才返回成功并清 Cookie。未确认时返回 503，保留原 Cookie 供重试。本实例 Native 通知结果单独反映在响应头，同账号其他登录仍按各自会话鉴权。 [退出验收](docs/02-directory-and-engineering-design.html#t13-confirmed-logout-20261119)
+
 Native 浏览器传输随页面打开时的登录固定。BFF 在准备工作区前核对 bootstrap 的观察登录，随后对 HTTP 和 WebSocket 核对 Cookie、实际需求归属及原绑定。WebSocket 升级前的授权代次贯穿上游 Peer 建立和后续流量。重连轮换短租约代次时沿用原绑定。原 Cookie 仍有效的连接按其原登录鉴权，撤权时关闭。旧页面发现换登录后释放连接，原草稿仅在当前文档内存保留，当前账号相同且需求授权读回后可复制。 [验收证据](docs/02-directory-and-engineering-design.html#t13-native-login-binding-evidence-20261119)
 
 工作台的会话目录与被动历史也携带原观察登录。BFF 以 Cookie 认证并比对，在返回前复核需求读取权及撤权代次。两条 GET 使用 no-store，无头调用仍按当前 Cookie 及既有访问权限处理。工作台收到授权拒绝后清理相应的目录或历史，观察到登录更换时提示重新打开。 [验收证据](docs/02-directory-and-engineering-design.html#t02-passive-session-login-plan-20261119)

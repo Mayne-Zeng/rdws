@@ -1,6 +1,6 @@
 import { betterAuth } from 'better-auth';
-import { createAuthMiddleware } from 'better-auth/api';
-import { and, eq, gt } from 'drizzle-orm';
+import { APIError, createAuthMiddleware } from 'better-auth/api';
+import { and, eq, gt, type SQL } from 'drizzle-orm';
 import { username } from 'better-auth/plugins';
 import { drizzleAdapter } from '@better-auth/drizzle-adapter';
 import { type connectDatabase, schema } from '@rdws/db';
@@ -33,10 +33,31 @@ export async function currentAccount(
 }
 
 type Login = { id: string; epoch: number };
+type Logout = { id?: string; notified: boolean };
+export const logoutRevocationHeader = 'x-rdws-native-revocation';
+export const logoutUnavailableMessage = '退出登录暂未确认，请重试';
+const logoutUnavailable = () =>
+  new APIError('SERVICE_UNAVAILABLE', { message: logoutUnavailableMessage });
+
 export function createAuth(
   db: Database,
-  options: { secret: string; origin: string },
+  options: {
+    secret: string;
+    origin: string;
+    onLogout?: (id: string) => Promise<boolean>;
+  },
 ) {
+  async function findSessionId(condition: SQL) {
+    try {
+      const [session] = await db
+        .select({ id: schema.session.id })
+        .from(schema.session)
+        .where(condition);
+      return session?.id;
+    } catch {
+      throw logoutUnavailable();
+    }
+  }
   return betterAuth({
     appName: 'RDWS',
     baseURL: options.origin,
@@ -47,6 +68,25 @@ export function createAuth(
     emailAndPassword: { enabled: true, disableSignUp: true },
     hooks: {
       before: createAuthMiddleware(async (ctx) => {
+        if (ctx.path === '/sign-out') {
+          const token = await ctx.getSignedCookie(
+            ctx.context.authCookies.sessionToken.name,
+            ctx.context.secret,
+          );
+          const id = token
+            ? await findSessionId(eq(schema.session.token, token))
+            : undefined;
+          const observed = ctx.headers?.get('x-rdws-edit-session');
+          if (observed != null && observed !== id)
+            throw new APIError('UNAUTHORIZED', {
+              message: '登录已变化，请刷新后重试',
+            });
+          const notified = id
+            ? ((await options.onLogout?.(id)) ?? false)
+            : false;
+          const rdwsLogout: Logout = { id, notified };
+          return { context: { context: { rdwsLogout } } };
+        }
         const field =
           ctx.path === '/sign-in/username'
             ? 'username'
@@ -63,6 +103,23 @@ export function createAuth(
         return { context: { context: { rdwsLogin: login } } };
       }),
       after: createAuthMiddleware(async (ctx) => {
+        if (ctx.path === '/sign-out') {
+          const result = ctx.context.returned as
+            { success?: boolean } | undefined;
+          if (result?.success !== true) return;
+          const logout = (ctx.context as { rdwsLogout?: Logout }).rdwsLogout;
+          if (
+            !logout ||
+            (logout.id &&
+              (await findSessionId(eq(schema.session.id, logout.id))))
+          )
+            throw logoutUnavailable();
+          ctx.setHeader(
+            logoutRevocationHeader,
+            logout.notified ? 'confirmed' : 'lease-expiry',
+          );
+          return;
+        }
         if (ctx.path !== '/get-session') return;
         const data = ctx.context.returned as {
           session?: { id: string };

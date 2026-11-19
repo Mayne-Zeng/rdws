@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { runtimeHome } from '../../scripts/env.mjs';
 import { prepareSession } from '../helpers/auth-session.ts';
 
@@ -49,6 +50,7 @@ test('five real workbench entries preserve the Demo geometry and readable themes
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await mkdir('.impeccable/review/t01-rollout', { recursive: true });
+  let waitedForSessionLimit = false;
   for (const colorScheme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme });
     for (const view of [
@@ -58,10 +60,28 @@ test('five real workbench entries preserve the Demo geometry and readable themes
       'overview',
       'chat',
     ]) {
-      await page.goto(
-        `/?project=poc&view=${view}${['requirements', 'create'].includes(view) ? '' : '&requirement=' + id}`,
-      );
-      await expect(page.locator('h1')).toBeVisible();
+      const url = `/?project=poc&view=${view}${['requirements', 'create'].includes(view) ? '' : '&requirement=' + id}`;
+      async function open() {
+        const [response] = await Promise.all([
+          page.waitForResponse(
+            (read) => new URL(read.url()).pathname === '/api/auth/get-session',
+          ),
+          page.goto(url),
+        ]);
+        return response;
+      }
+      let read = await open();
+      if (read.status() === 429 && !waitedForSessionLimit) {
+        const seconds = Number(await read.headerValue('x-retry-after'));
+        expect(Number.isInteger(seconds) && seconds >= 1 && seconds <= 60).toBe(
+          true,
+        );
+        waitedForSessionLimit = true;
+        await delay(seconds * 1000);
+        read = await open();
+      }
+      expect(read.status()).toBe(200);
+      await expect(page.locator('.workspace-scroll')).toBeVisible();
       if (view === 'create') {
         await page.getByLabel('需求标题', { exact: true }).fill(title);
         await page

@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { runtimeHome } from '../../scripts/env.mjs';
+import { prepareSession } from '../helpers/auth-session.ts';
 for (const colorScheme of ['light', 'dark'] as const) {
   test(`preset account login and logout (${colorScheme})`, async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -144,6 +145,214 @@ for (const colorScheme of ['light', 'dark'] as const) {
     expect(errors).toEqual([]);
   });
 }
+
+async function logoutTestAccount(username: string) {
+  const accounts: { username: string; password: string }[] = JSON.parse(
+    await readFile(join(runtimeHome, 'secrets', 'test-accounts.json'), 'utf8'),
+  );
+  return accounts.find((entry) => entry.username === username)!;
+}
+
+for (const [username, heading] of [
+  ['lead', '需求管理'],
+  ['admin', '项目与账号'],
+] as const) {
+  test(`logout failure remains visible and retryable for ${username}`, async ({
+    page,
+    baseURL,
+  }) => {
+    const account = await logoutTestAccount(username);
+    await prepareSession(page.context(), baseURL!, account);
+    if (username === 'lead')
+      await page.setViewportSize({ width: 390, height: 844 });
+    const jar = () => page.context().cookies(baseURL);
+    const sessionCookie = (await jar()).find(({ name }) =>
+      name.endsWith('.session_token'),
+    )!;
+    expect(sessionCookie).toBeTruthy();
+    let attempts = 0;
+    await page.route('**/api/auth/sign-out', async (route) => {
+      if (++attempts === 1)
+        await route.fulfill({
+          status: 503,
+          json: { message: '退出登录暂未确认，请重试' },
+          headers: { 'cache-control': 'no-store' },
+        });
+      else await route.continue();
+    });
+    await page.goto('/');
+    await expect(
+      page.getByRole('heading', { name: heading, exact: true }),
+    ).toBeVisible();
+    if (username === 'lead')
+      await page.getByRole('button', { name: '打开导航' }).click();
+    const logout = page.getByRole('button', { name: '退出登录', exact: true });
+    await logout.click();
+    const failed = page.getByText('退出失败，请重试', { exact: true });
+    await expect(failed).toBeVisible();
+    expect(
+      await failed.evaluate((node) => Boolean(node.closest('[inert]'))),
+    ).toBe(false);
+    await expect(logout).toBeEnabled();
+    expect(
+      (await jar()).some(
+        ({ name, value }) =>
+          name === sessionCookie.name && value === sessionCookie.value,
+      ),
+    ).toBe(true);
+    await logout.click();
+    await expect(
+      page.getByRole('heading', { name: '登录工作台' }),
+    ).toBeVisible();
+    expect(attempts).toBe(2);
+    expect((await jar()).some(({ name }) => name === sessionCookie.name)).toBe(
+      false,
+    );
+  });
+}
+
+test('retry from an old tab cannot sign out a replacement login', async ({
+  page,
+  baseURL,
+}) => {
+  const account = await logoutTestAccount('lead');
+  const original = await prepareSession(page.context(), baseURL!, account);
+  let attempts = 0;
+  await page.route('**/api/auth/sign-out', async (route) => {
+    expect(route.request().headers()['x-rdws-edit-session']).toBe(
+      original.session.id,
+    );
+    if (++attempts === 1)
+      await route.fulfill({
+        status: 503,
+        json: { message: 'Fixture unconfirmed result' },
+      });
+    else await route.continue();
+  });
+  await page.goto('/');
+  const logout = page.getByRole('button', { name: '退出登录', exact: true });
+  await logout.click();
+  await expect(
+    page.getByText('退出失败，请重试', { exact: true }),
+  ).toBeVisible();
+  const nextTab = await page.context().newPage();
+  const replacement = await prepareSession(
+    nextTab.context(),
+    baseURL!,
+    account,
+  );
+  expect(replacement.session.id).not.toBe(original.session.id);
+  await nextTab.goto('/');
+  await expect(
+    nextTab.getByRole('heading', { name: '需求管理', exact: true }),
+  ).toBeVisible();
+  await page.bringToFront();
+  const rejected = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/auth/sign-out' &&
+      response.status() === 401,
+  );
+  await logout.click();
+  await rejected;
+  await expect(
+    page.getByText('登录已变化，请刷新后重试', { exact: true }),
+  ).toBeVisible();
+  const live = await nextTab.request.get('/api/auth/get-session');
+  expect((await live.json()).session.id).toBe(replacement.session.id);
+  expect(attempts).toBe(2);
+});
+
+test('a session refresh can confirm the browser is signed out and an explicit sign-in rebinds logout', async ({
+  page,
+  baseURL,
+}) => {
+  const account = await logoutTestAccount('lead');
+  const original = await prepareSession(page.context(), baseURL!, account);
+  const observations: (string | undefined)[] = [];
+  await page.route('**/api/auth/sign-out', async (route) => {
+    const request = route.request();
+    observations.push(request.headers()['x-rdws-edit-session']);
+    if (observations.length !== 1) return route.continue();
+    const cookie = await request.headerValue('cookie');
+    const confirmed = await fetch(request.url(), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: baseURL!,
+        cookie: cookie!,
+        'x-rdws-edit-session': original.session.id,
+      },
+      body: '{}',
+    });
+    expect(confirmed.status).toBe(200);
+    await confirmed.text();
+    await route.fulfill({
+      status: 503,
+      json: { message: 'Fixture confirmation unavailable' },
+    });
+  });
+  await page.goto('/');
+  const logout = page.getByRole('button', { name: '退出登录', exact: true });
+  await logout.click();
+  await expect(
+    page.getByText('退出失败，请重试', { exact: true }),
+  ).toBeVisible();
+  await page.route(
+    '**/api/auth/get-session',
+    (route) =>
+      route.fulfill({
+        status: 503,
+        json: { message: 'Fixture session read unavailable' },
+      }),
+    { times: 1 },
+  );
+  const unavailable = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/auth/get-session' &&
+      response.status() === 503,
+  );
+  const refreshFromFocus = async (secondsAhead: number) => {
+    await page.clock.setFixedTime(new Date(Date.now() + secondsAhead * 1000));
+    await page.evaluate(() =>
+      document.dispatchEvent(new Event('visibilitychange')),
+    );
+  };
+  await refreshFromFocus(10);
+  await (await unavailable).finished();
+  const noLogin = page.getByText(
+    '此浏览器当前没有有效登录，原退出结果尚未确认。',
+    {
+      exact: true,
+    },
+  );
+  await expect(noLogin).toHaveCount(0);
+  const refresh = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/auth/get-session' &&
+      response.status() === 200,
+  );
+  await refreshFromFocus(20);
+  expect(await (await refresh).json()).toBeNull();
+  await expect(noLogin).toBeVisible();
+
+  await page.getByLabel('账号', { exact: true }).fill(account.username);
+  const password = page.getByLabel('密码', { exact: true });
+  await password.fill(account.password);
+  const rebound = page.waitForEvent('framenavigated', {
+    predicate: (frame) => frame === page.mainFrame(),
+  });
+  await password.press('Enter');
+  await rebound;
+  await expect(
+    page.getByRole('heading', { name: '需求管理', exact: true }),
+  ).toBeVisible();
+  const fresh = (await (await page.request.get('/api/auth/get-session')).json())
+    .session.id;
+  expect(fresh).not.toBe(original.session.id);
+  await logout.click();
+  await expect(page.getByRole('heading', { name: '登录工作台' })).toBeVisible();
+  expect(observations).toEqual([original.session.id, fresh]);
+});
 
 test('mobile fixed-dark login guards real requests and exposes validation states', async ({
   page,

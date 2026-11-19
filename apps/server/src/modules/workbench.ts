@@ -209,6 +209,7 @@ export async function registerWorkbench(
   let authorizationEpoch = 0;
   let stopping = false;
   const closingSessions = new Set<string>();
+  const logoutNotifications = new Map<string, Promise<boolean>>();
   const scopeEpochs = new Map<string, number>();
   const pendingNotifications = new Map<string, Promise<boolean>>();
   const fences = new Map<
@@ -2807,14 +2808,15 @@ export async function registerWorkbench(
   return {
     access,
     revoke,
-    async revokeRequest(headers: FastifyRequest['headers']) {
-      try {
-        const who = await actor(headers);
-        closingSessions.add(who.authSessionId);
-        return await revoke(who.authSessionId);
-      } catch {
-        return false;
-      }
+    closeLogin(authSessionId: string) {
+      closingSessions.add(authSessionId);
+      const pending = logoutNotifications.get(authSessionId);
+      if (pending) return pending;
+      const notification = revoke(authSessionId)
+        .catch(() => false)
+        .finally(() => logoutNotifications.delete(authSessionId));
+      logoutNotifications.set(authSessionId, notification);
+      return notification;
     },
   };
 }

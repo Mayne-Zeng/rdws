@@ -5,7 +5,11 @@ import { connectDatabase } from '@rdws/db';
 import { Health } from '@rdws/contracts';
 import { resolveNativeModelEgress } from '@rdws/dsh/web';
 import { registerWorkbench } from './modules/workbench.ts';
-import { createAuth } from './modules/auth.ts';
+import {
+  createAuth,
+  logoutRevocationHeader,
+  logoutUnavailableMessage,
+} from './modules/auth.ts';
 export function buildApp(options: {
   databaseUrl: string;
   secret: string;
@@ -23,8 +27,11 @@ export function buildApp(options: {
       'Native Host model egress does not match BFF configuration',
     );
   const database = connectDatabase(options.databaseUrl);
-  const auth = createAuth(database.db, options);
   let workbench: Awaited<ReturnType<typeof registerWorkbench>> | undefined;
+  const auth = createAuth(database.db, {
+    ...options,
+    onLogout: async (id) => workbench?.closeLogin(id) ?? false,
+  });
   const app = Fastify({
     bodyLimit: 64 * 1024,
     logger: false,
@@ -33,16 +40,6 @@ export function buildApp(options: {
   app.addHook('onRequest', async (request, reply) => {
     if (request.method === 'POST' && request.headers.origin !== options.origin)
       return reply.code(403).send({ error: '请求来源不受信任' });
-    if (
-      request.method === 'POST' &&
-      new URL(request.url, options.origin).pathname === '/api/auth/sign-out'
-    ) {
-      const confirmed = await workbench?.revokeRequest(request.headers);
-      reply.header(
-        'x-rdws-native-revocation',
-        confirmed === false ? 'lease-expiry' : 'confirmed',
-      );
-    }
   });
   app.get(
     '/api/health',
@@ -71,6 +68,8 @@ export function buildApp(options: {
               '/sign-up/email',
             ].includes(action);
       if (!allowed) return reply.code(404).send({ error: '该认证入口不可用' });
+      const signingOut = action === '/sign-out';
+      if (signingOut) reply.header('cache-control', 'no-store');
       const response = await auth.handler(
         new Request(new URL(request.url, options.origin), {
           method: request.method,
@@ -78,12 +77,21 @@ export function buildApp(options: {
           ...(request.body ? { body: JSON.stringify(request.body) } : {}),
         }),
       );
+      if (
+        signingOut &&
+        response.status < 400 &&
+        !response.headers.has(logoutRevocationHeader)
+      )
+        return reply.code(503).send({ error: logoutUnavailableMessage });
       reply.code(response.status);
       response.headers.forEach((value, key) => {
-        if (key !== 'set-cookie') reply.header(key, value);
+        if (key === 'set-cookie' || (signingOut && key === 'cache-control'))
+          return;
+        reply.header(key, value);
       });
       const cookies = response.headers.getSetCookie();
-      if (cookies.length) reply.header('set-cookie', cookies);
+      if (cookies.length && (!signingOut || response.status < 400))
+        reply.header('set-cookie', cookies);
       return reply.send(await response.text());
     },
   });

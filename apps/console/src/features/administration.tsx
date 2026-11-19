@@ -336,12 +336,16 @@ export function PlatformPage({
   userId,
   username,
   logout,
+  logoutBusy,
+  logoutError,
   back,
   openDesign,
 }: {
   userId: string;
   username: string;
   logout: () => void;
+  logoutBusy: boolean;
+  logoutError: string;
   back?: () => void;
   openDesign: () => void;
 }) {
@@ -378,12 +382,18 @@ export function PlatformPage({
             返回工作台
           </Button>
         )}
-        <Button tag="button" variant="text" onClick={logout}>
+        <Button
+          tag="button"
+          variant="text"
+          loading={logoutBusy}
+          onClick={logout}
+        >
           退出登录
         </Button>
       </div>
       <div className="workspace-scroll">
         <div className="content-width">
+          {logoutError && <Alert theme="error" message={logoutError} />}
           <div className="page-heading">
             <div>
               <h1>项目与账号</h1>
@@ -652,9 +662,13 @@ export function PlatformPage({
 export function ManagementRecovery({
   userId,
   logout,
+  logoutBusy,
+  logoutError,
 }: {
   userId: string;
   logout: () => void;
+  logoutBusy: boolean;
+  logoutError: string;
 }) {
   const action = useManagement(userId);
   return (
@@ -662,7 +676,8 @@ export function ManagementRecovery({
       <h1>核对管理操作</h1>
       <p className="muted">项目列表暂不可用。可用已保留的原命令核对结果。</p>
       <Feedback action={action} />
-      <Button tag="button" variant="text" onClick={logout}>
+      {logoutError && <Alert theme="error" message={logoutError} />}
+      <Button tag="button" variant="text" loading={logoutBusy} onClick={logout}>
         退出登录
       </Button>
     </main>

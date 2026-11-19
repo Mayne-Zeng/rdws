@@ -80,9 +80,6 @@ importers:
 
   apps/console:
     dependencies:
-      '@deepseek-ai/dsh-api-session-controller':
-        specifier: 0.2.2-rc.3
-        version: 0.2.2-rc.3(ee74f0035f81c26035cc702871a81e0e)
       '@rdws/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts

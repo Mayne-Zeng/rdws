@@ -1,4 +1,4 @@
-import { test, expect, beforeAll, afterAll } from 'vitest';
+import { test, expect, beforeAll, afterAll, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Pool } from 'pg';
 import WebSocket, { WebSocketServer } from 'ws';
 import { buildApp } from '@rdws/server';
-import { fixtureBinding } from '../helpers/native-browser.ts';
+import { fixtureBinding, observedLogin } from '../helpers/native-browser.ts';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { actionAllowed, type Grant } from '@rdws/dsh/access';
 import { forkBoundary } from '@rdws/dsh/sessions';
@@ -716,6 +716,112 @@ test('fork freezes the last closed logical prefix and maps provenance once', asy
     expect(child.source_through_seq).toBe(4);
     expect((await f.post(command, true)).json().sessionId).toBe(child.id);
     expect(f.host.calls).toHaveLength(1);
+  } finally {
+    await f.app.close();
+  }
+});
+test('session writes check the observed login before preparing Native or using a receipt', async () => {
+  const f = await fixture();
+  const workspace = vi.spyOn(f.host, 'workspace');
+  const control = vi.spyOn(f.host, 'control');
+  const origin = process.env.RDWS_ORIGIN!;
+  try {
+    const oldLogin = await observedLogin(f.app, f.cookie);
+    const relogin = await f.app.inject({
+      method: 'POST',
+      url: '/api/auth/sign-in/username',
+      remoteAddress: '127.0.20.1',
+      headers: { origin },
+      payload: account,
+    });
+    expect(relogin.statusCode).toBe(200);
+    const cookie = relogin.cookies
+      .map((c) => `${c.name}=${c.value}`)
+      .join('; ');
+    const current = await observedLogin(f.app, cookie);
+    expect(current).not.toBe(oldLogin);
+    const directory = `/api/requirements/${f.id}/sessions`;
+    for (const [operation, url] of [
+      ['create', directory],
+      ['fork', `${directory}/${f.source}/fork`],
+    ] as const) {
+      const commandId = randomUUID();
+      const receipts = () =>
+        pool.query(
+          'select command_id, actor_id, status from session_operation where requirement_id=$1 and command_id=$2',
+          [f.id, commandId],
+        );
+      const dispatches = f.host.calls.length;
+      const sessions = () =>
+        pool.query(
+          'select id from native_session where requirement_id=$1 order by id',
+          [f.id],
+        );
+      const before = (await sessions()).rows;
+      workspace.mockClear();
+      control.mockClear();
+      for (const headers of [
+        { cookie, 'x-rdws-edit-session': oldLogin },
+        { cookie, 'x-rdws-edit-session': [current, current] },
+        { 'x-rdws-edit-session': current },
+      ]) {
+        const result = await f.app.inject({
+          method: 'POST',
+          url,
+          headers: { ...headers, origin },
+          payload: { commandId },
+        });
+        expect(result.statusCode).toBe(401);
+        expect(result.headers['cache-control']).toBe('no-store');
+      }
+      expect(workspace).not.toHaveBeenCalled();
+      expect(control).not.toHaveBeenCalled();
+      expect(f.host.calls).toHaveLength(dispatches);
+      expect((await receipts()).rows).toEqual([]);
+      expect((await sessions()).rows).toEqual(before);
+
+      const mapped = await f.app.inject({
+        method: 'POST',
+        url,
+        headers: { cookie: f.cookie, origin, 'x-rdws-edit-session': oldLogin },
+        payload: { commandId },
+      });
+      expect(mapped.statusCode).toBe(200);
+      expect(mapped.headers['cache-control']).toBe('no-store');
+      const child = mapped.json().sessionId;
+      expect((await receipts()).rows).toEqual([
+        { actor_id: owner, command_id: commandId, status: 'mapped' },
+      ]);
+      expect(f.host.calls).toHaveLength(dispatches + 1);
+      expect(f.host.calls.at(-1)?.action).toBe('session/' + operation);
+      if (operation === 'fork') {
+        expect(f.host.calls.at(-1)?.input).toMatchObject({
+          sessionId: f.source,
+          atSeq: 4,
+        });
+      }
+
+      const staleReceipt = await f.app.inject({
+        method: 'POST',
+        url,
+        headers: { cookie, origin, 'x-rdws-edit-session': oldLogin },
+        payload: { commandId },
+      });
+      expect(staleReceipt.statusCode).toBe(401);
+      expect(staleReceipt.body).not.toContain(child);
+      const replay = await f.app.inject({
+        method: 'POST',
+        url,
+        headers: { cookie, origin, 'x-rdws-edit-session': current },
+        payload: { commandId },
+      });
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json().sessionId).toBe(child);
+      const legacy = await f.post(commandId, operation === 'fork');
+      expect(legacy.statusCode).toBe(200);
+      expect(legacy.json().sessionId).toBe(child);
+      expect(f.host.calls).toHaveLength(dispatches + 1);
+    }
   } finally {
     await f.app.close();
   }

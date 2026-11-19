@@ -134,7 +134,7 @@ async function login(app: ReturnType<typeof buildApp>, username = 'manager') {
   return r.cookies.map((item) => `${item.name}=${item.value}`).join('; ');
 }
 
-test('the passive session observer restricts only its two read routes before Native preparation', async () => {
+test('the passive session observer checks its read routes before Native preparation', async () => {
   const host = new ControlledHost();
   const app = appFor(host);
   const application = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -218,12 +218,14 @@ test('the passive session observer restricts only its two read routes before Nat
         expect(result.headers['cache-control']).toBe('no-store');
       }
     }
-    const head = await app.inject({
-      method: 'HEAD',
-      url: history,
-      headers: { cookie, 'x-rdws-edit-session': current },
-    });
-    expect(head.statusCode).toBe(403);
+    for (const url of [directory, history]) {
+      const head = await app.inject({
+        method: 'HEAD',
+        url,
+        headers: { cookie, 'x-rdws-edit-session': current },
+      });
+      expect(head.statusCode).toBe(403);
+    }
     for (const headers of [
       { cookie },
       { cookie, 'x-rdws-edit-session': current },
@@ -237,7 +239,7 @@ test('the passive session observer restricts only its two read routes before Nat
     }
     const wrongRoute = await app.inject({
       method: 'POST',
-      url: directory,
+      url: `/api/requirements/${id}/commands`,
       headers: {
         cookie,
         origin: process.env.RDWS_ORIGIN!,
@@ -246,6 +248,7 @@ test('the passive session observer restricts only its two read routes before Nat
       payload: { commandId: randomUUID() },
     });
     expect(wrongRoute.statusCode).toBe(403);
+    expect(wrongRoute.json().error).toBe('身份头不受信任');
     expect(host.prepared).toBe(0);
     for (const headers of [
       { cookie },

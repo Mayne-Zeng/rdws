@@ -78,8 +78,9 @@ type Database = ReturnType<typeof connectDatabase>['db'];
 type Auth = ReturnType<typeof createAuth>;
 const templateBindingPath = '/api/requirements/:id/capability-template';
 const personnelPath = '/api/requirements/:id/personnel';
-const sessionListPath = '/api/requirements/:id/sessions';
+const sessionsPath = '/api/requirements/:id/sessions';
 const sessionHistoryPath = '/api/requirements/:id/sessions/:sessionId/history';
+const sessionForkPath = '/api/requirements/:id/sessions/:sessionId/fork';
 const nativeBootstrapPath = '/api/dsh/:id/bootstrap';
 const nativeTransportPath = '/api/dsh/:id/native/*';
 const nativeMuxPath = '/api/dsh/:id/native/api/remote.mux';
@@ -97,8 +98,12 @@ const isTemplateBindingRequest = (request: FastifyRequest) =>
   (request.method === 'GET' || request.method === 'POST');
 const isPassiveSessionRead = (request: FastifyRequest) =>
   request.method === 'GET' &&
-  (request.routeOptions.url === sessionListPath ||
+  (request.routeOptions.url === sessionsPath ||
     request.routeOptions.url === sessionHistoryPath);
+const isSessionWrite = (request: FastifyRequest) =>
+  request.method === 'POST' &&
+  (request.routeOptions.url === sessionsPath ||
+    request.routeOptions.url === sessionForkPath);
 function fail(statusCode: number, message: string): never {
   throw Object.assign(new Error(message), { statusCode });
 }
@@ -709,7 +714,8 @@ export async function registerWorkbench(
   app.addHook('onRequest', async (request, reply) => {
     if (request.routeOptions.url === nativeMuxPath) return;
     const passiveRead = isPassiveSessionRead(request);
-    if (passiveRead) reply.header('cache-control', 'no-store');
+    const sessionWrite = isSessionWrite(request);
+    if (passiveRead || sessionWrite) reply.header('cache-control', 'no-store');
     if (
       Object.keys(request.headers).some(
         (key) =>
@@ -724,6 +730,7 @@ export async function registerWorkbench(
             (isTemplateBindingRequest(request) ||
               isImportRequest(request) ||
               passiveRead ||
+              sessionWrite ||
               (request.method === 'GET' &&
                 request.routeOptions.url === nativeBootstrapPath) ||
               (request.routeOptions.url === personnelPath &&
@@ -803,8 +810,9 @@ export async function registerWorkbench(
     const passiveRead = isPassiveSessionRead(request);
     const epoch = authorizationEpoch;
     const who = await actor(request.headers);
-    if (templateBinding || passiveRead)
-      verifyEditLogin(request, who.authSessionId);
+    if (templateBinding) verifyEditLogin(request, who.authSessionId);
+    if (passiveRead || isSessionWrite(request))
+      verifyEditLogin(request, who.authSessionId, false);
     if (personnel) verifyEditLogin(request, who.authSessionId, true);
     const requirementId = demand ? decodeURIComponent(demand[1]!) : undefined;
     const projectId = project
@@ -2150,7 +2158,7 @@ export async function registerWorkbench(
         request.body as BusinessCommand,
       ),
   );
-  app.get(sessionListPath, async (request) => {
+  app.get(sessionsPath, async (request) => {
     const scope = await access(
       request.headers,
       (request.params as { id: string }).id,
@@ -2234,7 +2242,7 @@ export async function registerWorkbench(
       fail(400, '会话参数由服务器确定');
   };
   app.post(
-    '/api/requirements/:id/sessions',
+    sessionsPath,
     {
       schema: { body: SessionCreate },
       preValidation: async (request) => {
@@ -2256,7 +2264,7 @@ export async function registerWorkbench(
     },
   );
   app.post(
-    '/api/requirements/:id/sessions/:sessionId/fork',
+    sessionForkPath,
     { schema: { body: SessionFork }, preValidation: validateSessionBody },
     async (request, reply) => {
       const result = await sessionOperation(

@@ -464,10 +464,18 @@ function ConnectedConversation({
         `/api/requirements/${requirementId}/sessions${operation.sourceSessionId ? '/' + encodeURIComponent(operation.sourceSessionId) + '/fork' : ''}`,
         {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: {
+            'content-type': 'application/json',
+            'x-rdws-edit-session': login.sessionId,
+          },
           body: JSON.stringify({ commandId: operation.commandId }),
         },
       );
+      if (response.status === 401) {
+        if (live.current)
+          setError('会话访问已变化，请重新打开需求会话后核对原操作。');
+        return;
+      }
       const data = (await response.json()) as SessionOperationResult & {
         error?: string;
       };

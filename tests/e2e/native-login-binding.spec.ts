@@ -199,6 +199,120 @@ test('an open conversation keeps its original login and isolates the draft after
   }
 });
 
+test('session create keeps its observed login and the original account can retry the command', async ({
+  page,
+  baseURL,
+}) => {
+  const origin = baseURL!;
+  const context = page.context();
+  const accounts = JSON.parse(
+    await readFile(join(runtimeHome, 'secrets/test-accounts.json'), 'utf8'),
+  ) as { username: string; password: string }[];
+  const manager = accounts.find((account) => account.username === 'manager')!;
+  const lead = accounts.find((account) => account.username === 'lead')!;
+  const original = await prepareSession(context, origin, manager);
+  const { members } = await (
+    await page.request.get('/api/projects/poc/members')
+  ).json();
+  const created = await page.request.post('/api/projects/poc/requirements', {
+    headers: { origin },
+    data: {
+      commandId: randomUUID(),
+      title: `Session write binding ${randomUUID()}`,
+      description: 'Synthetic session creation fixture',
+      acceptance: 'Only the observed login can submit the command',
+      leadId: members.find((item: { name: string }) => item.name === 'lead').id,
+      participants: [],
+    },
+  });
+  expect(created.status()).toBe(200);
+  const { id } = await created.json();
+  const requirement = `/api/requirements/${id}`;
+  const directory = requirement + '/sessions';
+  const address = `/?project=poc&requirement=${id}&view=chat`;
+  const pause = latch();
+  let holdReads = false;
+  await page.route(
+    (url) =>
+      ['/api/auth/get-session', requirement, directory].includes(url.pathname),
+    async (route) => {
+      if (holdReads && route.request().method() === 'GET') await pause.wait;
+      await route.continue();
+    },
+  );
+  const otherPage = await context.newPage();
+  const newSession = page.getByRole('button', {
+    name: '新建会话',
+    exact: true,
+  });
+  const retry = page.getByRole('button', { name: '核对原操作', exact: true });
+  const write = () =>
+    page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === directory &&
+        response.request().method() === 'POST',
+    );
+  try {
+    await page.goto(address);
+    await expect(newSession).toBeEnabled();
+    await expect(page.getByText('暂无会话', { exact: true })).toBeVisible();
+    holdReads = true;
+    await otherPage.goto('/api/health');
+    const replacement = await prepareSession(otherPage.context(), origin, lead);
+    expect(replacement.user.id).not.toBe(original.user.id);
+    expect((await otherPage.request.get(directory)).status()).toBe(200);
+
+    const denied = write();
+    await newSession.click();
+    const rejected = await denied;
+    expect(rejected.status()).toBe(401);
+    expect(rejected.request().headers()['x-rdws-edit-session']).toBe(
+      original.session.id,
+    );
+    const command = rejected.request().postDataJSON();
+    await expect(
+      page.getByText('会话访问已变化，请重新打开需求会话后核对原操作。'),
+    ).toBeVisible();
+    await expect(retry).toBeEnabled();
+    const deniedRetry = write();
+    await retry.click();
+    const rejectedRetry = await deniedRetry;
+    expect(rejectedRetry.status()).toBe(401);
+    expect(rejectedRetry.request().headers()['x-rdws-edit-session']).toBe(
+      original.session.id,
+    );
+    expect(rejectedRetry.request().postDataJSON()).toEqual(command);
+    expect(
+      (await (await otherPage.request.get(directory)).json()).sessions,
+    ).toEqual([]);
+
+    holdReads = false;
+    pause.open();
+    await page.reload();
+    await expect(newSession).toBeEnabled();
+    await expect(retry).toHaveCount(0);
+    const restored = await prepareSession(otherPage.context(), origin, manager);
+    expect(restored.session.id).not.toBe(original.session.id);
+    await page.reload();
+    await expect(retry).toBeEnabled();
+    const retried = write();
+    await retry.click();
+    const result = await retried;
+    expect(result.status()).toBe(200);
+    expect(result.request().headers()['x-rdws-edit-session']).toBe(
+      restored.session.id,
+    );
+    expect(result.request().postDataJSON()).toEqual(command);
+    await expect(retry).toHaveCount(0);
+    await expect(
+      page.getByRole('button', { name: '会话 1 · 本人', exact: true }),
+    ).toBeVisible();
+  } finally {
+    pause.open();
+    await otherPage.close();
+  }
+});
+
 for (const { view, replacementAccount } of [
   { view: 'chat', replacementAccount: 'manager' },
   { view: 'trace', replacementAccount: 'lead' },

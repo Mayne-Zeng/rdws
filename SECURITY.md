@@ -26,6 +26,8 @@ Native 浏览器传输随页面打开时的登录固定。BFF 在准备工作区
 
 工作台的会话目录与被动历史也携带原观察登录。BFF 以 Cookie 认证并比对，在返回前复核需求读取权及撤权代次。两条 GET 使用 no-store，无头调用仍按当前 Cookie 及既有访问权限处理。工作台收到授权拒绝后清理相应的目录或历史，观察到登录更换时提示重新打开。 [验收证据](docs/02-directory-and-engineering-design.html#t02-passive-session-login-plan-20261119)
 
+工作台新建和派生会话时也发送原观察登录。BFF 对这两条 POST 使用 no-store，以 Cookie 认证，并在查找需求、准备 Native 或处理回执前拒绝错绑请求。旧页收到 401 后保留待核对命令，同一账号重新打开需求会话后可用新登录核对。未发送观察头的接口调用继续按当前 Cookie 和既有写入权限处理。 [验收证据](docs/02-directory-and-engineering-design.html#t02-session-write-login-20261119)
+
 ## 仓库只读访问与基线发布
 
 仓库地址、可信签名人和访问方式由运行维护者私有登记。显式 `credentialFile: null` 走匿名读取，Git 子进程无认证头。文件凭据绑定完整 HTTPS 地址，仅传入本次读取用的子进程环境，读取或认证失败时保留失败。两种方式均保留 TLS 校验，并禁用重定向、凭据助手和继承的用户 Git 配置。浏览器仅取得状态、提交 SHA 与签名指纹。

@@ -215,7 +215,7 @@ test('requirement details preserve the original edit across reload and discard s
         ])
       ).rowCount,
     ).toBe(0);
-    await login('pm');
+    const { session } = await login('pm');
     await page.reload();
     await expect(page.getByText('资料原文', { exact: true })).toBeVisible();
     await expect(
@@ -239,9 +239,6 @@ test('requirement details preserve the original edit across reload and discard s
     await retry.click();
     await expect(page.getByText('未确认的中间响应')).toBeVisible();
     await expect(retry).toBeVisible();
-    const { session } = await (
-      await page.request.get('/api/auth/get-session')
-    ).json();
     expect(
       (
         await page.request.post(path, {

@@ -147,10 +147,7 @@ test('requirement template recovery stays with the same command and the current 
       }
       return route.continue();
     });
-    await login('pm');
-    firstSession = (
-      await (await page.request.get('/api/auth/get-session')).json()
-    ).session.id as string;
+    firstSession = (await login('pm')).session.id;
     await page.setViewportSize({ width: 390, height: 844 });
     await page.emulateMedia({ colorScheme: 'light' });
     await page.goto(url);

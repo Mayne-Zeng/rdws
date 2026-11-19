@@ -23,7 +23,7 @@ test('platform approval recovery reads the current retired version without resub
   let failRead = false;
   try {
     await page.setViewportSize({ width: 390, height: 844 });
-    await prepareSession(
+    const { user } = await prepareSession(
       page.context(),
       baseURL!,
       accounts.find(({ username }) => username === 'admin')!,
@@ -85,9 +85,6 @@ test('platform approval recovery reads the current retired version without resub
     await expect(row).toContainText('1.0.0 · 已停用');
     expect(writes).toHaveLength(2);
 
-    const { user } = await (
-      await page.request.get('/api/auth/get-session')
-    ).json();
     await page.evaluate(
       ({ key, value }) => sessionStorage.setItem(key, JSON.stringify(value)),
       {

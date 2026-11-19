@@ -27,13 +27,12 @@ test('template recovery preserves confirmed revisions and project members see re
   let dropBeforeCommit = false;
   let failOverview = false;
   let failTemplates = false;
-  async function login(username: string) {
-    await prepareSession(
+  const login = (username: string) =>
+    prepareSession(
       page.context(),
       baseURL!,
       accounts.find((row) => row.username === username)!,
     );
-  }
   async function setApproval(approved: boolean) {
     const commandId = randomUUID();
     commands.push(commandId);
@@ -51,7 +50,7 @@ test('template recovery preserves confirmed revisions and project members see re
     expect(response.status()).toBe(200);
   }
   try {
-    await login('admin');
+    const { user } = await login('admin');
     await setApproval(true);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.route('**/api/management/platform', (route) =>
@@ -126,9 +125,6 @@ test('template recovery preserves confirmed revisions and project members see re
         )
       ).json()
     ).templates.find((entry: { name: string }) => entry.name === changed);
-    const { user } = await (
-      await page.request.get('/api/auth/get-session')
-    ).json();
     const stale = {
       commandId: randomUUID(),
       kind: 'capability.template.save',

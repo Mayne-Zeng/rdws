@@ -365,6 +365,20 @@
   <p>首轮浏览器全量在布局用例超时，诊断复跑实际捕获共享进程下的认证查询 429。测试夹具改为通过测试 Auth API 核对真实签发的会话身份，并复用暂缓观察阶段的一次真实 BFF 响应。产品限流配置沿用现有值。交付补查 APPROVE，确认实际 HTTP 401／200、清理旧正文和目录、较早成功迟到及新观察头的断言均保留。</p>
   <p><code>caffeinate -i pnpm check</code> 的整仓测试通过（30 文件、188 项），类型、lint、格式与构建通过，构建仍提示主包体积。夹具调整后复跑类型、lint、格式及 <code>caffeinate -i pnpm test:e2e</code> 均返回 0（38 项浏览器回归）。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>fix: bind passive session reads to the observed login</code>。T02 与 T16 保留用户侧验收状态。</p>
 
+  <h4 id="t02-session-write-login-20261119">11.10.10 新建与派生的观察登录</h4>
+  <p>T02 按 I2-AUTH、I3-CONTEXT 和已批准生命周期方案继续收口。范围为单一登录绑定修复，属 R3，方案双面独立评审及交付独立复核。基线 <code>bda2cbb</code> 的真实双标签页测试中，保持旧对话期间换成同一需求内有权操作的另一个账号，旧页新建会话返回 200，预期为 401。此前 §11.10.9 只覆盖读入口。新建与派生共用的提交函数仍只发送当前 Cookie，BFF 因而会按该 Cookie 选定操作账号。</p>
+  <ol>
+    <li>BFF 在新建与派生两条精确 POST 上接收可选 <code>x-rdws-edit-session</code> 并设置 no-store。沿用来源及请求体校验顺序。Cookie 仍决定身份，携带的观察 ID 必须与该登录精确一致。匿名、错绑或重复头在需求查找、工作区准备和写入或查询回执之前拒绝。显式使用可选头，保留现有无头调用、角色、源会话归属、回执与 Native 派发及返回前授权复核；既有其他允许路由继续按原规则。</li>
+    <li>工作台的两种提交及「核对原操作」都发送页面打开时的观察 ID。在解析回执前处理 401，保留原命令标识和派生源，提示重新打开需求会话后核对。待核对项仍按账号与需求保留，重新进入的同一账号可以用新登录核对已有命令。不同账号没有该待核对项，也不会自动重试。</li>
+    <li>浏览器验证有权异账号换 Cookie 后旧页新建和核对都返回 401，页面显示重开提示，另一账号重开看不到原待核对项，原账号重新登录和打开后用同一命令成功。BFF 集成对两条 POST 断言错绑、匿名及重复头拒绝时没有 Native 准备，数据库的回执与会话映射均无变化。原 Cookie 携匹配头映射成功后，新 Cookie 携旧头不能取得子会话 ID，匹配新头可使用原命令核对同一子 ID，且只派发一次。覆盖合法派生切点、无头兼容，以及原先禁止该头的 <code>/commands</code> POST 与会话 HEAD 边界。验证沿用测试数据库及 Native 夹具，执行定点测试、整仓检查、浏览器回归和基线校验。</li>
+    <li>前后端配套更新，先更新 BFF，再更新浏览器制品并重载旧页。新页面遇到旧 BFF 的头拒绝时保留原命令并失败。回退用上一配套版本并重载，旧版会重新出现该窗口。无迁移、生产依赖、远端写入或用户侧验收状态变更。</li>
+  </ol>
+  <p>第二版方案 A/B 独立复审均 APPROVE。复审补齐了原登录已映射后的新登录回执核对、数据库映射读回、来源与请求体校验顺序、401 提示及相邻路由负例。</p>
+  <p>改前 <code>caffeinate -i pnpm test:e2e tests/e2e/native-login-binding.spec.ts -g 'session create keeps'</code> 返回 1，实际 200。改后 <code>caffeinate -i pnpm test tests/integration/session-lifecycle.test.ts tests/integration/revocation-races.test.ts</code> 返回 0（29 项）。两条写路由的错绑调用未准备 Native、未添加回执或会话映射。原登录建立的已映射命令可由同一账号的新登录核对，重复调用继续返回同一子 ID，派生切点保持为 4，Native 每条命令只派发一次。现有无头调用和未允许该头的相邻路由仍符合原契约。</p>
+  <p><code>caffeinate -i pnpm test:e2e tests/e2e/native-login-binding.spec.ts tests/e2e/session-retry.spec.ts</code> 返回 0（8 项）。测试中的实际浏览器与本地 BFF 拒绝了旧页的新建和再次核对。更换为另一个有权账号后，重载看不到前一账号的待核对项。原账号重登并重载后携新观察头提交相同命令，得到一个本人会话。相邻回归覆盖响应丢失、无效 JSON、重连失败及空源派生的既有处理。</p>
+  <p>独立交付复核 APPROVE，覆盖方法与路由的精确匹配、Cookie 身份唯一性、重复头、既有授权检查、派生源和原命令保留、回执恢复及配套升级。浏览器全量首轮在布局末项超时。同序诊断复跑在深色会话入口实际捕获到认证查询 429。四处测试身份断言复用现有测试登录夹具已核对的账号或会话标识，省去重复公开查询。布局诊断代码在复跑前已撤下。夹具补审 APPROVE，实际业务请求及其断言继续覆盖原合约，产品限流沿用既有值。</p>
+  <p><code>caffeinate -i pnpm check</code> 返回 0（30 个测试文件、189 项），类型、lint、格式与构建通过，构建仍提示主包体积。夹具调整后复跑 <code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code> 及 <code>caffeinate -i pnpm test:e2e</code> 均返回 0（39 项浏览器回归）。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>fix: bind session writes to the observed login</code>。T02 保留用户侧验收状态。</p>
+
   <h3 id="t00-baseline-20261118">11.11 T00 总基线与任务追溯 · 2026-11-18</h3>
   <p><strong>状态：T00 基线／追溯内部验收完成，双面复审通过。</strong>本次为非批量的单一 T00 文档／离线校验交付；基线为 main / <code>4ecf870</code>，进入时工作区干净。主责表示该命题的闭环归口，跨任务约束仍对所有相关实现生效；协作列不是第二个主责。本轮不修改业务实现、数据库 schema 或权限，不启动新服务／模型／GitLab 写入。</p>
   <h4>11.11.1 来源层次与替代关系</h4>

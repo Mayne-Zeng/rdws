@@ -133,6 +133,156 @@ async function login(app: ReturnType<typeof buildApp>, username = 'manager') {
   expect(r.statusCode).toBe(200);
   return r.cookies.map((item) => `${item.name}=${item.value}`).join('; ');
 }
+
+test('the passive session observer restricts only its two read routes before Native preparation', async () => {
+  const host = new ControlledHost();
+  const app = appFor(host);
+  const application = new Pool({ connectionString: process.env.DATABASE_URL });
+  const historyText = 'Fixture authorized history content';
+  let began!: () => void;
+  let release!: () => void;
+  const reading = new Promise<void>((resolve) => (began = resolve));
+  const resume = new Promise<void>((resolve) => (release = resolve));
+  let hold = false;
+  host.fetch = async (_path, _grant, init = {}) => {
+    if (hold) {
+      began();
+      await resume;
+    }
+    return Response.json({
+      type: 'server-response',
+      rpcId: JSON.parse(String(init.body)).rpcId,
+      result: {
+        ok: true,
+        value: {
+          cursor: 1,
+          hasMore: false,
+          records: [
+            {
+              type: 'event',
+              event: {
+                seq: 1,
+                type: 'user/message',
+                data: {
+                  source: { kind: 'user' },
+                  content: [{ type: 'text', text: historyText }],
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+  };
+  try {
+    const identitySql = 'select current_database() db, session_user role';
+    expect((await pool.query(identitySql)).rows[0]).toEqual({
+      db: 'rdws_test',
+      role: 'rdws_test_migrator',
+    });
+    expect((await application.query(identitySql)).rows[0]).toEqual({
+      db: 'rdws_test',
+      role: 'rdws_test_app',
+    });
+    const id = await fixture();
+    const sessionId = 'passive-' + randomUUID();
+    await pool.query(
+      'insert into native_session(id,requirement_id,owner_id) values($1,$2,$3)',
+      [sessionId, id, manager],
+    );
+    const oldCookie = await login(app);
+    const cookie = await login(app);
+    const former = await observedLogin(app, oldCookie);
+    const current = await observedLogin(app, cookie);
+    const tester = await login(app, 'tester');
+    const testerLogin = await observedLogin(app, tester);
+    expect(former).not.toBe(current);
+    const directory = `/api/requirements/${id}/sessions`;
+    const history = `${directory}/${sessionId}/history`;
+    for (const url of [directory, history]) {
+      for (const headers of [
+        { cookie, 'x-rdws-edit-session': former },
+        { cookie, 'x-rdws-edit-session': [current, current] },
+        { 'x-rdws-edit-session': current },
+      ]) {
+        const result = await app.inject({ url, headers });
+        expect(result.statusCode).toBe(401);
+        expect(result.headers['cache-control']).toBe('no-store');
+      }
+      for (const headers of [
+        { cookie, 'x-rdws-untrusted-probe': 'test' },
+        { cookie: tester, 'x-rdws-edit-session': testerLogin },
+      ]) {
+        const result = await app.inject({ url, headers });
+        expect(result.statusCode).toBe(403);
+        expect(result.headers['cache-control']).toBe('no-store');
+      }
+    }
+    const head = await app.inject({
+      method: 'HEAD',
+      url: history,
+      headers: { cookie, 'x-rdws-edit-session': current },
+    });
+    expect(head.statusCode).toBe(403);
+    for (const headers of [
+      { cookie },
+      { cookie, 'x-rdws-edit-session': current },
+    ]) {
+      const result = await app.inject({ url: directory, headers });
+      expect(result.statusCode).toBe(200);
+      expect(result.headers['cache-control']).toBe('no-store');
+      expect(result.json().sessions).toMatchObject([
+        { id: sessionId, own: true },
+      ]);
+    }
+    const wrongRoute = await app.inject({
+      method: 'POST',
+      url: directory,
+      headers: {
+        cookie,
+        origin: process.env.RDWS_ORIGIN!,
+        'x-rdws-edit-session': current,
+      },
+      payload: { commandId: randomUUID() },
+    });
+    expect(wrongRoute.statusCode).toBe(403);
+    expect(host.prepared).toBe(0);
+    for (const headers of [
+      { cookie },
+      { cookie, 'x-rdws-edit-session': current },
+    ]) {
+      const result = await app.inject({ url: history, headers });
+      expect(result.statusCode).toBe(200);
+      expect(result.headers['cache-control']).toBe('no-store');
+      expect(result.body).toContain(historyText);
+    }
+    hold = true;
+    const pending = app
+      .inject({
+        url: history,
+        headers: { cookie, 'x-rdws-edit-session': current },
+      })
+      .then((response) => response);
+    await reading;
+    const logout = await app.inject({
+      method: 'POST',
+      url: '/api/auth/sign-out',
+      headers: { cookie, origin: process.env.RDWS_ORIGIN! },
+      payload: {},
+    });
+    expect(logout.statusCode).toBe(200);
+    release();
+    const lost = await pending;
+    expect(lost.statusCode).toBe(401);
+    expect(lost.headers['cache-control']).toBe('no-store');
+    expect(lost.body).not.toContain(historyText);
+  } finally {
+    release();
+    await app.close();
+    await application.end();
+  }
+});
+
 class ObservedLoginHost extends ControlledHost {
   registered = 0;
   forwarded = 0;

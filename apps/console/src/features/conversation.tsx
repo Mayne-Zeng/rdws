@@ -357,6 +357,7 @@ function ConnectedConversation({
   const [sessions, setSessions] = useState<
     { id: string; own: boolean; sourceSessionId?: string }[]
   >([]);
+  const [directoryAccessLost, setDirectoryAccessLost] = useState(false);
   const [selected, setSelected] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -364,7 +365,8 @@ function ConnectedConversation({
     [intent, setIntent] = useState<PendingSession>();
   const live = useRef(true),
     sending = useRef(false),
-    refreshSequence = useRef(0);
+    refreshSequence = useRef(0),
+    appliedDirectorySequence = useRef(0);
   useEffect(() => {
     if (!storageKey) return;
     try {
@@ -379,17 +381,38 @@ function ConnectedConversation({
   }, [storageKey]);
   async function refresh() {
     const sequence = ++refreshSequence.current;
-    const response = await fetch(`/api/requirements/${requirementId}/sessions`);
-    if (!response.ok) throw new Error('会话列表读取失败');
+    const current = () =>
+      live.current && sequence > appliedDirectorySequence.current;
+    const response = await fetch(
+      `/api/requirements/${requirementId}/sessions`,
+      {
+        cache: 'no-store',
+        headers: { 'x-rdws-edit-session': login.sessionId },
+      },
+    );
+    if (!response.ok) {
+      if (current() && [401, 403, 404].includes(response.status)) {
+        appliedDirectorySequence.current = sequence;
+        setDirectoryAccessLost(true);
+        setSessions([]);
+        setSelected('');
+      }
+      throw new Error('会话列表读取失败');
+    }
     const data = await response.json();
-    if (live.current && sequence === refreshSequence.current)
+    if (current()) {
+      appliedDirectorySequence.current = sequence;
+      setDirectoryAccessLost(false);
       setSessions(data.sessions);
+    }
   }
   useEffect(() => {
     const controller = new AbortController();
     let current: NativeRuntime | undefined;
     live.current = true;
     setRuntime(undefined);
+    setSessions([]);
+    setDirectoryAccessLost(false);
     setSelected(initialSession.current);
     setError('');
     void connectNative(requirementId, login.sessionId, controller.signal)
@@ -408,6 +431,7 @@ function ConnectedConversation({
       });
     return () => {
       live.current = false;
+      appliedDirectorySequence.current = refreshSequence.current;
       controller.abort();
       void current?.dispose();
     };
@@ -418,7 +442,7 @@ function ConnectedConversation({
         void refresh().catch(() => {});
     }, 2000);
     return () => clearInterval(timer);
-  }, [requirementId]);
+  }, [requirementId, login.sessionId]);
   async function create(sourceSessionId?: string, retry?: PendingSession) {
     if (sending.current || !storageKey) return;
     const operation = retry ?? {
@@ -494,7 +518,7 @@ function ConnectedConversation({
           tag="button"
           onClick={() => void create()}
           loading={busy}
-          disabled={!runtime || !!intent || !storageKey}
+          disabled={!runtime || !!intent || !storageKey || directoryAccessLost}
         >
           新建会话
         </Button>
@@ -506,7 +530,7 @@ function ConnectedConversation({
           variant="outline"
           onClick={() => void create(undefined, intent)}
           loading={busy}
-          disabled={!runtime}
+          disabled={!runtime || directoryAccessLost}
         >
           核对原操作
         </Button>
@@ -543,7 +567,13 @@ function ConnectedConversation({
               />
             </div>
           ))}
-          {sessions.length === 0 && <p className="muted">暂无会话</p>}
+          {directoryAccessLost ? (
+            <p className="muted" role="status">
+              会话访问已变化，正在重新核对。
+            </p>
+          ) : (
+            sessions.length === 0 && <p className="muted">暂无会话</p>
+          )}
         </nav>
         {runtime && selectedSession ? (
           <div className="conversation">
@@ -571,6 +601,7 @@ function ConnectedConversation({
                 key={'history-' + selected}
                 requirementId={requirementId}
                 id={selected}
+                observedLoginId={login.sessionId}
               />
             ) : (
               <SessionPanel

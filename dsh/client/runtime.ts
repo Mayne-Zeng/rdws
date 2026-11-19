@@ -24,13 +24,23 @@ export async function readSessionHistory(
   sessionId: string,
   positions: { throughSeq?: number; beforeSeq?: number } = {},
   signal?: AbortSignal,
+  observedLoginId?: string,
 ) {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(positions))
     if (value !== undefined) query.set(key, String(value));
   const response = await fetch(
     `/api/requirements/${encodeURIComponent(requirementId)}/sessions/${encodeURIComponent(sessionId)}/history?${query}`,
-    { cache: 'no-store', signal },
+    {
+      cache: 'no-store',
+      signal,
+      headers:
+        observedLoginId === undefined
+          ? undefined
+          : {
+              'x-rdws-edit-session': observedLoginId,
+            },
+    },
   );
   if (!response.ok)
     throw Object.assign(new Error('会话历史读取失败，请重试'), {
@@ -199,6 +209,7 @@ export function connectNative(
               sessionId,
               positions,
               signal,
+              observedLoginId,
             );
           },
           async reconnect() {

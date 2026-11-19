@@ -78,6 +78,8 @@ type Database = ReturnType<typeof connectDatabase>['db'];
 type Auth = ReturnType<typeof createAuth>;
 const templateBindingPath = '/api/requirements/:id/capability-template';
 const personnelPath = '/api/requirements/:id/personnel';
+const sessionListPath = '/api/requirements/:id/sessions';
+const sessionHistoryPath = '/api/requirements/:id/sessions/:sessionId/history';
 const nativeBootstrapPath = '/api/dsh/:id/bootstrap';
 const nativeTransportPath = '/api/dsh/:id/native/*';
 const nativeMuxPath = '/api/dsh/:id/native/api/remote.mux';
@@ -93,6 +95,10 @@ const isImportRequest = (request: FastifyRequest) =>
 const isTemplateBindingRequest = (request: FastifyRequest) =>
   request.routeOptions.url === templateBindingPath &&
   (request.method === 'GET' || request.method === 'POST');
+const isPassiveSessionRead = (request: FastifyRequest) =>
+  request.method === 'GET' &&
+  (request.routeOptions.url === sessionListPath ||
+    request.routeOptions.url === sessionHistoryPath);
 function fail(statusCode: number, message: string): never {
   throw Object.assign(new Error(message), { statusCode });
 }
@@ -702,6 +708,8 @@ export async function registerWorkbench(
   }
   app.addHook('onRequest', async (request, reply) => {
     if (request.routeOptions.url === nativeMuxPath) return;
+    const passiveRead = isPassiveSessionRead(request);
+    if (passiveRead) reply.header('cache-control', 'no-store');
     if (
       Object.keys(request.headers).some(
         (key) =>
@@ -715,6 +723,7 @@ export async function registerWorkbench(
             key === 'x-rdws-edit-session' &&
             (isTemplateBindingRequest(request) ||
               isImportRequest(request) ||
+              passiveRead ||
               (request.method === 'GET' &&
                 request.routeOptions.url === nativeBootstrapPath) ||
               (request.routeOptions.url === personnelPath &&
@@ -791,9 +800,11 @@ export async function registerWorkbench(
     const demand = /^\/api\/(?:requirements|dsh)\/([^/]+)/.exec(path);
     if (path !== '/api/projects' && !project && !demand) return;
     const templateBinding = isTemplateBindingRequest(request);
+    const passiveRead = isPassiveSessionRead(request);
     const epoch = authorizationEpoch;
     const who = await actor(request.headers);
-    if (templateBinding) verifyEditLogin(request, who.authSessionId);
+    if (templateBinding || passiveRead)
+      verifyEditLogin(request, who.authSessionId);
     if (personnel) verifyEditLogin(request, who.authSessionId, true);
     const requirementId = demand ? decodeURIComponent(demand[1]!) : undefined;
     const projectId = project
@@ -818,7 +829,15 @@ export async function registerWorkbench(
       );
     const scope = { ...who, projectId, epoch, requirementId, demandList };
     assertResponse(scope);
-    responseScopes.set(request, scope);
+    responseScopes.set(
+      request,
+      passiveRead && projectId && requirementId
+        ? {
+            ...scope,
+            demandAccess: { projectId, requirementId, authority: 'reader' },
+          }
+        : scope,
+    );
   });
   app.addHook('onSend', async (request, reply, payload) => {
     const scope = responseScopes.get(request);
@@ -2131,7 +2150,7 @@ export async function registerWorkbench(
         request.body as BusinessCommand,
       ),
   );
-  app.get('/api/requirements/:id/sessions', async (request) => {
+  app.get(sessionListPath, async (request) => {
     const scope = await access(
       request.headers,
       (request.params as { id: string }).id,
@@ -2255,13 +2274,10 @@ export async function registerWorkbench(
         .send(result);
     },
   );
-  app.get(
-    '/api/requirements/:id/sessions/:sessionId/history',
+  app.get<{ Params: { id: string; sessionId: string } }>(
+    sessionHistoryPath,
     async (request) => {
-      const { id, sessionId } = request.params as {
-        id: string;
-        sessionId: string;
-      };
+      const { id, sessionId } = request.params;
       const scope = await access(request.headers, id);
       if (!scope.sessions.some((s) => s.id === sessionId))
         fail(403, '无权读取该会话历史');
@@ -2290,8 +2306,9 @@ export async function registerWorkbench(
         position('beforeSeq', 0),
         pageSize,
       );
-      await access(request.headers, id);
-      if (stale(scope)) fail(401, '授权已变化');
+      const fresh = await confirmAccess(request.headers, scope);
+      if (!fresh.sessions.some((s) => s.id === sessionId))
+        fail(403, '无权读取该会话历史');
       const labels: Record<string, string> = {
         'turn/start': '轮次开始',
         'turn/end': '轮次结束',

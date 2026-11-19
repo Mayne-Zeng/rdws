@@ -6,24 +6,32 @@ import { SessionHistory } from './session-history.tsx';
 
 export function SessionTrace({
   userId,
+  sessionId,
+  observedLogin,
   projectId,
   requirementId,
 }: {
   userId: string;
+  sessionId: string;
+  observedLogin: { userId: string; sessionId: string };
   projectId: string;
   requirementId: string;
 }) {
   const [selected, setSelected] = useState('');
   const [accessLost, setAccessLost] = useState(false);
+  const loginChanged =
+    userId !== observedLogin.userId || sessionId !== observedLogin.sessionId;
   const directory = useQuery({
-    queryKey: ['trace-sessions', userId, projectId, requirementId],
+    queryKey: ['trace-sessions', userId, sessionId, projectId, requirementId],
     queryFn: ({ signal }) =>
       api<{
         sessions: { id: string; own: boolean; sourceSessionId?: string }[];
       }>(`/api/requirements/${encodeURIComponent(requirementId)}/sessions`, {
         cache: 'no-store',
+        headers: { 'x-rdws-edit-session': observedLogin.sessionId },
         signal,
       }),
+    enabled: !loginChanged,
     refetchOnMount: 'always',
     refetchInterval: 2000,
   });
@@ -42,7 +50,14 @@ export function SessionTrace({
       <div className="page-heading core-page-heading">
         <h1 id="trace-heading">会话轨迹</h1>
       </div>
-      {accessLost || directory.isError ? (
+      {loginChanged ? (
+        <div className="inline-feedback" role="alert">
+          <Alert theme="warning" message="登录已变化，请重新打开需求会话。" />
+          <Button tag="button" onClick={() => window.location.reload()}>
+            重新打开需求会话
+          </Button>
+        </div>
+      ) : accessLost || directory.isError ? (
         <div className="inline-feedback" role="alert">
           <Alert
             theme="error"
@@ -87,6 +102,7 @@ export function SessionTrace({
               key={session.id}
               id={session.id}
               requirementId={requirementId}
+              observedLoginId={observedLogin.sessionId}
               mode="trace"
               onAccessLost={() => {
                 setSelected('');

@@ -24,6 +24,8 @@ BFF 从已鉴权需求的 PostgreSQL 归属选取 Native 实例。项目具有�
 
 Native 浏览器传输随页面打开时的登录固定。BFF 在准备工作区前核对 bootstrap 的观察登录，随后对 HTTP 和 WebSocket 核对 Cookie、实际需求归属及原绑定。WebSocket 升级前的授权代次贯穿上游 Peer 建立和后续流量。重连轮换短租约代次时沿用原绑定。原 Cookie 仍有效的连接按其原登录鉴权，撤权时关闭。旧页面发现换登录后释放连接，原草稿仅在当前文档内存保留，当前账号相同且需求授权读回后可复制。 [验收证据](docs/02-directory-and-engineering-design.html#t13-native-login-binding-evidence-20261119)
 
+工作台的会话目录与被动历史也携带原观察登录。BFF 以 Cookie 认证并比对，在返回前复核需求读取权及撤权代次。两条 GET 使用 no-store，无头调用仍按当前 Cookie 及既有访问权限处理。工作台收到授权拒绝后清理相应的目录或历史，观察到登录更换时提示重新打开。 [验收证据](docs/02-directory-and-engineering-design.html#t02-passive-session-login-plan-20261119)
+
 ## 仓库只读访问与基线发布
 
 仓库地址、可信签名人和访问方式由运行维护者私有登记。显式 `credentialFile: null` 走匿名读取，Git 子进程无认证头。文件凭据绑定完整 HTTPS 地址，仅传入本次读取用的子进程环境，读取或认证失败时保留失败。两种方式均保留 TLS 校验，并禁用重定向、凭据助手和继承的用户 Git 配置。浏览器仅取得状态、提交 SHA 与签名指纹。

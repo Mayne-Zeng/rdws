@@ -33,11 +33,13 @@ function downloadSummary(id: string, history: SessionHistoryPage) {
 export function SessionHistory({
   requirementId,
   id,
+  observedLoginId,
   mode = 'replay',
   onAccessLost,
 }: {
   requirementId: string;
   id: string;
+  observedLoginId: string;
   mode?: 'replay' | 'trace';
   onAccessLost?: () => void;
 }) {
@@ -63,6 +65,7 @@ export function SessionHistory({
           ? { throughSeq: current.cursor, beforeSeq: current.beforeSeq }
           : {},
         request.signal,
+        observedLoginId,
       );
       if (!isCurrent()) return;
       if (
@@ -110,7 +113,7 @@ export function SessionHistory({
     pending.current = false;
     void load();
     return () => current.abort();
-  }, [requirementId, id]);
+  }, [requirementId, id, observedLoginId]);
   const shown = trace && (busy || error) ? undefined : history;
   return (
     <section

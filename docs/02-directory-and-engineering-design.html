@@ -350,6 +350,21 @@
   <p>改前 <code>caffeinate -i pnpm test:e2e tests/e2e/session-replay.spec.ts</code> 返回 1。首次旧页拒绝后仍留一条正文，错切点的正文出现在回放内。改后 <code>caffeinate -i pnpm test:e2e tests/e2e/session-replay.spec.ts tests/e2e/session-trace.spec.ts</code> 返回 0（3 项）。回放清理旧正文和切点后，可重新取得授权的首页。切点变化、位置停滞、事件越界及暂时失败都在原位置重试；合法空页只推进分页，合法续页按事件顺序显示。轨迹继续通过固定页、迟到响应、权限重查和已读摘要验证。</p>
   <p>独立交付复审 APPROVE，核对当前请求作用域、BFF 现有鉴权、原生游标上界、续页区间及测试夹具来源。<code>caffeinate -i pnpm check</code> 返回 0（30 文件、187 项，类型、lint、格式与构建通过），构建仍提示主包体积。<code>caffeinate -i pnpm test:e2e</code> 返回 0（36 项）。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>fix: guard session replay authorization and pagination</code>。T02 保留用户侧验收状态。</p>
 
+  <h4 id="t02-passive-session-login-plan-20261119">11.10.9 会话目录与历史的观察登录</h4>
+  <p>Change / R3，非批量，基线 <code>972bef0</code>。依据 I2-AUTH、T02 被动回放、T16 轨迹及 §11.16.10 的工作台观察登录。真实双标签页场景下，旧对话回放与轨迹在登录观察滞后时携带新 Cookie 重新读取历史，改前均返回 200；同账号的新登录与另一有权账号各复现一次。旧页持有的目录权限、本人归属和历史选择应与该页面的观察登录一致。</p>
+  <ol>
+    <li>仅按 <code>request.method</code> 和 Fastify 的精确路由，允许既有会话目录 GET 及历史 GET 携带可选 <code>x-rdws-edit-session</code>。在全局头拒绝之前为两条 GET 设置 no-store。全局 preHandler 由 Cookie 认证后、查询需求项目与恢复撤权栅栏前比对观察头；通过后仍按原账号、登录、实际项目及需求授权。HEAD、写入或相近路径沿用原头限制。无头合法读取仍用原契约；观察头本身没有授权能力。使用现有 <code>responseScopes.demandAccess</code> 在出站复核原登录、项目需求读取权与撤权代次；历史读取 Native 后以 <code>confirmAccess</code> 核对原身份及目标会话仍在可读目录。</li>
+    <li>工作台对话的目录、回放和 NativeRuntime 被动读取沿用原观察登录 ID，客户端显式绕过缓存。目录按已处理的授权结果序号收敛。启动另一轮询不会使较慢的有效拒绝被跳过。当前作用域的 401／403／404 清空目录和选中的正文，较早的成功响应不能覆盖已处理的拒绝，后续匹配原登录的授权读取可以恢复。瞬时网络失败仍按现有显示规则。作用域解绑会使原作用域所有在途结果失效，创建后的主动刷新照常。草稿继续按原页面机制保存。</li>
+    <li>轨迹沿用工作台原观察登录，目录缓存与组件实例包含当前登录代次，查询和历史发送观察 ID。收到授权失败沿用现有重查并关闭旧历史；已观察到登录更换时撤下旧数据和查询，提供显式重新打开。新页面重新观察当前登录，任何只读入口都不触发会话推理。</li>
+    <li>验证同账号新登录与有权异账号的真实双标签页、认证与详情仍暂缓时的旧目录／本人标记及正文清理、较慢拒绝和迟到成功、恢复原读作用域及重开。服务端核查有头与无头的 200、错绑／重复／匿名 401、其他头或无权角色 403，并覆盖 Native 读取期间撤权后正文不出站；错绑历史不准备 Native。先更新 BFF，再更新浏览器制品并重载旧页；新页面遇到旧 BFF 拒绝时保持失败。回退前后端成对并重载，旧版恢复此跨登录窗口。模型供应商策略、会话写入口、数据迁移与对外动作不在范围内。</li>
+  </ol>
+  <p>第二版方案 A/B 独立复审均 APPROVE。复审补足了响应前授权、早拒缓存、慢拒绝和迟到结果、旧 DOM 移除及成对更新边界。</p>
+  <p>改前 <code>caffeinate -i pnpm test:e2e tests/e2e/native-login-binding.spec.ts -g 'passive'</code> 返回 1，两种情形下旧页历史实际收到 200。改后 <code>caffeinate -i pnpm test tests/integration/revocation-races.test.ts -t 'passive session observer'</code> 返回 0（1 项）。错绑、真实重复头、匿名和权限错误均收敛，在 Native 准备前拒绝错绑。已开始的历史读取在注入实际退出后得到 401，响应保留 no-store，测试正文不出站。</p>
+  <p><code>caffeinate -i pnpm test:e2e tests/e2e/native-login-binding.spec.ts tests/e2e/session-replay.spec.ts tests/e2e/session-trace.spec.ts</code> 返回 0（6 项）。真实双标签页换 Cookie，两类旧页读取沿用原观察头。旧对话读历史得到 401，目录慢拒绝在后续请求已有调度时仍撤下旧目录，较早的真实 200 不能恢复旧数据。轨迹在认证和详情暂停期间独立收到目录 401，选中的受控正文及入口消失；错绑历史的实际请求另由替换账号携旧头核对。恢复有效原 Cookie 后，对话目录可重新读取；显式重开在两类场景使用新观察登录取到历史。</p>
+  <p>独立交付复审 APPROVE。核对了两条 GET 的可选头、提前拒绝的缓存控制、原账号与需求出站复核、历史的目标会话归属读回、页面代次和目录响应顺序。退出竞态由真实 BFF 进入 Native 读取后复现，出站末段复核另由源码核对。</p>
+  <p>首轮浏览器全量在布局用例超时，诊断复跑实际捕获共享进程下的认证查询 429。测试夹具改为通过测试 Auth API 核对真实签发的会话身份，并复用暂缓观察阶段的一次真实 BFF 响应。产品限流配置沿用现有值。交付补查 APPROVE，确认实际 HTTP 401／200、清理旧正文和目录、较早成功迟到及新观察头的断言均保留。</p>
+  <p><code>caffeinate -i pnpm check</code> 的整仓测试通过（30 文件、188 项），类型、lint、格式与构建通过，构建仍提示主包体积。夹具调整后复跑类型、lint、格式及 <code>caffeinate -i pnpm test:e2e</code> 均返回 0（38 项浏览器回归）。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>fix: bind passive session reads to the observed login</code>。T02 与 T16 保留用户侧验收状态。</p>
+
   <h3 id="t00-baseline-20261118">11.11 T00 总基线与任务追溯 · 2026-11-18</h3>
   <p><strong>状态：T00 基线／追溯内部验收完成，双面复审通过。</strong>本次为非批量的单一 T00 文档／离线校验交付；基线为 main / <code>4ecf870</code>，进入时工作区干净。主责表示该命题的闭环归口，跨任务约束仍对所有相关实现生效；协作列不是第二个主责。本轮不修改业务实现、数据库 schema 或权限，不启动新服务／模型／GitLab 写入。</p>
   <h4>11.11.1 来源层次与替代关系</h4>

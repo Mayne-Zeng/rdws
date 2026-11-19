@@ -96,6 +96,7 @@
   - 前置：[已有批准方案](02-directory-and-engineering-design.html#session-lifecycle-plan-20261118)。T00 只同步任务归属与接口衔接。
   - 来源：I2-AUTH、I3-CONTEXT、I4-UI；[台账多会话切片](00-decision-ledger.html#session-lifecycle-20261118)。
   - 已交付修复：[回放权限失效与固定切点](02-directory-and-engineering-design.html#t02-replay-read-guard-20261119)。续页权限拒绝后清除已加载正文和切点，重新读取首页。错切点、停滞或越界页不会拼入历史；合法空页仍可向前分页。独立复审、整仓 187 项、浏览器 36 项及基线通过。
+  - 已交付修复：[目录与历史的观察登录](02-directory-and-engineering-design.html#t02-passive-session-login-plan-20261119)。工作台对话和轨迹保持原观察登录，换 Cookie 时清理受影响读状态，允许从新页面重新读取。兼容按 Cookie 鉴权的无头客户端。独立复审、整仓 188 项、浏览器 38 项及基线通过。
 
 - [x] **T03 · 项目与成员管理**
   - 说明：补齐项目配置、多项目、成员维护、多角色和撤权入口；项目配置化同时覆盖项目级 DSH 实例的注册、路由与生命周期，解除仅预置 PoC 项目可用的运行时特例。

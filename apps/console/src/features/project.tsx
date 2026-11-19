@@ -644,8 +644,10 @@ export function ProjectWorkspace({
               showTabs ? (
                 view === 'trace' ? (
                   <SessionTrace
-                    key={`${userId}:${project.id}:${selected}`}
+                    key={`${userId}:${sessionId}:${project.id}:${selected}`}
                     userId={userId}
+                    sessionId={sessionId}
+                    observedLogin={nativeTab.login}
                     projectId={project.id}
                     requirementId={selected}
                   />

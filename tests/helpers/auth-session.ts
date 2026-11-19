@@ -23,20 +23,30 @@ export async function prepareSession(
     });
     if (!response.ok || !response.headers.getSetCookie().length)
       throw new Error('Synthetic session setup failed');
-    await context.addCookies(
-      response.headers.getSetCookie().map((line) => {
-        const pair = line.split(';')[0]!,
-          at = pair.indexOf('=');
-        return {
-          name: pair.slice(0, at),
-          value: pair.slice(at + 1),
-          url: origin,
-          httpOnly: true,
-          sameSite: 'Lax' as const,
-          secure: origin.startsWith('https:'),
-        };
+    const cookies = response.headers.getSetCookie().map((line) => {
+      const pair = line.split(';')[0]!,
+        at = pair.indexOf('=');
+      return {
+        name: pair.slice(0, at),
+        value: pair.slice(at + 1),
+        url: origin,
+        httpOnly: true,
+        sameSite: 'Lax' as const,
+        secure: origin.startsWith('https:'),
+      };
+    });
+    const identity = await auth.api.getSession({
+      headers: new Headers({
+        origin,
+        cookie: cookies.map(({ name, value }) => `${name}=${value}`).join('; '),
       }),
-    );
+    });
+    if (!identity) throw new Error('Synthetic session identity unavailable');
+    await context.addCookies(cookies);
+    return {
+      session: { id: identity.session.id },
+      user: { id: identity.user.id },
+    };
   } finally {
     await database.pool.end();
   }

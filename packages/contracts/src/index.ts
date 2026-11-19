@@ -412,6 +412,14 @@ export interface BusinessAuditPage {
   next: { version: number; id: string } | null;
   events: BusinessAuditEvent[];
 }
+export interface ProjectBusinessAuditPage {
+  projectId: string;
+  next: { at: string; id: string } | null;
+  events: (BusinessAuditEvent & {
+    requirementId: string;
+    requirementTitle: string;
+  })[];
+}
 
 export const RepositorySyncInput = Type.Object(
   { commandId: Type.String({ format: 'uuid' }) },

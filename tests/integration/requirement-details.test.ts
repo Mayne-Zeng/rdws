@@ -34,6 +34,9 @@ const demand = randomUUID(),
   race = randomUUID(),
   late = randomUUID(),
   auditDemand = randomUUID(),
+  projectAuditFirst = randomUUID(),
+  projectAuditSecond = randomUUID(),
+  projectAuditHidden = randomUUID(),
   foreign = randomUUID(),
   unassigned = randomUUID(),
   nativeDemand = randomUUID();
@@ -42,6 +45,9 @@ const demands = [
   race,
   late,
   auditDemand,
+  projectAuditFirst,
+  projectAuditSecond,
+  projectAuditHidden,
   foreign,
   unassigned,
   nativeDemand,
@@ -57,13 +63,186 @@ app.addHook('preSerialization', async (request, _reply, payload) => {
   if (
     beforeResponse &&
     (request.url.startsWith(`/api/requirements/${late}`) ||
-      request.url.startsWith(`/api/requirements/${auditDemand}/business-audit`))
+      request.url.startsWith(
+        `/api/requirements/${auditDemand}/business-audit`,
+      ) ||
+      request.url.startsWith(`/api/projects/${project}/business-audit`))
   ) {
     const callback = beforeResponse;
     beforeResponse = undefined;
     await callback();
   }
   return payload;
+});
+
+test('searches project business events with exact microsecond cursors and rechecks lookahead access', async () => {
+  const read = (
+    user: string,
+    query: Record<string, string> = {},
+    projectId = project,
+    observedLogin = members.get(user)!.sessionId,
+  ) =>
+    app.inject({
+      url:
+        `/api/projects/${projectId}/business-audit?` +
+        new URLSearchParams(query),
+      headers: {
+        cookie: members.get(user)!.cookie,
+        'x-rdws-edit-session': observedLogin,
+      },
+    });
+  const keyword = 'Synthetic audit %_';
+  await pool.query('update requirement set title=$1 where id=any($2::text[])', [
+    keyword,
+    [projectAuditFirst, projectAuditSecond, projectAuditHidden, foreign],
+  ]);
+  await pool.query('update requirement set title=$1 where id=$2', [
+    'Synthetic audit AB',
+    unassigned,
+  ]);
+  await pool.query(
+    "delete from requirement_participant where requirement_id=$1 and user_id=$2 and role='tester'",
+    [projectAuditHidden, members.get('tester')!.id],
+  );
+  const marker = 'PRIVATE_AUDIT_FIXTURE_' + randomUUID();
+  const newest = '2026-02-10T01:02:03.314159Z';
+  async function seed(demandId: string, amount: number, at: string) {
+    const ids = Array.from({ length: amount }, () => randomUUID());
+    await pool.query(
+      `insert into requirement_event(id,requirement_id,kind,actor_id,source,command_id,version,"after",created_at)
+        select id, $2, 'task.updated', $3, 'web', $4, 1, $5::jsonb, $6::timestamptz
+        from unnest($1::text[]) as id`,
+      [
+        ids,
+        demandId,
+        members.get('lead')!.id,
+        marker,
+        JSON.stringify({ status: 'done', description: marker }),
+        at,
+      ],
+    );
+    return ids;
+  }
+  const firstIds = await seed(projectAuditFirst, 25, newest);
+  const [secondId] = await seed(
+    projectAuditSecond,
+    1,
+    '2026-02-10T01:02:03.314158Z',
+  );
+  const [lastId] = await seed(
+    projectAuditFirst,
+    1,
+    '2026-02-10T01:02:03.314157Z',
+  );
+  const [hiddenId] = await seed(
+    projectAuditHidden,
+    1,
+    '2026-02-10T01:02:03.314160Z',
+  );
+  const [foreignId] = await seed(foreign, 1, '2026-02-10T01:02:03.314160Z');
+  const [wildcardId] = await seed(unassigned, 1, '2026-02-10T01:02:03.314160Z');
+
+  const filters = { q: keyword, kind: 'task.updated' };
+  const first = await read('tester', filters);
+  expect(first.statusCode).toBe(200);
+  expect(first.headers['cache-control']).toBe('no-store');
+  const page = first.json();
+  expect(page.projectId).toBe(project);
+  expect(page.events.map(({ id }: { id: string }) => id)).toEqual(
+    firstIds.sort().reverse(),
+  );
+  expect(page.next).toEqual({ at: newest, id: firstIds.at(-1) });
+  const next = await read('tester', {
+    ...filters,
+    beforeAt: page.next.at,
+    beforeId: page.next.id,
+  });
+  expect(next.statusCode).toBe(200);
+  expect(next.json().events).toMatchObject([
+    {
+      id: secondId,
+      requirementId: projectAuditSecond,
+      requirementTitle: keyword,
+      taskStatus: { after: 'done' },
+    },
+    { id: lastId, requirementId: projectAuditFirst },
+  ]);
+  expect(next.json().next).toBeNull();
+  for (const excluded of [marker, hiddenId, foreignId, wildcardId])
+    expect(first.body + next.body).not.toContain(excluded!);
+  expect((await read('tester', { q: marker })).json().events).toEqual([]);
+  expect(
+    (await read('tester', { ...filters, kind: 'requirement.stage' })).json()
+      .events,
+  ).toEqual([]);
+  expect((await read('admin', filters)).statusCode).toBe(403);
+  expect((await read('tester', filters, foreignProject)).statusCode).toBe(403);
+  expect(
+    (await read('tester', filters, project, randomUUID())).statusCode,
+  ).toBe(401);
+  const withoutObservation = {
+    url: `/api/projects/${project}/business-audit`,
+    headers: { cookie: members.get('tester')!.cookie },
+  };
+  expect((await app.inject(withoutObservation)).statusCode).toBe(401);
+  expect(
+    (await app.inject({ ...withoutObservation, method: 'HEAD' })).statusCode,
+  ).toBe(404);
+  expect((await read('tester', { beforeAt: newest })).statusCode).toBe(400);
+  expect(
+    (
+      await read('tester', {
+        beforeAt: '2026-02-30T01:02:03.314159Z',
+        beforeId: firstIds[0]!,
+      })
+    ).statusCode,
+  ).toBe(400);
+
+  const actorName = (
+    await pool.query('select name from auth_user where id=$1', [
+      members.get('lead')!.id,
+    ])
+  ).rows[0].name as string;
+  const byActor = await read('tester', { q: actorName, kind: 'task.updated' });
+  expect(byActor.statusCode).toBe(200);
+  expect(byActor.json().events).toContainEqual(
+    expect.objectContaining({ actorId: members.get('lead')!.id }),
+  );
+  const administratorView = await read('pm', filters);
+  expect(administratorView.statusCode).toBe(200);
+  expect(administratorView.json().events).toContainEqual(
+    expect.objectContaining({
+      id: hiddenId,
+      requirementId: projectAuditHidden,
+    }),
+  );
+
+  beforeResponse = async () => {
+    await pool.query(
+      "delete from requirement_participant where requirement_id=$1 and user_id=$2 and role='tester'",
+      [projectAuditSecond, members.get('tester')!.id],
+    );
+  };
+  const revokedLookahead = await read('tester', filters);
+  expect(revokedLookahead.statusCode).toBe(403);
+  expect(revokedLookahead.body).not.toContain(firstIds[0]!);
+  const tester = members.get('tester')!.id;
+  beforeResponse = async () => {
+    await pool.query(
+      "delete from project_member where project_id=$1 and user_id=$2 and role='tester'",
+      [project, tester],
+    );
+  };
+  try {
+    const revokedEmpty = await read('tester', { q: marker });
+    expect(revokedEmpty.statusCode).toBe(403);
+    expect(revokedEmpty.json()).not.toHaveProperty('events');
+  } finally {
+    await pool.query(
+      "insert into project_member values($1,$2,'tester') on conflict do nothing",
+      [project, tester],
+    );
+  }
 });
 
 test('reads an authorized business audit cut without exporting original business values', async () => {

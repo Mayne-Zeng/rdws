@@ -15,6 +15,7 @@ import { MembersPage } from './administration.tsx';
 import { RepositoriesPage } from './repositories.tsx';
 import { CapabilityTemplates } from './capability-templates.tsx';
 import { SessionTrace } from './session-trace.tsx';
+import { ProjectAudit } from './project-audit.tsx';
 import type { NativeTab } from './conversation.tsx';
 import { WORKBENCH_POLL_INTERVAL_MS } from '../lib/query.ts';
 export type View =
@@ -27,6 +28,7 @@ export type View =
   | 'repos'
   | 'members'
   | 'capabilities'
+  | 'audit'
   | 'platform'
   | 'design';
 export type Project = ProjectList['projects'][number];
@@ -68,6 +70,7 @@ export function ProjectWorkspace({
     'repos',
     'members',
     'capabilities',
+    'audit',
   ].includes(current ?? '')
     ? (current as View)
     : 'requirements';
@@ -169,7 +172,8 @@ export function ProjectWorkspace({
     !importing &&
     view !== 'repos' &&
     view !== 'members' &&
-    view !== 'capabilities';
+    view !== 'capabilities' &&
+    view !== 'audit';
   const traceAccessFailed = view === 'trace' && requirements.isError;
   const showTabs =
     demandView && projectMatches && !!summary && !traceAccessFailed;
@@ -198,7 +202,10 @@ export function ProjectWorkspace({
           title={project.name}
           value={project.id}
           onChange={(e) => {
-            setSearch({ project: e.target.value, view: 'requirements' });
+            setSearch({
+              project: e.target.value,
+              view: view === 'audit' ? 'audit' : 'requirements',
+            });
             setMobile(false);
           }}
         >
@@ -329,6 +336,17 @@ export function ProjectWorkspace({
           >
             <Icon name="file" />
             <span>能力模板</span>
+          </button>
+          <button
+            aria-label="审计中心"
+            title="审计中心"
+            aria-current={view === 'audit' ? 'page' : undefined}
+            disabled={protectedForm}
+            className={'nav-item' + (view === 'audit' ? ' active' : '')}
+            onClick={() => navigate('audit', '')}
+          >
+            <Icon name="shield" />
+            <span>审计中心</span>
           </button>
           {platformAdmin && (
             <button
@@ -484,11 +502,13 @@ export function ProjectWorkspace({
                   ? '能力模板'
                   : view === 'repos'
                     ? '仓库与环境'
-                    : importing
-                      ? '批量导入需求'
-                      : view === 'create'
-                        ? '新建需求'
-                        : (summary?.title ?? '需求管理')}
+                    : view === 'audit'
+                      ? '审计中心'
+                      : importing
+                        ? '批量导入需求'
+                        : view === 'create'
+                          ? '新建需求'
+                          : (summary?.title ?? '需求管理')}
             </div>
           </div>
           <span className="pill local-badge">
@@ -576,6 +596,7 @@ export function ProjectWorkspace({
           >
             {view !== 'repos' &&
               view !== 'capabilities' &&
+              view !== 'audit' &&
               requirements.isError && (
                 <div className="inline-feedback" role="alert">
                   <Alert theme="error" message={requirements.error.message} />
@@ -602,6 +623,13 @@ export function ProjectWorkspace({
               />
             ) : view === 'repos' ? (
               <RepositoriesPage key={project.id} projectId={project.id} />
+            ) : view === 'audit' ? (
+              <ProjectAudit
+                key={JSON.stringify([project.id, userId, sessionId])}
+                projectId={project.id}
+                userId={userId}
+                loginId={sessionId}
+              />
             ) : importing ? (
               requirements.isPending ? (
                 <Loading text="正在核对导入权限" />

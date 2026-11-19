@@ -33,7 +33,10 @@ function csvCell(value: string | number | null) {
   return '"' + content.replaceAll('"', '""') + '"';
 }
 
-function downloadPage(page: BusinessAuditPage) {
+export function downloadBusinessAudit(
+  scopeId: string,
+  events: (BusinessAuditEvent & { requirementId: string })[],
+) {
   const rows = [
     [
       '需求标识',
@@ -46,8 +49,8 @@ function downloadPage(page: BusinessAuditPage) {
       '任务标识',
       '需求版本',
     ],
-    ...page.events.map((event) => [
-      page.requirementId,
+    ...events.map((event) => [
+      event.requirementId,
       event.id,
       event.createdAt,
       businessAuditLabels[event.kind],
@@ -71,7 +74,7 @@ function downloadPage(page: BusinessAuditPage) {
   );
   const link = document.createElement('a');
   link.href = url;
-  link.download = `business-audit-${page.requirementId}.csv`;
+  link.download = `business-audit-${scopeId}.csv`;
   document.body.append(link);
   link.click();
   link.remove();
@@ -167,52 +170,7 @@ function AuditPage({
   return (
     <>
       {page.events.length ? (
-        <ol className="history-events" aria-label="业务审计事件">
-          {page.events.map((event) => (
-            <li className="history-event" key={event.id}>
-              <details>
-                <summary>
-                  <strong>{businessAuditLabels[event.kind]}</strong> ·{' '}
-                  {actorName(event)} ·{' '}
-                  <time dateTime={event.createdAt}>
-                    {new Date(event.createdAt).toLocaleString('zh-CN')}
-                  </time>
-                </summary>
-                <div className="trace-event-detail">
-                  <p>
-                    来源 {sourceName(event)} · 需求版本 {event.version}
-                  </p>
-                  <p>事件标识 {event.id}</p>
-                  <p>操作者标识 {event.actorId}</p>
-                  {event.taskId && <p>任务标识 {event.taskId}</p>}
-                  {event.stage && (
-                    <p>
-                      阶段 {stageLabels[event.stage.before]} →{' '}
-                      {stageLabels[event.stage.after]}
-                    </p>
-                  )}
-                  {event.taskStatus && (
-                    <p>
-                      任务状态{' '}
-                      {event.taskStatus.before
-                        ? taskStatusLabels[event.taskStatus.before] + ' → '
-                        : ''}
-                      {taskStatusLabels[event.taskStatus.after]}
-                    </p>
-                  )}
-                  {!!event.changedFields?.length && (
-                    <p>
-                      变更字段{' '}
-                      {event.changedFields
-                        .map((field) => detailFieldLabels[field])
-                        .join('、')}
-                    </p>
-                  )}
-                </div>
-              </details>
-            </li>
-          ))}
-        </ol>
+        <BusinessAuditEvents events={page.events} />
       ) : (
         <p className="muted">此页没有业务审计事件。</p>
       )}
@@ -221,7 +179,15 @@ function AuditPage({
           <Button
             tag="button"
             variant="outline"
-            onClick={() => downloadPage(page)}
+            onClick={() =>
+              downloadBusinessAudit(
+                page.requirementId,
+                page.events.map((event) => ({
+                  ...event,
+                  requirementId: page.requirementId,
+                })),
+              )
+            }
           >
             导出当前页 CSV
           </Button>
@@ -244,5 +210,65 @@ function AuditPage({
         )}
       </div>
     </>
+  );
+}
+
+export function BusinessAuditEvents({
+  events,
+}: {
+  events: (BusinessAuditEvent & {
+    requirementId?: string;
+    requirementTitle?: string;
+  })[];
+}) {
+  return (
+    <ol className="history-events" aria-label="业务审计事件">
+      {events.map((event) => (
+        <li className="history-event" key={event.id}>
+          <details>
+            <summary>
+              <strong>{businessAuditLabels[event.kind]}</strong> ·{' '}
+              {event.requirementTitle && <>{event.requirementTitle} · </>}
+              {actorName(event)} ·{' '}
+              <time dateTime={event.createdAt}>
+                {new Date(event.createdAt).toLocaleString('zh-CN')}
+              </time>
+            </summary>
+            <div className="trace-event-detail">
+              <p>
+                来源 {sourceName(event)} · 需求版本 {event.version}
+              </p>
+              <p>事件标识 {event.id}</p>
+              {event.requirementId && <p>需求标识 {event.requirementId}</p>}
+              <p>操作者标识 {event.actorId}</p>
+              {event.taskId && <p>任务标识 {event.taskId}</p>}
+              {event.stage && (
+                <p>
+                  阶段 {stageLabels[event.stage.before]} →{' '}
+                  {stageLabels[event.stage.after]}
+                </p>
+              )}
+              {event.taskStatus && (
+                <p>
+                  任务状态{' '}
+                  {event.taskStatus.before
+                    ? taskStatusLabels[event.taskStatus.before] + ' → '
+                    : ''}
+                  {taskStatusLabels[event.taskStatus.after]}
+                </p>
+              )}
+              {!!event.changedFields?.length && (
+                <p>
+                  变更字段{' '}
+                  {event.changedFields
+                    .map((field) => detailFieldLabels[field])
+                    .join('、')}
+                </p>
+              )}
+            </div>
+          </details>
+        </li>
+      ))}
+    </ol>
   );
 }

@@ -28,6 +28,7 @@ import {
   isImportRequest,
   isTemplateBindingRequest,
   isPassiveRequirementRead,
+  isProjectAuditRead,
   isSessionWrite,
 } from './workbench-paths.ts';
 export type Database = ReturnType<typeof connectDatabase>['db'];
@@ -598,8 +599,10 @@ export function createWorkbenchRuntime(
   app.addHook('onRequest', async (request, reply) => {
     if (request.routeOptions.url === nativeMuxPath) return;
     const passiveRead = isPassiveRequirementRead(request);
+    const projectAudit = isProjectAuditRead(request);
     const sessionWrite = isSessionWrite(request);
-    if (passiveRead || sessionWrite) reply.header('cache-control', 'no-store');
+    if (passiveRead || projectAudit || sessionWrite)
+      reply.header('cache-control', 'no-store');
     if (
       Object.keys(request.headers).some(
         (key) =>
@@ -614,6 +617,7 @@ export function createWorkbenchRuntime(
             (isTemplateBindingRequest(request) ||
               isImportRequest(request) ||
               passiveRead ||
+              projectAudit ||
               sessionWrite ||
               (request.method === 'GET' &&
                 request.routeOptions.url === nativeBootstrapPath) ||
@@ -695,9 +699,11 @@ export function createWorkbenchRuntime(
     if (path !== '/api/projects' && !project && !demand) return;
     const templateBinding = isTemplateBindingRequest(request);
     const passiveRead = isPassiveRequirementRead(request);
+    const projectAudit = isProjectAuditRead(request);
     const epoch = authorizationEpoch;
     const who = await actor(request.headers);
     if (templateBinding) verifyEditLogin(request, who.authSessionId);
+    if (projectAudit) verifyEditLogin(request, who.authSessionId, true);
     if (passiveRead || isSessionWrite(request))
       verifyEditLogin(request, who.authSessionId, false);
     if (personnel) verifyEditLogin(request, who.authSessionId, true);
@@ -713,8 +719,9 @@ export function createWorkbenchRuntime(
           )[0]?.projectId
         : ':project-list';
     const demandList =
-      request.routeOptions.url === '/api/projects/:projectId/requirements' &&
-      (request.method === 'GET' || request.method === 'HEAD');
+      projectAudit ||
+      (request.routeOptions.url === '/api/projects/:projectId/requirements' &&
+        (request.method === 'GET' || request.method === 'HEAD'));
     if (projectId && (requirementId || demandList))
       await recoverPersonnelFences(
         who.userId,

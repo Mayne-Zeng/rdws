@@ -30,6 +30,8 @@ BFF 到本代 Native Web 的 HTTP 和 WebSocket 使用进程就绪时选定的�
 
 内部验证环境已对真实 Agent 主步骤和每次 HTTP 重试复验原登录批次、需求、会话、有效选模修订及目标路由。父端在受信回调前检查 Host、运行、步骤和请求仍然有效。真实标题及携带相同上下文 Note 的独立请求均被拒绝。生产供应商网络写入与撤权的定序仍待单独验收。 [逐次授权验证](docs/02-directory-and-engineering-design.html#t13-native-model-attempt-authority-20261119)
 
+主推理 TLS 1.3 转发在锁定的 macOS Node 24.20.0 环境完成回环验收。受信回调在同一同步段复核授权与最早期限，提交加密首段。步骤中只有明确零写入或完整验证的供应商 429 可开放下一次写入。转发先检查 HTTP 诊断与 TLS keylog，回归用合成标记检查性能记录、输出和运行产物。正式供应商接线及部署诊断仍待验收。 [TLS 转发验证](docs/02-directory-and-engineering-design.html#t13-tls13-first-write-20261119)
+
 停用与恢复写入账号代次，登录会话保存发行时的代次。数据库在插入时定序，业务读取和执行检查当前代次。旧登录不会在恢复后重新有效。单项目成员变动对该账号的同项目会话和连接生效。通知失败保留 BFF 截止与 Native 短租约两层不同的证据，已获准的外部请求可能完成。
 
 退出登录通过签名 Cookie 定位原会话。工作台请求另带页面观察的登录 ID。查得会话与观察 ID 匹配后，才关闭本进程的工作台和运行准入。BFF 在 PostgreSQL 确认原会话行消失后才返回成功并清 Cookie。未确认时返回 503，保留原 Cookie 供重试。本实例 Native 通知结果单独反映在响应头，同账号其他登录仍按各自会话鉴权。 [退出验收](docs/02-directory-and-engineering-design.html#t13-confirmed-logout-20261119)

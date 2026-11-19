@@ -37,6 +37,11 @@ import {
 } from './presets.ts';
 export { isDemandPreset } from './presets.ts';
 export type { ModelCarrierRequest } from '../bridge/model-carrier.ts';
+export {
+  createModelHttpsRelay,
+  type ModelWireCommit,
+  type ModelWireOutcome,
+} from './model-https.ts';
 const req = createRequire(import.meta.url);
 export async function writeOwner(
   handle: Awaited<ReturnType<typeof open>>,

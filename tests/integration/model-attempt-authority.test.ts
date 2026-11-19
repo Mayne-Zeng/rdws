@@ -227,6 +227,77 @@ test('the exact signed step can close before any binding ID is issued', async ()
   await expect(step(2, 3)).resolves.toBeTypeOf('string');
 });
 
+test('concurrent revalidation admits one physical write and only its verified retry can free the slot', async () => {
+  const { runs, state, step, attempt } = fixture();
+  const id = await step(1);
+  let finishReads!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    finishReads = resolve;
+  });
+  let waiting = 0;
+  state.read = async () => {
+    waiting++;
+    await gate;
+  };
+  const first = attempt(id);
+  const write = vi.fn(() => 'submitted' as const);
+  const current = runs.authorizeModelWireAttempt(first, write);
+  const competing = runs.authorizeModelWireAttempt(attempt(id), write);
+  void competing.catch(() => {});
+  try {
+    await expect.poll(() => waiting).toBe(2);
+  } finally {
+    finishReads();
+  }
+  const accepted = await current;
+  await expect(competing).rejects.toMatchObject({ statusCode: 403 });
+  await expect(
+    runs.authorizeModelWireAttempt(attempt(id), write),
+  ).rejects.toMatchObject({ statusCode: 403 });
+  expect(write).toHaveBeenCalledOnce();
+  accepted.accept429();
+  await expect(
+    runs.authorizeModelWireAttempt(first, write),
+  ).rejects.toMatchObject({ statusCode: 403 });
+  const partial = await runs.authorizeModelWireAttempt(
+    attempt(id),
+    () => 'indeterminate',
+  );
+  partial.accept429();
+  accepted.accept429();
+  await expect(
+    runs.authorizeModelWireAttempt(attempt(id), write),
+  ).rejects.toMatchObject({ statusCode: 403 });
+  const next = await step(2);
+  await expect(
+    runs.authorizeModelWireAttempt(attempt(next), write),
+  ).resolves.toMatchObject({ outcome: 'submitted' });
+  expect(write).toHaveBeenCalledTimes(2);
+});
+
+test('a known zero frees only the slot, with the earliest proven deadline delivered to the writer', async () => {
+  const { runs, step, attempt, state } = fixture();
+  const id = await step(1);
+  state.expires = Date.now() + 10_000;
+  const first = attempt(id);
+  const zero = await runs.authorizeModelWireAttempt(first, (validBefore) => {
+    expect(validBefore).toBe(state.expires);
+    return 'not-sent';
+  });
+  expect(zero.outcome).toBe('not-sent');
+  await expect(
+    runs.authorizeModelWireAttempt(first, () => 'submitted'),
+  ).rejects.toMatchObject({ statusCode: 403 });
+  await expect(
+    runs.authorizeModelWireAttempt(attempt(id), () => {
+      throw new Error('Fixture transport state lost');
+    }),
+  ).rejects.toThrow('Fixture transport state lost');
+  await expect(
+    runs.authorizeModelWireAttempt(attempt(id), () => 'submitted'),
+  ).rejects.toMatchObject({ statusCode: 403 });
+});
+
 test('a cold Host and a fresh Agent do not accept the previous signed run or its model binding', async () => {
   const { runs, step, prepareStep, openStep, newPosition, attempt } = fixture();
   const oldInput = prepareStep(1);

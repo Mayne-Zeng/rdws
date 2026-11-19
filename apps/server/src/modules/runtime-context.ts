@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { bodyHash, isRecord, type Grant } from '@rdws/dsh/access';
-import type { ModelCarrierRequest } from '@rdws/dsh/web';
+import type {
+  ModelCarrierRequest,
+  ModelWireCommit,
+  ModelWireOutcome,
+} from '@rdws/dsh/web';
 import {
   businessError,
   digestOf,
@@ -121,7 +125,12 @@ type ModelStep = {
   closed: boolean;
   selection?: EffectiveModel;
   attempts: Set<string>;
+  wireAttempt?: string;
 };
+type ModelAttempt = Pick<
+  ModelCarrierRequest,
+  'routeId' | 'destination' | 'attemptId' | 'call' | 'signal' | 'isCurrent'
+>;
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const invalidModel = () => businessError(403, '当前模型尝试未获授权');
 function parseStepMarker(input: unknown): StepMarker {
@@ -278,12 +287,30 @@ export class ContextRuns {
         !this.closing(run.who.authSessionId, run.who.userId, run.requirementId),
     );
   }
-  async authorizeModelAttempt<T>(
-    request: Pick<
-      ModelCarrierRequest,
-      'routeId' | 'destination' | 'attemptId' | 'call' | 'signal' | 'isCurrent'
-    >,
-    send: () => T,
+  authorizeModelAttempt<T>(request: ModelAttempt, send: () => T) {
+    return this.withAuthorizedAttempt(request, send);
+  }
+  authorizeModelWireAttempt(
+    request: ModelAttempt,
+    write: (validBefore: number) => ModelWireOutcome,
+  ): Promise<ModelWireCommit> {
+    return this.withAuthorizedAttempt(request, (step, validBefore) => {
+      const { attemptId } = request;
+      step.wireAttempt = attemptId;
+      const outcome = write(validBefore);
+      if (outcome === 'not-sent') step.wireAttempt = undefined;
+      return {
+        outcome,
+        accept429: () => {
+          if (outcome === 'submitted' && step.wireAttempt === attemptId)
+            step.wireAttempt = undefined;
+        },
+      };
+    });
+  }
+  private async withAuthorizedAttempt<T>(
+    request: ModelAttempt,
+    send: (step: ModelStep, validBefore: number) => T,
   ): Promise<T> {
     const { call, attemptId, routeId, destination, signal } = request;
     const step =
@@ -294,6 +321,7 @@ export class ContextRuns {
     if (
       !step ||
       step.closed ||
+      step.wireAttempt !== undefined ||
       !selection ||
       !this.selectModel ||
       !request.isCurrent() ||
@@ -337,11 +365,15 @@ export class ContextRuns {
       signal.aborted ||
       this.modelSteps.get(run.sessionId) !== step ||
       step.closed ||
+      step.wireAttempt !== undefined ||
       !this.current(step.batch) ||
       !(validBefore > Date.now())
     )
       return invalidModel();
-    return send();
+    return send(
+      step,
+      Math.min(validBefore, ...step.batch.map(({ expiresAt }) => expiresAt)),
+    );
   }
   async handle(
     input: unknown,

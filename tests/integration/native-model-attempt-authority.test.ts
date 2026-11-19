@@ -9,19 +9,24 @@ import {
   rm,
   writeFile,
 } from 'node:fs/promises';
-import { createServer, type IncomingHttpHeaders } from 'node:http';
+import type { IncomingHttpHeaders } from 'node:http';
+import { createServer } from 'node:https';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { connectDatabase } from '@rdws/db';
-import { NativeWebHost, type ModelCarrierRequest } from '@rdws/dsh/web';
+import {
+  createModelHttpsRelay,
+  NativeWebHost,
+  type ModelCarrierRequest,
+} from '@rdws/dsh/web';
 import { Pool } from 'pg';
 import { expect, test } from 'vitest';
 import { createBusiness } from '../../apps/server/src/modules/business.ts';
 import { createProjectContextReader } from '../../apps/server/src/modules/native-projects.ts';
 import { ContextRuns } from '../../apps/server/src/modules/runtime-context.ts';
-import { nativeLoopbackRequest } from '../../dsh/host/loopback-http.ts';
 import { loadEnvironment } from '../../scripts/env.mjs';
+import { modelTlsCertificate } from '../helpers/model-tls.ts';
 
 test.skipIf(process.platform !== 'darwin')(
   'the locked Agent retries through fresh authority while independent streams cannot reuse its Note',
@@ -43,56 +48,61 @@ test.skipIf(process.platform !== 'darwin')(
     const provider = 'rdws-glm';
     const model = 'fixture-model';
     const path = '/v1/chat/completions';
+    const keys = await modelTlsCertificate(root);
     const arrivals: {
       url?: string;
       headers: IncomingHttpHeaders;
       body: string;
     }[] = [];
-    const supplier = createServer(async (request, response) => {
-      try {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) chunks.push(Buffer.from(chunk));
-        arrivals.push({
-          url: request.url,
-          headers: request.headers,
-          body: Buffer.concat(chunks).toString(),
-        });
-        if (arrivals.length === 1) {
+    const supplier = createServer(
+      { ...keys, minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3' },
+      async (request, response) => {
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of request) chunks.push(Buffer.from(chunk));
+          arrivals.push({
+            url: request.url,
+            headers: request.headers,
+            body: Buffer.concat(chunks).toString(),
+          });
+          if (arrivals.length === 1) {
+            response
+              .writeHead(429, { 'content-type': 'application/json' })
+              .end(
+                JSON.stringify({ error: { message: 'Synthetic rate limit' } }),
+              );
+            return;
+          }
+          const frame = {
+            id: 'fixture',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model,
+          };
+          const frames = [
+            {
+              index: 0,
+              delta: { role: 'assistant', content: replyText },
+              finish_reason: null,
+            },
+            { index: 0, delta: {}, finish_reason: 'stop' },
+          ].map(
+            (choice) =>
+              `data: ${JSON.stringify({ ...frame, choices: [choice] })}\n\n`,
+          );
           response
-            .writeHead(429, { 'content-type': 'application/json' })
-            .end(
-              JSON.stringify({ error: { message: 'Synthetic rate limit' } }),
-            );
-          return;
+            .writeHead(200, { 'content-type': 'text/event-stream' })
+            .end(frames.join('') + 'data: [DONE]\n\n');
+        } catch {
+          response.destroy();
         }
-        const frame = {
-          id: 'fixture',
-          object: 'chat.completion.chunk',
-          created: 1,
-          model,
-        };
-        const frames = [
-          {
-            index: 0,
-            delta: { role: 'assistant', content: replyText },
-            finish_reason: null,
-          },
-          { index: 0, delta: {}, finish_reason: 'stop' },
-        ].map(
-          (choice) =>
-            `data: ${JSON.stringify({ ...frame, choices: [choice] })}\n\n`,
-        );
-        response
-          .writeHead(200, { 'content-type': 'text/event-stream' })
-          .end(frames.join('') + 'data: [DONE]\n\n');
-      } catch {
-        response.destroy();
-      }
-    });
+      },
+    );
     supplier.listen(0, '127.0.0.1');
     await once(supplier, 'listening');
-    const origin = `http://127.0.0.1:${(supplier.address() as { port: number }).port}`;
+    const origin = `https://127.0.0.1:${(supplier.address() as { port: number }).port}`;
     const routes = { pi: origin + path };
+    const relay = createModelHttpsRelay(routes.pi, keys.cert);
     const attempts: Pick<ModelCarrierRequest, 'attemptId' | 'call'>[] = [];
     const handedOff: string[] = [];
     const denied: string[] = [];
@@ -101,6 +111,7 @@ test.skipIf(process.platform !== 'darwin')(
     const operations: string[] = [];
     const lifecycle = new AbortController();
     let onBoundAttempt: ((request: ModelCarrierRequest) => void) | undefined;
+    let onWrite: (() => void) | undefined;
     let readFence: (() => Promise<void>) | undefined;
     let authorityProject = 'poc';
     const host = new NativeWebHost(
@@ -116,15 +127,16 @@ test.skipIf(process.platform !== 'darwin')(
           attempts.push({ attemptId: request.attemptId, call: request.call });
           if (request.call.bindingId) onBoundAttempt?.(request);
           try {
-            return await runs.authorizeModelAttempt(request, () => {
-              handedOff.push(request.attemptId);
-              return nativeLoopbackRequest(origin, path, {
-                method: 'POST',
-                headers: request.headers,
-                body: request.body,
-                signal: request.signal,
-              });
-            });
+            return await relay(request, (write) =>
+              runs.authorizeModelWireAttempt(request, (validBefore) => {
+                const outcome = write(validBefore);
+                if (outcome === 'submitted') {
+                  handedOff.push(request.attemptId);
+                  onWrite?.();
+                }
+                return outcome;
+              }),
+            );
           } catch (error) {
             denied.push(request.attemptId);
             throw error;
@@ -404,6 +416,52 @@ test.skipIf(process.platform !== 'darwin')(
       expect(arrivals).toHaveLength(2);
 
       authorityProject = host.projectId;
+      let revoked: ModelCarrierRequest | undefined;
+      let resumeRevoked!: () => void;
+      const revokeGate = new Promise<void>((resolve) => {
+        resumeRevoked = resolve;
+      });
+      onBoundAttempt = (request) => {
+        readFence = async () => {
+          revoked = request;
+          await revokeGate;
+        };
+      };
+      try {
+        await send('Prepare ciphertext before revoking the original run');
+        await expect.poll(() => revoked?.isCurrent()).toBe(true);
+        runs.revoke(authSessionId);
+      } finally {
+        resumeRevoked();
+      }
+      await expect.poll(() => denied.includes(revoked!.attemptId)).toBe(true);
+      async function completedTurns() {
+        return (await events()).filter(({ event }) => event.type === 'turn/end')
+          .length;
+      }
+      await expect.poll(completedTurns).toBe(3);
+      expect(arrivals).toHaveLength(2);
+
+      onBoundAttempt = undefined;
+      readFence = undefined;
+      const priorReplies = JSON.stringify(await events()).split(
+        replyText,
+      ).length;
+      let receivedBeforeRevoke = -1;
+      onWrite = () => {
+        onWrite = undefined;
+        receivedBeforeRevoke = arrivals.length;
+        runs.revoke(authSessionId);
+      };
+      await send('Revoke the original run after the actual first write');
+      await expect.poll(completedTurns).toBe(4);
+      expect(receivedBeforeRevoke).toBe(2);
+      expect(arrivals).toHaveLength(3);
+      expect(
+        JSON.stringify(await events()).split(replyText).length,
+      ).toBeGreaterThan(priorReplies);
+      const alreadySubmitted = [...handedOff];
+
       let resumeRead!: () => void;
       const readGate = new Promise<void>((resolve) => {
         resumeRead = resolve;
@@ -424,8 +482,8 @@ test.skipIf(process.platform !== 'darwin')(
         resumeRead();
       }
       await expect.poll(() => denied.includes(waiting!.attemptId)).toBe(true);
-      expect(handedOff).toEqual(main.map(({ attemptId }) => attemptId));
-      expect(arrivals).toHaveLength(2);
+      expect(handedOff).toEqual(alreadySubmitted);
+      expect(arrivals).toHaveLength(3);
       await host.close();
       const encodedCall = Buffer.from(JSON.stringify(main[0]!.call)).toString(
         'base64url',

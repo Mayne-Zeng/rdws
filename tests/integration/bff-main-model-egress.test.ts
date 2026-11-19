@@ -356,10 +356,11 @@ test.skipIf(process.platform !== 'darwin')(
         sessionId: string,
         text: string,
         requestId = randomUUID(),
+        mode: 'queue' | 'steer' = 'queue',
       ) =>
         rpc(login, 'prompt', {
           sessionId,
-          mode: 'queue',
+          mode,
           requestId,
           content: [{ type: 'text', text }],
         });
@@ -380,7 +381,15 @@ test.skipIf(process.platform !== 'darwin')(
           records: {
             event: {
               type: string;
-              data: { reason?: { kind: string }; delayMs?: number };
+              data: {
+                reason?: { kind: string };
+                delayMs?: number;
+                turn?: number;
+                step?: number;
+                target?: string;
+                source?: { rpcId?: string };
+                inserted?: { source?: { rpcId?: string } }[];
+              };
             };
           }[];
         };
@@ -538,6 +547,114 @@ test.skipIf(process.platform !== 'darwin')(
       expect(arrivals).toHaveLength(arrivalsBeforeBackoff + 1);
       expect(supplierRequests).toBe(requestsBeforeBackoff + 1);
       expect(await turnEnd(observer, backoffSession)).toBe('error');
+
+      for (const revokeRelatedLogin of [false, true]) {
+        const earlier = await login();
+        const latest = await login();
+        const sessionId = await create(observer);
+        const beforeBatch = arrivals.length;
+        const beforeBatchRequests = supplierRequests;
+        const firstStep = latch();
+        releases.push(firstStep.release);
+        supplierReply = firstStep.wait;
+        expect(
+          (
+            await prompt(observer, sessionId, 'Synthetic batch first step')
+          ).json().result.ok,
+        ).toBe(true);
+        await expect
+          .poll(() => arrivals.length, retryTimeout)
+          .toBe(beforeBatch + 1);
+        const steering = [
+          {
+            login: earlier,
+            body: 'Synthetic steering from earlier login',
+            id: randomUUID(),
+          },
+          {
+            login: latest,
+            body: 'Synthetic steering from latest login',
+            id: randomUUID(),
+          },
+        ];
+        for (const input of steering)
+          expect(
+            (
+              await prompt(
+                input.login,
+                sessionId,
+                input.body,
+                input.id,
+                'steer',
+              )
+            ).json().result.ok,
+          ).toBe(true);
+        const queued = await historyRecords(latest, sessionId);
+        expect(
+          queued.flatMap(({ event }) =>
+            event.type === 'agent/inbox/spliced' &&
+            event.data.target === 'next-step'
+              ? (event.data.inserted?.map(({ source }) => source?.rpcId) ?? [])
+              : [],
+          ),
+        ).toEqual(steering.map(({ id }) => id));
+        expect(queued.some(({ event }) => event.type === 'turn/end')).toBe(
+          false,
+        );
+        expect(arrivals).toHaveLength(beforeBatch + 1);
+
+        const nextStep = revokeRelatedLogin
+          ? gates.arm('before-lock')
+          : undefined;
+        if (nextStep) releases.push(nextStep.latch.release);
+        supplierReply = Promise.resolve();
+        firstStep.release();
+        if (nextStep) {
+          await expect.poll(() => nextStep.entered, retryTimeout).toBe(true);
+          const claimed = await historyRecords(latest, sessionId);
+          const secondStepIndex = claimed.findIndex(
+            ({ event }) =>
+              event.type === 'step/start' &&
+              event.data.turn === 1 &&
+              event.data.step === 2,
+          );
+          expect(secondStepIndex).toBeGreaterThanOrEqual(0);
+          expect(
+            claimed.slice(secondStepIndex + 1).flatMap(({ event }) => {
+              const requestId = event.data.source?.rpcId;
+              return event.type === 'user/message' && requestId
+                ? [requestId]
+                : [];
+            }),
+          ).toEqual(steering.map(({ id }) => id));
+          expect((await logout(earlier)).statusCode).toBe(200);
+          expect((await events(earlier, sessionId)).statusCode).toBe(401);
+          nextStep.latch.release();
+          await expect.poll(() => nextStep.wire?.closed).toBe(true);
+          expect(nextStep.wire?.bytes).toBe(0);
+        }
+        await expect
+          .poll(() => turnEnd(latest, sessionId), retryTimeout)
+          .toBeDefined();
+        const finished = await historyRecords(latest, sessionId);
+        expect(
+          finished
+            .filter(({ event }) => event.type === 'step/start')
+            .map(({ event }) => [event.data.turn, event.data.step]),
+        ).toEqual([
+          [1, 1],
+          [1, 2],
+        ]);
+        const requests = revokeRelatedLogin ? 1 : 2;
+        expect(supplierRequests).toBe(beforeBatchRequests + requests);
+        expect(arrivals).toHaveLength(beforeBatch + requests);
+        if (!revokeRelatedLogin)
+          for (const { body } of steering)
+            expect(JSON.stringify(arrivals.at(-1)?.body)).toContain(body);
+        expect((await turnEnd(latest, sessionId)) === 'completed').toBe(
+          !revokeRelatedLogin,
+        );
+      }
 
       const shutdownSession = await create(observer);
       const shutdownId = randomUUID();

@@ -6,7 +6,9 @@ import type {
   TemplateBindingInput,
   TemplateBindingReceipt,
 } from '@rdws/contracts';
+import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import { api } from '../lib/ui.tsx';
+import { WORKBENCH_POLL_INTERVAL_MS } from '../lib/query.ts';
 
 function readPending(key: string): TemplateBindingInput | undefined {
   try {
@@ -89,7 +91,7 @@ export function RequirementTemplate({
 }) {
   const client = useQueryClient();
   const url = `/api/requirements/${encodeURIComponent(id)}/capability-template`;
-  const observedLogin = { 'x-rdws-edit-session': sessionId };
+  const observedLogin = { [OBSERVED_LOGIN_HEADER]: sessionId };
   const key = [
     'requirement-template',
     sessionId,
@@ -103,7 +105,7 @@ export function RequirementTemplate({
     queryFn: ({ signal }) =>
       api<RequirementTemplateBinding>(url, { signal, headers: observedLogin }),
     refetchOnMount: 'always',
-    refetchInterval: 2000,
+    refetchInterval: WORKBENCH_POLL_INTERVAL_MS,
   });
   const [pending, setPending] = useState(() => readPending(storageKey));
   const [selection, setSelection] = useState('');

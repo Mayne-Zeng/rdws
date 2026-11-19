@@ -3,6 +3,7 @@ import { Alert, Button, Loading } from 'tdesign-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ProjectList } from '@rdws/contracts';
 import { useSearchParams } from 'react-router';
+import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import {
   ManagementRecovery,
   pendingManagement,
@@ -51,7 +52,7 @@ export function Workbench() {
     try {
       const r = await authClient.signOut({
         fetchOptions: {
-          headers: { 'x-rdws-edit-session': observedLogin.sessionId },
+          headers: { [OBSERVED_LOGIN_HEADER]: observedLogin.sessionId },
         },
       });
       if (r.error)

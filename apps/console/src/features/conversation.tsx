@@ -9,6 +9,7 @@ import {
   type SetStateAction,
 } from 'react';
 import { Alert, Button, Loading } from 'tdesign-react';
+import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import {
   connectNative,
   type NativeRuntime,
@@ -18,6 +19,7 @@ import { Icon } from '../lib/ui.tsx';
 import { SessionModelStatus } from './session-model.tsx';
 import type { SessionOperationResult } from '@rdws/contracts';
 import { SessionHistory } from './session-history.tsx';
+import { WORKBENCH_POLL_INTERVAL_MS } from '../lib/query.ts';
 type NativeDraft = {
   projectId: string;
   requirementId: string;
@@ -398,7 +400,7 @@ function ConnectedConversation({
       `/api/requirements/${requirementId}/sessions`,
       {
         cache: 'no-store',
-        headers: { 'x-rdws-edit-session': login.sessionId },
+        headers: { [OBSERVED_LOGIN_HEADER]: login.sessionId },
       },
     );
     if (!response.ok) {
@@ -451,7 +453,7 @@ function ConnectedConversation({
     const timer = setInterval(() => {
       if (document.visibilityState === 'visible')
         void refresh().catch(() => {});
-    }, 2000);
+    }, WORKBENCH_POLL_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [requirementId, login.sessionId]);
   async function create(sourceSessionId?: string, retry?: PendingSession) {
@@ -477,7 +479,7 @@ function ConnectedConversation({
           method: 'POST',
           headers: {
             'content-type': 'application/json',
-            'x-rdws-edit-session': login.sessionId,
+            [OBSERVED_LOGIN_HEADER]: login.sessionId,
           },
           body: JSON.stringify({ commandId: operation.commandId }),
         },

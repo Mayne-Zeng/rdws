@@ -16,6 +16,7 @@ import type {
   SessionBinding,
 } from '@deepseek-ai/dsh-api-session-controller/client';
 import type {} from '@deepseek-ai/dsh-api-session-controller/remote';
+import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 declare module '@deepseek-ai/dsh-api-session-controller/client' {
   interface SessionReferenceSourceMap {
     rdws: unknown;
@@ -43,7 +44,7 @@ export async function readSessionHistory(
         observedLoginId === undefined
           ? undefined
           : {
-              'x-rdws-edit-session': observedLoginId,
+              [OBSERVED_LOGIN_HEADER]: observedLoginId,
             },
     },
   );
@@ -77,7 +78,7 @@ export function connectNative(
       const prefix = `/api/dsh/${requirementId}/native/`;
       const response = await fetch(`/api/dsh/${requirementId}/bootstrap`, {
         signal,
-        headers: { 'x-rdws-edit-session': observedLoginId },
+        headers: { [OBSERVED_LOGIN_HEADER]: observedLoginId },
       });
       if (!response.ok) throw new Error('无法连接需求会话');
       const payload = (await response.json()) as {

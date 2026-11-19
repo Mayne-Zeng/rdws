@@ -4,6 +4,7 @@ import { and, eq, gt, type SQL } from 'drizzle-orm';
 import { username } from 'better-auth/plugins';
 import { drizzleAdapter } from '@better-auth/drizzle-adapter';
 import { type connectDatabase, schema } from '@rdws/db';
+import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 type Database = ReturnType<typeof connectDatabase>['db'];
 
 export async function currentAccount(
@@ -76,7 +77,7 @@ export function createAuth(
           const id = token
             ? await findSessionId(eq(schema.session.token, token))
             : undefined;
-          const observed = ctx.headers?.get('x-rdws-edit-session');
+          const observed = ctx.headers?.get(OBSERVED_LOGIN_HEADER);
           if (observed != null && observed !== id)
             throw new APIError('UNAUTHORIZED', {
               message: '登录已变化，请刷新后重试',

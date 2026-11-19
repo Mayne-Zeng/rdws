@@ -11,6 +11,7 @@ import {
   type RequirementImportReceipt,
   type RequirementImportRow,
 } from '@rdws/contracts';
+import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import { api, Icon } from '../lib/ui.tsx';
 import { openImportFile, type ImportSheet } from './requirement-import-file.ts';
 
@@ -154,7 +155,7 @@ export function RequirementImport({
   const root = `/api/projects/${encodeURIComponent(projectId)}/requirements/import`;
   const headers = {
     'content-type': 'application/json',
-    'x-rdws-edit-session': sessionId,
+    [OBSERVED_LOGIN_HEADER]: sessionId,
   };
   const key = 'rdws:requirement-import:' + JSON.stringify([userId, projectId]);
   const [pending, setPending] = useState(() => readPending(key));

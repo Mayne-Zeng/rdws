@@ -2,6 +2,7 @@ import { mkdir, access, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client';
+const PROBE_MAX_OUTPUT_TOKENS = 1024;
 export async function prepareNativeProfile(home: string, profile = 'rdws') {
   const directory = join(home, 'profiles', profile);
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -78,7 +79,7 @@ export function createProjectRuntime(options: {
     provider: options.provider,
     model: options.model,
     env: environment,
-    maxTokens: 1024,
+    maxTokens: PROBE_MAX_OUTPUT_TOKENS,
     initializeTimeoutMs: 30000,
     requestTimeoutMs: 90000,
     shutdownTimeoutMs: 3000,

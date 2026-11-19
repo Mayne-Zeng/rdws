@@ -299,7 +299,7 @@
     <tr><td>R-11 信封重复</td><td><span class="pill p-green">已收敛</span></td><td>目录与会话 RPC 共用 <code>withNativeEnvelope</code>，各自投影数据与错误。</td></tr>
     <tr><td>R-12 契约锚定</td><td><span class="pill p-green">已锚定</span></td><td>console 类型测试要求实际历史读取返回值与 <code>SessionHistoryPage</code> 等价。</td></tr>
     <tr><td>R-14 poc 魔法 ID</td><td><span class="pill p-green">已收敛</span></td><td>原生默认项目常量供 Host 与选路共用，README 记录兼容来源和移除条件。</td></tr>
-    <tr><td>R-15 魔法值散布</td><td><span class="pill p-gray">低优先</span></td><td>头名集中 contracts、轮询间隔/池参数具名常量</td></tr>
+    <tr><td>R-15 魔法值散布</td><td><span class="pill p-green">已收敛</span></td><td>协议头、工作台轮询、上下文并发、探针与数据库池上限各有常量。</td></tr>
     <tr><td>R-17 测试样板</td><td><span class="pill p-gray">单独批次</span></td><td>补 tests/helpers/test-accounts 与共享 pool 构造，41 处逐文件迁移</td></tr>
   </table>
   <p class="src">各项沿用本表与对应发现正文的验收判据。协调窗口的实际处置记录在 §10.5。</p>
@@ -318,6 +318,7 @@
   <p>R-11、R-12、R-14 和 Q1 取证经独立交付复审通过。R-01 随下一次工作台路由整体改动，R-08 随 T13 出口定序实施。R-09 的有界回收仍待设计。</p>
   <p>续办批次的 <code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check '!**/.agents/worktrees/**'</code>、<code>pnpm build</code> 及基线校验通过。格式检查从主工作树排除其内嵌的独立评审工作树。<code>pnpm test</code> 通过 42 文件、263 项，另有 1 项既有跳过。E2E 两个分片各通过 22 项。<code>pnpm test:web-live tests/web-live/model-egress-pause.spec.ts</code> 初次在既有恢复按钮步骤超时，原命令复跑通过 1 项，覆盖 Q1，使用真实供应商的其余 live 用例本轮未执行。</p>
   <p>报告可读性修订后，Chromium 无页面错误，两组文字对比度为 4.76:1 和 4.93:1，触发字号提示的正文为 12.5px。报告保留原章节布局。</p>
+  <p>R-15 独立方案和交付复审均 APPROVE。13 个调用位置和 1 个头名比较位置使用 <code>@rdws/contracts/headers</code> 的定义，测试继续按协议字面量校验。6 处工作台刷新均保持 2 秒。上下文读并发、探针输出 token 和数据库池上限分别为 4、1024 和 5，沿用既有租约常量。离线冻结安装、类型、lint、格式、构建通过；认证、撤权、项目 Native 路径与会话生命周期定点 47 项通过，登录绑定 E2E 4 项通过。</p>
 
   <h2 id="sA"><span class="num">A</span>附录 · 评审面原始终论</h2>
   <table>

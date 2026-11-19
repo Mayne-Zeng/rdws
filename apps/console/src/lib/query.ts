@@ -1,0 +1,1 @@
+export const WORKBENCH_POLL_INTERVAL_MS = 2000;

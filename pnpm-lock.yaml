@@ -219,6 +219,9 @@ importers:
       '@deepseek-ai/dsh-client-store':
         specifier: 0.2.2-rc.3
         version: 0.2.2-rc.3(@deepseek-ai/cordis@4.1.0)
+      '@rdws/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       immer:
         specifier: 10.1.1
         version: 10.1.1

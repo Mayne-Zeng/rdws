@@ -11,7 +11,9 @@ import {
   type RequirementPersonnelReceipt,
   type TaskRecord,
 } from '@rdws/contracts';
+import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import { api, roleLabels } from '../lib/ui.tsx';
+import { WORKBENCH_POLL_INTERVAL_MS } from '../lib/query.ts';
 
 type MemberRole = RequirementPersonnelInput['add'][number];
 const keyFor = (userId: string, role: string) => `${userId}:${role}`;
@@ -67,7 +69,7 @@ export function RequirementPersonnel({
 }) {
   const { id } = data.requirement;
   const url = `/api/requirements/${encodeURIComponent(id)}/personnel`;
-  const headers = { 'x-rdws-edit-session': sessionId };
+  const headers = { [OBSERVED_LOGIN_HEADER]: sessionId };
   const storage = 'rdws:requirement-personnel:' + JSON.stringify([userId, id]);
   const [original, setOriginal] = useState(() => originalCommand(storage));
   const [draft, setDraft] = useState<RequirementDetail>();
@@ -87,7 +89,7 @@ export function RequirementPersonnel({
       api<RequirementPersonnelCandidates>(url, { headers, signal }),
     enabled: canEdit && Boolean(draft) && !original,
     refetchOnMount: 'always',
-    refetchInterval: 2000,
+    refetchInterval: WORKBENCH_POLL_INTERVAL_MS,
   });
   useLayoutEffect(() => {
     live.current = true;

@@ -12,6 +12,7 @@ import { createSessionOperations } from './session-operations.ts';
 
 type Business = ReturnType<typeof createBusiness>;
 type Database = Parameters<typeof createSessionOperations>[0];
+const MAX_CONTEXT_READS = 4;
 
 export function createProjectContextReader(
   business: Pick<Business, 'readWithDeadline'>,
@@ -21,7 +22,8 @@ export function createProjectContextReader(
     project: string,
     ...args: Parameters<Business['readWithDeadline']>
   ) => {
-    if (activeReads >= 4) businessError(503, '需求上下文暂时繁忙');
+    if (activeReads >= MAX_CONTEXT_READS)
+      businessError(503, '需求上下文暂时繁忙');
     activeReads++;
     try {
       const { detail, validBefore } = await business.readWithDeadline(...args);

@@ -32,6 +32,7 @@ import {
   type ProjectRepositories,
   type RequirementWorkspace,
 } from '@rdws/contracts';
+import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import {
   businessError,
   createBusiness,
@@ -689,7 +690,7 @@ export async function registerWorkbench(
             request.routeOptions.url === nativeTransportPath
           ) &&
           !(
-            key === 'x-rdws-edit-session' &&
+            key === OBSERVED_LOGIN_HEADER &&
             (isTemplateBindingRequest(request) ||
               isImportRequest(request) ||
               passiveRead ||
@@ -1789,7 +1790,7 @@ export async function registerWorkbench(
     authSessionId: string,
     required = request.method === 'POST',
   ) {
-    const observed = request.headers['x-rdws-edit-session'];
+    const observed = request.headers[OBSERVED_LOGIN_HEADER];
     if ((required || observed !== undefined) && observed !== authSessionId)
       businessError(401, '登录已变化，请刷新后重试');
   }

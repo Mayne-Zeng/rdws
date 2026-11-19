@@ -16,6 +16,7 @@ import { RepositoriesPage } from './repositories.tsx';
 import { CapabilityTemplates } from './capability-templates.tsx';
 import { SessionTrace } from './session-trace.tsx';
 import type { NativeTab } from './conversation.tsx';
+import { WORKBENCH_POLL_INTERVAL_MS } from '../lib/query.ts';
 export type View =
   | 'requirements'
   | 'overview'
@@ -135,7 +136,7 @@ export function ProjectWorkspace({
         `/api/projects/${project.id}/requirements`,
         { signal },
       ),
-    refetchInterval: 2000,
+    refetchInterval: WORKBENCH_POLL_INTERVAL_MS,
     enabled: projectMatches,
   });
   const requirementListStatus = (

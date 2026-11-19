@@ -5,6 +5,7 @@ import type {
   RequirementDetailsReceipt,
   RequirementSummary,
 } from '@rdws/contracts';
+import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import { api } from '../lib/ui.tsx';
 
 export const detailFieldLabels = {
@@ -121,7 +122,7 @@ export function RequirementDetailsEditor({
           method: 'POST',
           headers: {
             'content-type': 'application/json',
-            'x-rdws-edit-session': sessionId,
+            [OBSERVED_LOGIN_HEADER]: sessionId,
           },
           body: original,
         },

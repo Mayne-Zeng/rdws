@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Loading } from 'tdesign-react';
+import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import { api } from '../lib/ui.tsx';
 import { SessionHistory } from './session-history.tsx';
+import { WORKBENCH_POLL_INTERVAL_MS } from '../lib/query.ts';
 
 export function SessionTrace({
   userId,
@@ -28,12 +30,12 @@ export function SessionTrace({
         sessions: { id: string; own: boolean; sourceSessionId?: string }[];
       }>(`/api/requirements/${encodeURIComponent(requirementId)}/sessions`, {
         cache: 'no-store',
-        headers: { 'x-rdws-edit-session': observedLogin.sessionId },
+        headers: { [OBSERVED_LOGIN_HEADER]: observedLogin.sessionId },
         signal,
       }),
     enabled: !loginChanged,
     refetchOnMount: 'always',
-    refetchInterval: 2000,
+    refetchInterval: WORKBENCH_POLL_INTERVAL_MS,
   });
   const sessions = directory.data?.sessions ?? [];
   const session = sessions.find((item) => item.id === selected);

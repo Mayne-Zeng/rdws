@@ -10,6 +10,7 @@ import {
   type BusinessCommand,
   type TaskRecord,
 } from '@rdws/contracts';
+import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import { Icon, api, roleLabels } from '../lib/ui.tsx';
 import { Conversation, type NativeTab } from './conversation.tsx';
 import { RequirementWorktrees } from './requirement-worktrees.tsx';
@@ -20,6 +21,7 @@ import {
   detailFieldLabels,
 } from './requirement-details-editor.tsx';
 import type { View } from './project.tsx';
+import { WORKBENCH_POLL_INTERVAL_MS } from '../lib/query.ts';
 const stages = Object.keys(stageLabels) as Stage[];
 function assignmentOf(value: unknown) {
   if (!value || typeof value !== 'object' || !('assigneeId' in value))
@@ -48,9 +50,9 @@ export function RequirementPage({
     queryFn: ({ signal }) =>
       api<RequirementDetail>(`/api/requirements/${id}`, {
         signal,
-        headers: { 'x-rdws-edit-session': sessionId },
+        headers: { [OBSERVED_LOGIN_HEADER]: sessionId },
       }),
-    refetchInterval: 2000,
+    refetchInterval: WORKBENCH_POLL_INTERVAL_MS,
     refetchOnMount: 'always',
   });
   const [detailsReceipt, setDetailsReceipt] = useState<{

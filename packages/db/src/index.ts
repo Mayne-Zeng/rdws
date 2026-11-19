@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import * as schema from './schema.ts';
 import { bindAuthorityProof } from './authority.ts';
 export { acquireAuthority, releaseAuthority } from './authority.ts';
+const DATABASE_POOL_MAX = 5;
 
 export function connectDatabase(
   connectionString: string,
@@ -10,7 +11,7 @@ export function connectDatabase(
 ) {
   const pool = new Pool({
     connectionString,
-    max: 5,
+    max: DATABASE_POOL_MAX,
     connectionTimeoutMillis: authorityProof ? 1_500 : 5_000,
     onConnect: authorityProof
       ? (client) => bindAuthorityProof(client, authorityProof)

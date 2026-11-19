@@ -197,6 +197,29 @@ describe.runIf(process.platform === 'darwin')(
       await expect(lstat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
     });
 
+    test('resolves the macOS system Git launcher before read-only execution', async () => {
+      const authorizeStart = vi.fn(async () => {});
+      expect(
+        await runMacosWorktree(verified, '/usr/bin/git', {
+          tool: 'git',
+          operation: 'head',
+        }),
+      ).toMatchObject({
+        status: 'ok',
+        stop: 'confirmed',
+        stdout: plan[0]!.baseCommit + '\n',
+      });
+      expect(
+        await runMacosWorktree(
+          verified,
+          '/usr/bin/git',
+          { tool: 'git', operation: 'head' },
+          { authorizeStart },
+        ),
+      ).toMatchObject({ status: 'rejected', stop: 'not-started', stdout: '' });
+      expect(authorizeStart).toHaveBeenCalledOnce();
+    });
+
     test('rejects read and write outside the worktree and preserves Git administration', async () => {
       const source = join(scope.runtimeRoot, 'projects', project, 'sources');
       const protectedPaths = [

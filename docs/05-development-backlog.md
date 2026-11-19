@@ -133,6 +133,7 @@
   - 前置：T05；已明确公开接口、路径和进程控制方案。
   - 来源：I3-WRITE、D5、D8；安全边界与工程设计。
   - 交付证据：[macOS 隔离执行](02-directory-and-engineering-design.html#t06-execution-delivery-20261118)。真实 Seatbelt 文件、进程、网络及 Git 验收和独立复审通过。聚焦 12 项通过，最新整仓 129 项通过、2 项超时，超时用例分组复跑通过，类型、lint、格式、构建和基线校验通过。T07 的 macOS 前置已满足。产品执行工具按 T07 联合验收启用。
+  - 已补验：[macOS 系统 Git 启动器](02-directory-and-engineering-design.html#t06-apple-git-launcher-20261120)。查到当前系统工具链的实际 Git 后，继续通过原有 Seatbelt 只读查询和最终启动授权。Apple Git 两套聚焦 17 项及 Homebrew Git 执行套件 12 项通过。
 
 - [ ] **T07 · 单写与安全交接**（进行中：隔离单写与停稳交接已交付，待 Native 和编队联合验收）
   - 说明：落实当前开发分派、本人会话和独占写资格，协调数据库授权、实际执行进程、停止确认及异常恢复。

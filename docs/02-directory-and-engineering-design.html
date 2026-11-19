@@ -1255,6 +1255,11 @@
   <p>正确性和安全两面方案复审均为 APPROVE，修订覆盖全模式链接检查、独立 Git 作用域、可达网络对照、结果流与停稳保全。独立交付复审为 APPROVE，关闭了启动状态判定、Node 同进程替换及标记释放出错三个问题。</p>
   <p>最终整仓 <code>caffeinate -i pnpm check</code> 的类型、lint、格式通过，测试 129 项通过。镜像同步首项和运行准入用例分别在 20 秒及 30 秒超时，整仓命令退出 1。分组复跑镜像套件 10 项通过，单独复跑运行准入 1 项通过。先前出现超时的 Native 预设组装已随最终整仓测试通过。干净基线 <code>a2dda16</code> 的 Native 预设组装和运行准入对照 2 项通过。单独 <code>pnpm build</code> 通过，<code>pnpm validate:baseline</code> 通过（29 任务、62 追溯点、16 视图）。</p>
 
+  <p id="t06-apple-git-launcher-20261120">2026-11-20，Change / R2，基线 <code>1ccbb10</code>。固定用 <code>/usr/bin/git</code> 执行隔离 HEAD 查询可复现。系统启动器尝试写 xcrun 缓存并启动选定工具链中的 Git，调试输出显示 Seatbelt 拒绝。使用 Homebrew Git 的同一工作树、固定查询和权限成功，排除工作树映射与查询参数。旧仓库的 macOS 实验曾使用 Homebrew Git，问题在 T13 整仓使用系统启动器时发现。</p>
+  <p>候选在准备阶段仅对解析后等于 <code>/usr/bin/git</code> 的系统启动器，用固定的 <code>/usr/bin/xcrun --no-cache --find git</code> 查找实际二进制。子进程采用根工作目录和净化环境，以及固定参数、有界输出、期限和停止信号。核对单一绝对路径、实际可执行的普通文件和解析后位置，将它交给原隔离流程。原最末启动授权、固定查询参数、目录作用域和 Seatbelt 权限沿用。找不到、返回启动器或路径无效时报告无法启动。以明确系统启动器复现、默认工具链整仓和原隔离用例回归，查找失败时沿用无法启动结果。</p>
+
+  <p>以显式 <code>/usr/bin/git</code> 运行新增 HEAD 用例，改前返回 <code>failed</code> 且 stdout 为空，退出 1。同一旧代码指定 CLT 实际二进制的对照通过。改后系统启动器入口通过，最终授权拒绝时仍为 <code>not-started</code>。使用 Apple Git 的 <code>pnpm test tests/integration/local-execution.test.ts tests/integration/dsh-adapter.test.ts</code> 通过 17 项，Homebrew Git 的执行套件另通过 12 项。锁定 Node 24.20.0 与 Apple Git 2.54.0 的整仓 <code>pnpm test</code> 通过 48 文件、283 项，1 项既有条件跳过。独立方案和交付复审均 APPROVE，类型、lint、格式、构建和基线通过。</p>
+
   <h4 id="t07-write-handoff-analysis-20261120">11.20.2 T07 写权资格与交接技术核对</h4>
   <p>T02 用户侧验收与 T06 macOS 隔离验收已齐。依据 I2-AUTH、I3-WRITE、I3-CONTEXT、D5、§1.5 和 <a href="00-decision-ledger.html#t07-write-eligibility-20261120">台账 §8.15</a>，工程应从 PostgreSQL 的当前项目和需求开发角色、本人 Native 会话归属，以及需求负责人或本人未完成子任务复核写权资格。现有会话映射保存所有者及派生来源，恢复和派生继续重新核对当前身份。编队的主动交接从当前持有者释放开始，租约到期或撤权由系统发起停止。</p>
   <p>两位独立专家分别核对 PostgreSQL 状态和 Native／Seatbelt 执行。技术裁决采用每需求持久唯一写占位和写权代次，由 BFF 父进程持有实际执行句柄，Native 以受审代理提出工具调用。单独使用内存或租约到期无法证明旧执行退出。直接交由 Native 内置执行器会失去 BFF 的原始进程句柄，并引入未经过 T06 隔离验证的工具路径。</p>

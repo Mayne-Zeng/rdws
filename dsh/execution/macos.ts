@@ -1,6 +1,8 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
 import {
+  access,
   lstat,
   mkdir,
   opendir,
@@ -12,6 +14,7 @@ import {
 } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
+import { promisify } from 'node:util';
 
 type Scope = {
   runtimeRoot: string;
@@ -56,6 +59,8 @@ type Options = {
 const sandbox = '/usr/bin/sandbox-exec';
 const bash = '/bin/bash';
 const perl = '/usr/bin/perl';
+const systemGit = '/usr/bin/git';
+const locateTool = promisify(execFile);
 const shellBootstrap = [
   "printf 'ready\\n' >&3 || exit 71",
   'exec 3>&-',
@@ -215,10 +220,37 @@ function profile(scope: Scope, executable: string, home: string, git: boolean) {
   ].join('\n');
 }
 
+async function gitExecutable(path: string, signal?: AbortSignal) {
+  if (!isAbsolute(path)) throw new Error('Invalid Git executable');
+  const executable = await realpath(path);
+  if (executable !== systemGit) return executable;
+  const { stdout } = await locateTool(
+    '/usr/bin/xcrun',
+    ['--no-cache', '--find', 'git'],
+    {
+      cwd: '/',
+      env: { PATH: '/usr/bin:/bin', LC_ALL: 'C' },
+      timeout: 1500,
+      killSignal: 'SIGKILL',
+      maxBuffer: 4096,
+      signal,
+    },
+  );
+  const candidate = stdout.trim();
+  if (!isAbsolute(candidate) || controls.test(candidate))
+    throw new Error('Invalid system Git executable');
+  const resolved = await realpath(candidate);
+  if (resolved === systemGit || !(await lstat(resolved)).isFile())
+    throw new Error('Invalid system Git executable');
+  await access(resolved, constants.X_OK);
+  return resolved;
+}
+
 async function program(
   scope: Scope,
   gitPath: string,
   request: ExecutionRequest,
+  signal?: AbortSignal,
 ) {
   switch (request.tool) {
     case 'file': {
@@ -260,9 +292,8 @@ async function program(
         ],
       };
     case 'git':
-      if (!isAbsolute(gitPath)) throw new Error('Invalid Git executable');
       return {
-        executable: await realpath(gitPath),
+        executable: await gitExecutable(gitPath, signal),
         args: [
           '--no-pager',
           '--no-optional-locks',
@@ -521,7 +552,7 @@ export async function runMacosWorktree(
         return result(runId, options.signal?.aborted ? 'aborted' : 'rejected');
       }
       const home = await realpath(userInfo().homedir);
-      const command = await program(scope, gitPath, request);
+      const command = await program(scope, gitPath, request, options.signal);
       const policy = profile(
         scope,
         command.executable,
@@ -560,7 +591,7 @@ export async function runMacosWorktree(
         result(runId, options.signal?.aborted ? 'aborted' : 'rejected')
       );
     } catch {
-      return result(runId, 'unavailable');
+      return result(runId, options.signal?.aborted ? 'aborted' : 'unavailable');
     }
   }
 }

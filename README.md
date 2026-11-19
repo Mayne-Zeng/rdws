@@ -146,6 +146,8 @@ macOS 的正式 Web Host 支持启动时暂停。先停止旧 BFF、它启动的
 
 在 macOS 上用 `pnpm test tests/integration/local-execution.test.ts tests/integration/dsh-adapter.test.ts` 运行隔离验证。本机 Seatbelt、系统 Bash 和 Perl、Node 24 及 Git 负责执行。夹具以回环 HTTPS 合成源准备 T05 工作树。验证覆盖工作树内文件读写、Bash 内建命令、指定文件的进程内 `node:test` 以及 Git 状态、差异和 HEAD 查询。产品会话仍关闭执行工具，启用条件见 T07。
 
+选择系统 `/usr/bin/git` 时，准备阶段查询 macOS 当前选择的开发工具链，使用其中的 Git 可执行文件完成隔离查询。查找失败时返回无法启动。直接指定其他 Git 时沿用原路径。
+
 执行结果分别记录命令状态、进程组停稳和标记释放情况。运行时限从启动执行进程起算。停止存疑或执行标记遗留时，保留隔离目录，由运行维护者核对现场。Linux 对应验收见 T21。 [T06 工程设计](docs/02-directory-and-engineering-design.html#t06-execution-plan-20261118)
 
 ## DSH 真实接入探针

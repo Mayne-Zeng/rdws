@@ -11,12 +11,17 @@ import type {
   DshWindow,
   WebBootGraph,
 } from '@deepseek-ai/dsh-client-modules/client';
-import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client';
+import type {
+  ISessions,
+  SessionBinding,
+} from '@deepseek-ai/dsh-api-session-controller/client';
+import type {} from '@deepseek-ai/dsh-api-session-controller/remote';
 declare module '@deepseek-ai/dsh-api-session-controller/client' {
   interface SessionReferenceSourceMap {
     rdws: unknown;
   }
 }
+export type { SessionBinding };
 let serial: Promise<unknown> = Promise.resolve();
 let active: { dispose: () => Promise<void> } | undefined;
 export async function readSessionHistory(

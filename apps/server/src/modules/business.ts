@@ -29,6 +29,7 @@ import {
 } from './requirement-import.ts';
 type Database = ReturnType<typeof connectDatabase>['db'];
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+type Reads = Pick<Transaction, 'select'>;
 export type Actor = { userId: string; authSessionId: string };
 export type RequirementAuthority = 'reader' | 'editor' | 'project-admin';
 type PersonnelResult = Omit<RequirementPersonnelReceipt, 'revocation'> & {
@@ -144,7 +145,7 @@ export function createBusiness(db: Database) {
     }
   }
   async function identity(
-    tx: Transaction,
+    tx: Reads,
     who: Actor,
     projectId: string,
     targets: string[] = [],
@@ -196,7 +197,7 @@ export function createBusiness(db: Database) {
     return { users, roles, session, validTargets };
   }
   async function scope(
-    tx: Transaction,
+    tx: Reads,
     who: Actor,
     id: string,
     lock = false,
@@ -255,7 +256,7 @@ export function createBusiness(db: Database) {
     };
   }
   async function reserve(
-    tx: Transaction,
+    tx: Pick<Transaction, 'select' | 'insert'>,
     who: Actor,
     scope: string,
     operation: string,
@@ -291,7 +292,7 @@ export function createBusiness(db: Database) {
     return { value, result: old.result };
   }
   async function finish(
-    tx: Transaction,
+    tx: Pick<Transaction, 'update'>,
     value: typeof schema.commandReceipt.$inferInsert,
     result: unknown,
   ) {
@@ -1422,6 +1423,51 @@ export function createBusiness(db: Database) {
       { isolationLevel: 'read committed' },
     );
   }
+  async function writeContext(
+    tx: Reads,
+    who: Actor,
+    projectId: string,
+    requirementId: string,
+    sessionId: string,
+  ) {
+    const { session } = await identity(tx, who, projectId, [], true);
+    const state = await scope(tx, who, requirementId, true, projectId);
+    if (!state.developer) businessError(403, '当前开发分派没有写入资格');
+    const [owned] = await tx
+      .select({ id: schema.nativeSession.id })
+      .from(schema.nativeSession)
+      .where(
+        and(
+          eq(schema.nativeSession.id, sessionId),
+          eq(schema.nativeSession.requirementId, requirementId),
+          eq(schema.nativeSession.ownerId, who.userId),
+        ),
+      )
+      .for('share');
+    if (!owned) businessError(403, '只能为本人会话申请写入');
+    const tasks = await tx
+      .select()
+      .from(schema.task)
+      .where(eq(schema.task.requirementId, requirementId))
+      .orderBy(asc(schema.task.id))
+      .for('share');
+    if (
+      !state.lead &&
+      !tasks.some(
+        (task) =>
+          task.assigneeId === who.userId &&
+          ['todo', 'in_progress'].includes(task.status),
+      )
+    )
+      businessError(403, '当前开发分派没有写入资格');
+    if (!(session.expiresAt.getTime() > Date.now()))
+      businessError(401, '登录已失效，请重新登录');
+    return {
+      requirement: state.item,
+      tasks,
+      validBefore: session.expiresAt.getTime(),
+    };
+  }
 
   async function readWithDeadline(
     who: Actor,
@@ -2381,6 +2427,8 @@ export function createBusiness(db: Database) {
     read,
     readWithDeadline,
     withModelAuthority,
+    writeContext,
+    writeReceipts: { reserve, finish },
     sessionTransaction,
     sessionTemplate,
     approvedTemplateReferences,

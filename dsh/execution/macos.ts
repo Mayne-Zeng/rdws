@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   lstat,
@@ -50,6 +50,7 @@ type Options = {
   signal?: AbortSignal;
   onOutput?: (event: Event) => void;
   timeoutMs?: number;
+  authorizeStart?: (start: () => void) => Promise<void>;
 };
 
 const sandbox = '/usr/bin/sandbox-exec';
@@ -302,7 +303,8 @@ function launch(
   { signal, onOutput, timeoutMs = 10_000 }: Options,
 ): Promise<Result> {
   if (signal?.aborted) return Promise.resolve(result(runId, 'aborted'));
-  return new Promise((resolve) => {
+  let launched: ChildProcess | undefined;
+  return new Promise<Result>((resolve) => {
     const launcher =
       executable === bash
         ? [
@@ -328,12 +330,29 @@ function launch(
         GIT_NO_REPLACE_OBJECTS: '1',
       },
     });
+    launched = child;
+    let initialized = false;
+    let reaped = false;
+    child.once('exit', () => {
+      reaped = true;
+    });
+    child.once('error', () => {
+      if (initialized)
+        finish('unavailable', null, child.pid ? 'unconfirmed' : 'not-started');
+    });
+    const statusPipe = child.stdio?.[3];
+    if (!statusPipe || !child.stdout || !child.stderr) {
+      if (child.pid)
+        throw new Error('Isolated execution pipes are unavailable');
+      resolve(result(runId, 'unavailable'));
+      return;
+    }
     let startup = '';
     let inputFailed = false;
-    child.stdio[3]!.on('data', (chunk: Buffer) => {
+    statusPipe.on('data', (chunk: Buffer) => {
       startup = (startup + chunk.toString('ascii')).slice(0, 32);
     });
-    child.stdio[3]!.on('end', () => {
+    statusPipe.on('end', () => {
       child.stdin?.end(startup === 'ready\n' ? input : undefined);
     });
     child.stdin?.on('error', () => {
@@ -341,7 +360,6 @@ function launch(
     });
     const streams = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
     let bytes = 0;
-    let reaped = false;
     let settled = false;
     let requested: Status | undefined;
     let stopTimer: NodeJS.Timeout | undefined;
@@ -395,7 +413,10 @@ function launch(
           bytes += part.length;
           streams[stream].push(part);
           try {
-            onOutput?.({ runId, stream, chunk: Buffer.from(part) });
+            if (onOutput)
+              void Promise.resolve(
+                onOutput({ runId, stream, chunk: Buffer.from(part) }),
+              ).catch(() => terminate('failed'));
           } catch {
             terminate('failed');
           }
@@ -403,12 +424,6 @@ function launch(
         if (part.length < chunk.length) terminate('output-limit');
       });
     }
-    child.once('error', () =>
-      finish('unavailable', null, child.pid ? 'unconfirmed' : 'not-started'),
-    );
-    child.once('exit', () => {
-      reaped = true;
-    });
     child.once('close', (code) => {
       const stop = child.pid
         ? reaped && groupGone(child.pid)
@@ -429,6 +444,20 @@ function launch(
         stop,
       );
     });
+    initialized = true;
+  }).catch((): Result => {
+    if (
+      launched?.pid &&
+      launched.exitCode === null &&
+      launched.signalCode === null
+    ) {
+      try {
+        process.kill(-launched.pid, 'SIGKILL');
+      } catch {
+        // A setup failure cannot supply the normal group and reaping evidence.
+      }
+    }
+    return { ...result(runId, 'unavailable'), stop: 'unconfirmed' };
   });
 }
 
@@ -444,13 +473,22 @@ export async function runMacosWorktree(
   if (process.platform !== 'darwin') return result(runId, 'unavailable');
 
   let scope: Scope;
-  let markerPath: string;
   try {
     scope = await verifiedScope();
-    markerPath = join(scope.control, 'isolated-execution');
-    await mkdir(markerPath, { mode: 0o700 });
   } catch {
     return result(runId, options.signal?.aborted ? 'aborted' : 'rejected');
+  }
+  const markerPath = join(scope.control, 'isolated-execution');
+  try {
+    await mkdir(markerPath, { mode: 0o700 });
+  } catch (error) {
+    const denied = result(
+      runId,
+      options.signal?.aborted ? 'aborted' : 'rejected',
+    );
+    return (error as NodeJS.ErrnoException).code === 'EEXIST'
+      ? { ...denied, marker: 'retained' }
+      : denied;
   }
 
   const owner = join(markerPath, 'owner.json');
@@ -490,7 +528,37 @@ export async function runMacosWorktree(
         home,
         request.tool === 'git',
       );
-      return await launch(runId, scope, policy, command, options);
+      const control = new AbortController();
+      const signal = options.signal
+        ? AbortSignal.any([options.signal, control.signal])
+        : control.signal;
+      let open = true;
+      let execution: Promise<Result> | undefined;
+      const start = () => {
+        if (!open)
+          throw new Error('Isolated execution cannot be started again');
+        signal.throwIfAborted();
+        open = false;
+        execution = launch(runId, scope, policy, command, {
+          ...options,
+          signal,
+        }).catch(() => ({
+          ...result(runId, 'unavailable'),
+          stop: 'unconfirmed',
+        }));
+      };
+      try {
+        if (options.authorizeStart) await options.authorizeStart(start);
+        else start();
+      } catch {
+        control.abort();
+      } finally {
+        open = false;
+      }
+      return (
+        execution ??
+        result(runId, options.signal?.aborted ? 'aborted' : 'rejected')
+      );
     } catch {
       return result(runId, 'unavailable');
     }

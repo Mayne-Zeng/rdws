@@ -5,6 +5,7 @@
   "exports": {
     "./host": "./host/instance.ts",
     "./events": "./bridge/events.ts",
+    "./execution": "./execution/macos.ts",
     "./web": "./host/web.ts",
     "./access": "./bridge/access.ts",
     "./sessions": "./bridge/sessions.ts",

@@ -179,6 +179,36 @@ export const nativeSession = pgTable('native_session', {
   sourceThroughSeq: integer('source_through_seq'),
   ...timestamps,
 });
+export const requirementWriteLease = pgTable(
+  'requirement_write_lease',
+  {
+    requirementId: text('requirement_id').primaryKey(),
+    projectId: text('project_id').notNull(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => user.id),
+    authSessionId: text('auth_session_id').notNull(),
+    nativeSessionId: text('native_session_id')
+      .notNull()
+      .references(() => nativeSession.id),
+    generation: uuid('generation').notNull(),
+    phase: text('phase', { enum: ['held', 'draining', 'released'] }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    contextVersion: integer('context_version').notNull(),
+    runId: uuid('run_id'),
+    ...timestamps,
+  },
+  (t) => [
+    foreignKey({
+      columns: [t.requirementId, t.projectId],
+      foreignColumns: [requirement.id, requirement.projectId],
+    }),
+    check(
+      'requirement_write_lease_phase',
+      sql`${t.phase} in ('held', 'draining', 'released') and (${t.phase} <> 'released' or ${t.runId} is null)`,
+    ),
+  ],
+);
 export const audit = pgSchema('audit');
 export const authority = pgSchema('rdws_authority');
 export const authorityOwner = authority.table(

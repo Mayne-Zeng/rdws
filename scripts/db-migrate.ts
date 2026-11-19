@@ -48,6 +48,13 @@ export async function grantApplication(
         `grant update (template_id, revision) on requirement_capability_binding to ${application}`,
       );
     }
+    const hasWriteLease = await client.query(
+      "select to_regclass('public.requirement_write_lease') is not null as present",
+    );
+    if (hasWriteLease.rows[0]?.present)
+      await client.query(
+        `revoke delete, truncate on requirement_write_lease from ${application}`,
+      );
     const authority = await client.query(
       "select exists(select 1 from pg_catalog.pg_namespace where nspname='rdws_authority') as present",
     );

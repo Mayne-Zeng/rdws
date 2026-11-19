@@ -24,6 +24,9 @@ const protectedTables = [
   'requirement',
   'requirement_participant',
   'native_session',
+  'task',
+  'command_receipt',
+  'requirement_write_lease',
 ];
 let lab: Awaited<ReturnType<typeof authorityDatabase>>;
 const password = secret();
@@ -201,6 +204,24 @@ test('the persistent database gate serializes old snapshots, ordinary writers, a
     const generation = (await state()).generation!;
     expect(generation).toBeTruthy();
     expect((await state()).armed).toBe(false);
+    for (const statement of [
+      'update task set status=status where false',
+      'update command_receipt set result=result where false',
+      'delete from command_receipt where false',
+      'update requirement_write_lease set phase=phase where false',
+    ]) {
+      await expect(ordinary.query(statement)).rejects.toMatchObject({
+        code: '55006',
+      });
+    }
+    await expect(
+      contenders[winner]!.query(
+        'delete from requirement_write_lease where false',
+      ),
+    ).rejects.toMatchObject({ code: '42501' });
+    await expect(
+      contenders[winner]!.query('truncate requirement_write_lease'),
+    ).rejects.toMatchObject({ code: '42501' });
     await expect(
       releaseAuthority(contenders[1 - winner]!, generation),
     ).rejects.toThrow();

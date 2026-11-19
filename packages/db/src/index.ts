@@ -8,15 +8,19 @@ const DATABASE_POOL_MAX = 5;
 export function connectDatabase(
   connectionString: string,
   authorityProof?: string,
+  queryTimeoutMs?: number,
 ) {
-  const pool = new Pool({
+  const config = {
     connectionString,
     max: DATABASE_POOL_MAX,
     connectionTimeoutMillis: authorityProof ? 1_500 : 5_000,
+    query_timeout: queryTimeoutMs,
     onConnect: authorityProof
-      ? (client) => bindAuthorityProof(client, authorityProof)
+      ? (client: import('pg').ClientBase) =>
+          bindAuthorityProof(client, authorityProof)
       : undefined,
-  });
+  };
+  const pool = new Pool(config);
   if (authorityProof) pool.on('error', () => {});
   return { pool, db: drizzle(pool, { schema }) };
 }

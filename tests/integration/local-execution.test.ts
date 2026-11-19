@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { writeFileSync } from 'node:fs';
@@ -506,6 +507,108 @@ describe.runIf(process.platform === 'darwin')(
         stop: 'confirmed',
       });
       expect(exhausted.stdout).toHaveLength(64 * 1024);
+    });
+
+    test('launch authorization can deny execution after worktree preparation', async () => {
+      const path = 'denied-start.txt';
+      const authorizeStart = vi.fn(async () => {});
+      const denied = await run(
+        { tool: 'file', operation: 'write', path, text: 'unexpected write' },
+        { authorizeStart },
+      );
+      expect(authorizeStart).toHaveBeenCalledOnce();
+      expect(denied).toMatchObject({
+        status: 'rejected',
+        stop: 'not-started',
+        marker: 'released',
+      });
+      await expect(lstat(join(scope.tree, path))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    });
+
+    test('a lost launch confirmation cancels and reaps the process that really started', async () => {
+      let observe!: () => void;
+      const started = new Promise<void>((resolve) => {
+        observe = resolve;
+      });
+      const path = 'launched-before-lost-confirmation.txt';
+      const runResult = await run(
+        {
+          tool: 'shell',
+          script: `printf yes > ${path}; printf started; while :; do :; done`,
+        },
+        {
+          timeoutMs: 2500,
+          onOutput: () => observe(),
+          async authorizeStart(start) {
+            start();
+            expect(start).toThrow();
+            await started;
+            throw new Error('Synthetic launch confirmation lost');
+          },
+        },
+      );
+      expect(runResult).toMatchObject({
+        status: 'aborted',
+        stop: 'confirmed',
+        marker: 'released',
+        stdout: 'started',
+      });
+      expect(await readFile(join(scope.tree, path), 'utf8')).toBe('yes');
+    });
+
+    test('an early spawn error without stdio is observed with no process started', async () => {
+      const processes = createRequire(import.meta.url)(
+        'node:child_process',
+      ) as typeof import('node:child_process');
+      const child = new processes.ChildProcess();
+      const spawn = vi.spyOn(processes, 'spawn').mockImplementationOnce(() => {
+        process.nextTick(() =>
+          child.emit(
+            'error',
+            Object.assign(new Error('Synthetic file descriptor exhaustion'), {
+              code: 'EMFILE',
+            }),
+          ),
+        );
+        return child;
+      });
+      syncBuiltinESMExports();
+      try {
+        const failed = await runMacosWorktree(
+          () => Promise.resolve(scope),
+          git,
+          { tool: 'shell', script: 'exit 0' },
+        );
+        expect(spawn).toHaveBeenCalledOnce();
+        expect(failed).toMatchObject({
+          status: 'unavailable',
+          stop: 'not-started',
+          marker: 'released',
+        });
+      } finally {
+        spawn.mockRestore();
+        syncBuiltinESMExports();
+      }
+    });
+
+    test('an asynchronous output failure stops the actual isolated process', async () => {
+      const failed = await run(
+        { tool: 'shell', script: 'printf started; while :; do :; done' },
+        {
+          async onOutput() {
+            throw new Error('Synthetic output consumer failure');
+          },
+          timeoutMs: 2500,
+        },
+      );
+      expect(failed).toMatchObject({
+        status: 'failed',
+        stop: 'confirmed',
+        marker: 'released',
+        stdout: 'started',
+      });
     });
 
     test('retains the isolation marker when process-group disappearance cannot be confirmed', async () => {

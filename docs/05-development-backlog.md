@@ -187,6 +187,7 @@
   - 实现前验证：[DeepSeek Messages 与 Files](02-directory-and-engineering-design.html#t13-deepseek-messages-dispatch-probe-20261119)。回环实证核对上传、内联回退、缓存文件引用及扩展准备失败，确认 Files 与 Messages 各有实际外发边界。工作台图片输入及产品逐次授权未在此探针启用。
   - 实现前验证：[入箱领取选模与派生边界](02-directory-and-engineering-design.html#t13-claim-selection-probe-20261119)。实际排队发送确认本轮原模型及下轮目标模型，阻止后仍可能把未外发的选择带入派生。后续以已确认的出口及派生验收为准，现有证据用于实施方案。
   - 已交付修复：[冷恢复后首次新发送](02-directory-and-engineering-design.html#t13-queued-recovery-evidence-20261119)。已刷盘的旧输入保留在 Native 原始日志。新的有效入箱才取消缺少运行绑定的旧活动项，首次新发送完成，旧键在再次冷启后仍可核对。独立复审、整仓 187 项、浏览器 34 项、本机 Native 通知故障回归及基线通过。
+  - 实现前验证：[Native 模型出口的本机隔离](02-directory-and-engineering-design.html#t13-native-egress-confinement-20261119)。锁定版 DSH 在 macOS IPv4 回环中可经出口完成 PiAi、DeepSeek Files 和 Messages，系统拒绝计划外直连，出口关闭后同进程发起新请求失败。同一 Native 进程的 Web 端点持续可访问。独立复审、整仓 190 项及基线通过。正式 Host 接线、端点身份与撤权定序按 §11.16.17 继续验证。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。

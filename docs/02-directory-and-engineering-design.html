@@ -822,6 +822,19 @@
   <p>下一步是形成 R3 实施方案，核对锁定版原生能力和不可绕过的部署边界，落实外发定序、选模与实际请求的关联、验证矩阵及暂停外发的回退路径，再做双面独立评审。两项用户产品方向已闭合，既有写入候选的技术审阅发现继续跟踪。实际部署及生产接线继续按具名环境授权办理。</p>
   <p>第二版规格 A/B 独立复审均 APPROVE。首轮补足实际发出与撤权的两种顺序、各用途的原绑定反例、转发副本的保护范围及正常派生对照。基线、文档链接与格式校验通过。此次记录的是目标规格及验收判据，运行时验收归后续实施。</p>
 
+  <h4 id="t13-native-egress-confinement-20261119">11.16.18 Native 模型出口的本机隔离验证</h4>
+  <p>依据 §11.16.17，先核对 macOS 上锁定 DSH 的实际进程边界。范围为一个 R3 隔离验证切片，使用临时 Profile、合成内容及回环监听，固化可复跑证据。当前 <code>NativeWebHost</code> 尚以普通子进程启动，T06 的执行工具隔离作用在另一个执行进程。</p>
+  <ol>
+    <li>用 <code>pnpm test tests/integration/native-egress-confinement.test.ts</code> 启动锁定包的实际 bin 和 tsx loader，校验安装版本并沿用仓库 Web 只读配置。测试使用独立的临时 HOME、DSH_HOME、工作目录和合成凭据，只传最小子进程环境，保持 stdio 无预开网络连接。等待原生服务与凭据实际可读后才发请求。Seatbelt 只放行固定回环回调与出口主动连接，并保留 Native Web 回环入站。回调、转发端和供应商分别监听，各有固定职责。失败时清理专用 Native、全部监听与连接及临时目录。非 macOS 跳过，在 macOS 上缺沙箱或启动失败计为失败。</li>
+    <li>原生适配器的正反对照使用同一供应商地址、模型和请求形状，两次启动的网络规则只改变供应商端口是否允许。回调夹具只协调测试及记录完成结果，既不覆写传输也不代发。用原生 TCP 和实际 PiAi 直连分别验收系统拒绝码与供应商零新增。在受限进程中核对 PiAi 经出口完成，DeepSeek 的 Files 实收 PNG，随后 Messages 实收对应文件标识。出口和供应商分别记录方法、路径及唯一合成关联标识。停止独立出口的监听和既有连接，等待在途转发结束，再在同一 Native PID 发起新调用，验收明确的传输错误、供应商零新增及 Native Web 测试端点仍可访问。</li>
+    <li>本试验证明指定版本在当前 macOS 和 IPv4 回环地址上的启动与网络约束。测试直接启动安装包，使用临时测试回调和单独的 Web 测试路由。正式 Host 的签名握手与 BFF WebSocket 仍随接线检验。端口限制不等同于可信端点身份。生产方案须再核对出口与回调的身份、端口重用、完整网络拓扑、无授权绑定时的拒绝和撤权定序，失败及回退时关闭模型外发。之前 §11.16.12–13 的重试、独立标题和内联回退继续作为适配器证据。原登录绑定、逐次授权、正式部署及 Linux 等其他运行环境各自验收。</li>
+  </ol>
+  <p>方案第二版双面独立复审均 APPROVE。首轮补足锁版与启动差异、临时环境和清理、内核拒绝与实际模型终态、出口断开后同进程验证及两端逐请求关联。</p>
+  <p>在本机 macOS 27.2.1 arm64、DSH 0.2.2-rc.3 上，放行供应商端口的对照实际收到一个直连 PiAi 请求。受限进程的原生 TCP 和同模型直连均收到 <code>EPERM</code>。受限阶段供应商实际收到经出口到达的三个 POST：PiAi 完成、DeepSeek Files 收到完整合成 PNG、DeepSeek Messages 使用 Files 返回的同一个标识并完成。三次请求的方法、路径和关联 ID 在两端一一匹配。关闭出口监听和现有连接后，同一 Native PID 的 TCP 和模型请求均为 <code>ECONNREFUSED</code>，供应商零新增，Web 端点仍能返回同一 PID。</p>
+  <p>聚焦运行 <code>caffeinate -i pnpm test tests/integration/native-egress-confinement.test.ts tests/integration/native-messages-dispatch.test.ts tests/integration/project-native-paths.test.ts</code> 返回 0（3 文件、4 项）。相邻原生探针验证重试、后台标题及内联回退在各自传输中的位置。</p>
+  <p>交付复核第二版 APPROVE。Files 改为以固定 SHA-256 核对上传的完整 90 字节 PNG。启用 Node 全局代理并指定不可达的本机代理时，调整前定点测试返回 1，父进程的回环请求尝试连接代理端口。模拟转发与 Native Web 读回改为显式回环直连，同一代理条件下定点测试返回 0（1 项）。清理阶段等待已开始的转发结束。</p>
+  <p>最终 <code>caffeinate -i pnpm check</code> 返回 0（31 个测试文件、190 项），类型、lint、格式与构建通过，构建仍提示主包体积。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>test: verify local confinement of native model egress</code>。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

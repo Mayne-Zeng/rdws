@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RDWS · 实现评审报告（Codex 持续研发批次 2026-11-18/19）</title>
+<style>
+  :root{--brand:#0E7490;--brand-dark:#0B596E;--brand-soft:#E6F3F6;--brand-line:#B9DEE6;
+    --ink:#1C2530;--ink-2:#43505E;--ink-3:#6B7885;--line:#E2E7EB;--bg:#F5F7F8;--paper:#FFF;
+    --red:#B3373A;--red-bg:#FCEDEC;--amber:#9A6410;--amber-bg:#FDF4E3;--green:#24735A;--green-bg:#EAF5F0;--gray-bg:#F0F3F5}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px 80px}
+  header{background:var(--paper);border-top:4px solid var(--brand);border-bottom:1px solid var(--line);padding:42px 0 32px;margin-bottom:28px}
+  header .wrap{padding-bottom:0}
+  .kicker{color:var(--brand);font-size:12px;letter-spacing:.18em;font-weight:700;margin-bottom:10px}
+  h1{font-size:27px;line-height:1.35;margin:0 0 10px;letter-spacing:-.01em}
+  .sub{color:var(--ink-3);font-size:13.5px;margin:0}
+  .meta{margin-top:20px;display:flex;flex-wrap:wrap;gap:8px}
+  .tag{font-size:12px;padding:4px 10px;border:1px solid var(--line);border-radius:3px;color:var(--ink-2);background:var(--gray-bg)}
+  h2{font-size:20px;margin:42px 0 6px;padding-top:18px;border-top:2px solid var(--brand)}
+  h2 .num{color:var(--brand);font-variant-numeric:tabular-nums;margin-right:10px}
+  h3{font-size:15.5px;margin:24px 0 8px;color:var(--brand-dark)}
+  p{margin:10px 0}ul,ol{margin:10px 0;padding-left:22px}li{margin:5px 0}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;background:var(--gray-bg);padding:1px 5px;border-radius:3px;color:var(--brand-dark);word-break:break-word}
+  a{color:var(--brand-dark)}
+  .lead{font-size:16px;color:var(--ink-2)}
+  .verdict{background:var(--brand-soft);border:1px solid var(--brand-line);border-left:4px solid var(--brand);padding:18px 22px;margin:20px 0;border-radius:0 4px 4px 0}
+  .verdict .vtitle{font-size:12px;letter-spacing:.14em;color:var(--brand);font-weight:700;margin-bottom:8px}
+  .warn{background:var(--amber-bg);border:1px solid #EBD9B4;border-left:3px solid var(--amber);padding:12px 16px;font-size:13.5px;color:#6F4A0B;border-radius:0 3px 3px 0;margin:14px 0}
+  .ok{background:var(--green-bg);border:1px solid #CDE7DA;border-left:3px solid var(--green);padding:12px 16px;font-size:13.5px;color:#1F5C48;border-radius:0 3px 3px 0;margin:14px 0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;background:var(--paper);border:1px solid var(--line);font-size:13px}
+  th,td{border-bottom:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:#F0F6F7;color:var(--brand-dark);font-weight:700;font-size:12px}
+  tr:last-child td{border-bottom:none}
+  td code{font-size:11.5px}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:3px;white-space:nowrap}
+  .p-red{background:var(--red-bg);color:var(--red)}.p-amber{background:var(--amber-bg);color:var(--amber)}
+  .p-green{background:var(--green-bg);color:var(--green)}.p-blue{background:var(--brand-soft);color:var(--brand-dark)}
+  .p-gray{background:var(--gray-bg);color:var(--ink-3)}
+  .toc{background:var(--paper);border:1px solid var(--line);padding:16px 22px;font-size:13.5px;columns:2;column-gap:32px}
+  .toc a{color:var(--ink-2);text-decoration:none;display:block;padding:2px 0}.toc a:hover{color:var(--brand)}
+  .kpi{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin:18px 0}
+  .kpi div{background:var(--paper);border:1px solid var(--line);border-radius:4px;padding:14px 16px}
+  .kpi b{display:block;font-size:22px;color:var(--brand);line-height:1.3;font-variant-numeric:tabular-nums}
+  .kpi span{font-size:11.5px;color:var(--ink-3)}
+  .finding{background:var(--paper);border:1px solid var(--line);border-left:4px solid var(--amber);padding:14px 18px;margin:14px 0;border-radius:0 4px 4px 0}
+  .finding.p3{border-left-color:var(--line)}
+  .finding h4{margin:0 0 6px;font-size:14.5px}
+  .finding .ev{font-size:13px;color:var(--ink-2);margin:6px 0}
+  .foot{margin-top:46px;padding-top:20px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-3)}
+  @media(max-width:720px){.toc{columns:1}h1{font-size:22px}.wrap{padding:0 16px 60px}table{font-size:12px}th,td{padding:8px}.kpi{grid-template-columns:repeat(3,1fr)}}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="kicker">RDWS · 独立实现评审</div>
+  <h1>实现评审报告：Codex 持续研发批次</h1>
+  <p class="sub">五面互不通气的独立评审 · 逐项核对申明完成清单 · 全部发现经第二人逐行复核 · 只读取证</p>
+  <div class="meta">
+    <span class="tag">日期：2026-11-19</span>
+    <span class="tag">评审区间：<code>bf0570a..ccad89d</code>（2026-11-18 10:19 → 11-19 12:15）</span>
+    <span class="tag">方法：5 面角度拆分（规格×2 / 精简 / 结构 / 安全）</span>
+    <span class="tag">结论：<b>APPROVE_WITH_CHANGES</b>（无 P0/P1）</span>
+  </div>
+</div></header>
+
+<div class="wrap">
+  <div class="toc">
+    <a href="#s0">0. 结论摘要</a><a href="#s1">1. 评审范围与方法</a>
+    <a href="#s2">2. 申明完成项逐项核对</a><a href="#s3">3. 发现项 · P2（5 条）</a>
+    <a href="#s4">4. 发现项 · P3（12 条）</a><a href="#s5">5. 交叉印证与正面观察</a>
+    <a href="#s6">6. 安全核对摘要</a><a href="#s7">7. 待验证疑点</a>
+    <a href="#s8">8. 显式跳过</a><a href="#s9">9. 建议下一步</a>
+    <a href="#sA">附录 A. 评审面原始终论</a>
+  </div>
+
+  <h2 id="s0"><span class="num">0</span>结论摘要</h2>
+  <div class="verdict">
+    <div class="vtitle">总评 · APPROVE_WITH_CHANGES</div>
+    <p><b>申明与实现高度相符。</b>五个独立评审面对清单中申明完成/交付的 12 个任务（T00–T06、T11、T13、T14、T16、T20）逐项核对：<b>无虚报、无越清单提前实现、无第二权威复制、清单状态登记诚实</b>（待验收项均如实保留，16 视图覆盖表与路由事实逐项一致）。未发现 P0/P1 缺陷；安全六域（登录绑定、授权边界、注入与路径、凭据脱敏、原生通道、数据完整性）核对通过且与 SECURITY.md 声明相符。</p>
+    <p><b>主要债务是结构性的，不是正确性的：</b>服务端两个巨石模块（<code>workbench.ts</code> 2820 行 / <code>business.ts</code> 2319 行）、syncer/orchestrator 未纳入 workspace 包化（三个评审面独立发现）、错误处理双轨导致 43 处用户文案实际不达前端、Native 诊断脱敏存在旁路面。共 5 条 P2 + 12 条 P3，均不阻断，建议随后续功能切片归还。</p>
+  </div>
+  <div class="kpi">
+    <div><b>48</b><span>评审区间提交</span></div>
+    <div><b>8.1 万</b><span>行新增（218 文件）</span></div>
+    <div><b>62</b><span>测试文件（36 集成/18 E2E/8 真实）</span></div>
+    <div><b>12</b><span>申明任务全部逐项核对</span></div>
+    <div><b>0</b><span>P0 / P1 缺陷</span></div>
+    <div><b>17</b><span>发现项（5 P2 + 12 P3）</span></div>
+  </div>
+
+  <h2 id="s1"><span class="num">1</span>评审范围与方法</h2>
+  <ul>
+    <li><b>评审对象</b>：提交区间 <code>bf0570a..ccad89d</code> 共 48 个提交（24 feat / 10 fix / 9 test / 3 docs / 1 refactor / 1 chore），由 Codex 智能体持续研发产出；218 文件、81,373 行新增，其中非测试代码约 3.9 万行、测试约 2.6 万行。</li>
+    <li><b>逐项核对清单</b>：<code>docs/05-development-backlog.md</code> 中申明完成/交付的 T00、T01、T02、T03、T04、T05、T06、T11（3 子项）、T13（多子项）、T14（子项）、T16（子项）、T20，以及 16 视图覆盖表申报。</li>
+    <li><b>判据来源</b>：按项目自己的规则评判——AGENTS.md、SECURITY.md、决策台账（00）、工程实施基线（02）、设计基线（04）、任务清单（05）、demo 原型；不套通用偏好。</li>
+    <li><b>独立性</b>：五个评审面（A1 会话/模型/轨迹规格、A2 平台/需求/仓库规格、B 精简、C 结构/复用/配置化、D 安全）各自全新上下文、互不通气、只拿自己那份材料与判据，按严重度矩阵做角度拆分（本批含安全与会话生命周期，判 R3 强度）。</li>
+    <li><b>复核</b>：全部 19 条原始发现由主评审逐行打开证据文件复核属实后才收录，去重合并为 17 条（workbench 巨石 B/C 两面重合；syncer/orchestrator 包化被 A2/B/C 三面独立发现——交叉印证）。</li>
+    <li><b>只读纪律</b>：评审全程未修改文件、未运行测试/构建/服务（共享资源协调约束）；未提交的 WIP（model-carrier 相关 8 个文件）排除在评审范围外，全部证据取自 <code>git show HEAD:</code> 版本。</li>
+  </ul>
+
+  <h2 id="s2"><span class="num">2</span>申明完成项逐项核对</h2>
+  <p>判定口径：<b>符合</b>＝申明能力在 HEAD 代码中真实存在且与验收目标一致；<b>待验收</b>＝开发与内部验证属实、用户侧验收按清单如实保留。</p>
+  <table>
+    <tr><th>任务</th><th>清单申报</th><th>评审判定</th><th>关键证据（摘）</th></tr>
+    <tr><td><b>T00</b> 基线与追溯</td><td>已完成</td><td><span class="pill p-green">符合</span></td><td>声明数字 61 来源/62 原子点/17 接口域/5 原生能力/11 缺口与 <code>docs/baseline-trace-index.json</code> 实测逐项吻合；<code>scripts/validate-baseline.mjs</code> 实现来源覆盖/主责/视图/依赖校验</td></tr>
+    <tr><td><b>T01</b> 核心页面</td><td>已完成</td><td><span class="pill p-green">符合</span></td><td>五入口与 design 路由真实可达（<code>project.tsx:179-348</code>、<code>workbench.tsx:14-61</code>）；视觉一致性按清单保留用户侧验收</td></tr>
+    <tr><td><b>T02</b> 多会话生命周期</td><td>待验收</td><td><span class="pill p-green">符合</span></td><td>5 会话恢复/本人派生切点冻结/回放只读/观察登录绑定/409 竞争/冷恢复退役全部在代码与测试中核实（A1 面核对表 15 项全符合）</td></tr>
+    <tr><td><b>T03</b> 项目与成员管理</td><td>已完成</td><td><span class="pill p-green">符合</span></td><td>项目级 Native 实例注册/路由/生命周期、跨项目 403、管理权≠写权、撤权栅栏与迁移 0005 触发器逐一核实</td></tr>
+    <tr><td><b>T04</b> 仓库与镜像同步</td><td>已完成</td><td><span class="pill p-green">符合</span></td><td>仅 syncer 写 sources、CAS update-ref、失败保留原发布；Gitee 真实验收为文档+留卷证据（未复跑，见疑点 Q5）</td></tr>
+    <tr><td><b>T05</b> 需求工作树</td><td>已完成</td><td><span class="pill p-green">符合</span></td><td>私有 bare+工作树、<code>refs/rdws/base</code> 冻结基线、失败续跑标记、仅 fetch 不写 sources</td></tr>
+    <tr><td><b>T06</b> 执行边界</td><td>已完成</td><td><span class="pill p-green">符合</span></td><td>Seatbelt profile 拒网络/越权路径实测 EPERM、git 白名单禁 push、<b>产品会话零执行工具</b>（grep 无产品调用方）</td></tr>
+    <tr><td><b>T07–T10 / T12 / T15 / T17–T19 / T21 / T22 / F01–F06</b></td><td>未开始</td><td><span class="pill p-green">无提前实现</span></td><td>关键词扫描（写租约/快照/配额/审计查询/doctor/部署/bug/Tauri/revert）在非测试源码零命中；schema 18 表逐表对应已交付任务</td></tr>
+    <tr><td><b>T11</b> 完整需求维护</td><td>已完成（3 子项）</td><td><span class="pill p-green">符合</span></td><td>资料编辑可恢复回执、人员变更同事务留痕+承接资格、批量导入预览只读+整批原子+原命令核对</td></tr>
+    <tr><td><b>T13</b> 模型与供应商</td><td>进行中（统一出口待接线）</td><td><span class="pill p-green">符合</span></td><td>已交付子项（目录脱敏/模型状态/故障三分类/暂停外发 fail-closed/环回直连/继承 IPC/登录绑定/冷恢复）全部属实；「统一出口待接线」登记如实</td></tr>
+    <tr><td><b>T14</b> 能力白名单与模板</td><td>待验收（待运营制品）</td><td><span class="pill p-green">符合</span></td><td>白名单精确版本 PK、模板发布/绑定确切版本、preset 内容 SHA-256 原子发布、只影响新建会话（旧会话 identity 必须等于冻结值）</td></tr>
+    <tr><td><b>T16</b> 轨迹与哈希锚点</td><td>待验收（待正式环境）</td><td><span class="pill p-green">符合</span></td><td>迁移 0010 独立写角色仅 INSERT、触发器锁定映射、锚点只存坐标+sha256、自动截止按完整 JSONL 行/Zstd 帧 fail-closed</td></tr>
+    <tr><td><b>T20</b> 设计系统页</td><td>待验收</td><td><span class="pill p-green">符合</span></td><td>全文无 fetch/WS、令牌取 getComputedStyle 实值、示例业务请求为 0</td></tr>
+  </table>
+  <div class="ok"><b>16 视图覆盖表申报核实：无虚报。</b>10 个「部分」视图全部有路由与实现文件，6 个「未建」视图无任何导航或占位页；<code>validate-baseline.mjs</code> 以「部分 ⇔ 已路由」等式强制该表与代码一致。</div>
+
+  <h2 id="s3"><span class="num">3</span>发现项 · P2（跟踪并排期，不阻断）</h2>
+
+  <div class="finding">
+    <h4><span class="pill p-amber">P2</span> R-01 · workbench.ts 巨石：单文件承载全部 BFF 接口域，成为多任务线物理串行点 <small>（B 面与 C 面独立发现，交叉印证）</small></h4>
+    <div class="ev">证据：<code>apps/server/src/modules/workbench.ts</code>（2820 行，区间内最大源文件）：79-91 一处声明 9 组跨域路由常量；路由横跨成员/需求/导入/工作树/模板/会话/派生/回放/native 传输/WS mux/仓库同步等 10+ 域；闭包持有 12 个内存状态 Map；区间内 21 个提交来自 T02/T03/T04/T05/T11/T13/T14 多条任务线。</div>
+    <div class="ev">影响：会话安全边界（T02/T13）与业务 CRUD（T03/T11/T14）是不同变更轴与复核面，现被迫在同一文件串行（清单已把「同一文件当期写入者」列为需协调的共享资源）；回归面随任务数放大。已有更优模式可循：<code>native-projects.ts:15-131</code> 的项目运行状态对象收敛。</div>
+    <div class="ev">建议：按域拆分路由模块（sessions / native-transport / import / repositories / administration），共享助手下沉，状态收敛为显式 runtime 对象；结合下一个涉及该文件的任务（T07 接线/T13 统一出口）顺带执行，不要求本批返工。</div>
+  </div>
+
+  <div class="finding">
+    <h4><span class="pill p-amber">P2</span> R-02 · business.ts 巨石 + 事务样板双轨：部分写路径绕过重试包装</h4>
+    <div class="ev">证据：<code>apps/server/src/modules/business.ts</code>（2319 行）单闭包导出 19 个方法；带 40001/40P01 重试的 <code>transaction()</code> 包装在 :107-124，但导入提交（:776-778，自设 <code>transaction_timeout='8s'</code>）、人员编辑、模板、管理命令等 5 处直接 <code>db.transaction</code> 并各自重复 <code>lock_timeout='3s'</code>，超时字面量分散多处（:774-775 还有 <code>performance.now()+7500</code> 死线）。</div>
+    <div class="ev">影响：裸事务路径不享序列化冲突重试；两套事务习惯并存，调参需改多处；若「凭据幂等、失败即重放」是有意设计，台账未见留痕（见疑点 Q8）。</div>
+    <div class="ev">建议：统一经 <code>transaction()</code> 包装（差异化超时用参数传入）；按 import / personnel / template / management 拆域工厂。</div>
+  </div>
+
+  <div class="finding">
+    <h4><span class="pill p-amber">P2</span> R-03 · 错误处理双轨：<code>fail()</code> 的 43 处用户文案实际不达前端</h4>
+    <div class="ev">证据：<code>workbench.ts:107-109</code> <code>fail()</code> 只挂 <code>statusCode</code> 不带 <code>publicMessage</code>；全局错误处理器 <code>apps/server/src/app.ts:103-119</code> 仅回显带 <code>publicMessage</code> 的错误，否则 4xx 一律「请求参数不正确」。而 <code>businessError</code>（business.ts:63-68）与 <code>PendingAuthority</code>（workbench.ts:179-182）带 <code>publicMessage</code> 并正常显示。全仓 <code>fail(</code> 共 43 处。</div>
+    <div class="ev">影响：43 条精心撰写的中文文案（如「无权访问当前需求」「回放每页最多读取 50 条消息」「连接已过期，请重新连接」）实际为死文案，403 在浏览器显示为「请求参数不正确」——用户可见行为不一致且误导。</div>
+    <div class="ev">建议：合并为单一错误工厂（统一携带 publicMessage）；若部分 4xx 确有意脱敏，将 fail 的 message 参数改名 internalMessage 并删除误导性用户文案。改动小、可单独提交。</div>
+  </div>
+
+  <div class="finding">
+    <h4><span class="pill p-amber">P2</span> R-04 · syncer / orchestrator 未纳入 workspace 包化，跨 app 深相对路径依赖 <small>（A2 / B / C 三面独立发现）</small></h4>
+    <div class="ev">证据：<code>apps/syncer/</code>、<code>apps/orchestrator/</code> 均无 <code>package.json</code>（仅 src/）；<code>workbench.ts:46-51</code> 以 <code>../../../syncer/src/mirror.ts</code>、<code>../../../orchestrator/src/demand-worktrees.ts</code> 引用，<code>business.ts:23</code> 同；<code>demand-worktrees.ts:25</code> 反向引 syncer；且 <code>workbench.ts:76</code> 服务端运行时反向依赖 <code>../../../../scripts/env.mjs</code>。对照 contracts/db/dsh 均已是 workspace 包。</div>
+    <div class="ev">影响：依赖图脱离 pnpm workspace 声明（pnpm why/依赖审计不可见）、移动即断；与 docs/02 的目标包定位漂移。</div>
+    <div class="ev">建议：补最小 package.json 与 exports；<code>env.mjs</code>（共享运行配置）下沉共享包，scripts/ 仅留命令入口。T19「可运行交付包」验收前必须收敛。</div>
+  </div>
+
+  <div class="finding">
+    <h4><span class="pill p-amber">P2</span> R-05 · Native 诊断脱敏存在旁路面（覆盖缺口，非已证泄漏）</h4>
+    <div class="ev">证据：<code>dsh/bridge/wire.ts:95-121</code> <code>publicNativeStreamFrame</code> 仅对 snapshot / assistant-stream / event 及 <code>api-session/error</code> emit 投影改写，:103 与 :120 对未知帧类型和其他 emit 事件直接 <code>return text</code> 原文直通；HTTP 转发 <code>workbench.ts:2562-2572</code> 仅对 <code>session/page</code>、<code>session/events</code>、<code>modelCatalog</code> 三个路径做投影，reads 允许集内的 <code>session/state</code>、<code>session/summary</code>、<code>session/projections</code> 等响应未脱敏。对照项目自身标准：19ae2fb / 89a8ea2 已将供应商诊断视为必须脱敏内容，catalog failures 一律替换通用文案。</div>
+    <div class="ev">影响：若 Native 在 state/summary 或其他 emit 事件携带供应商诊断（网关错误详情、端点信息），普通项目成员可经 BFF 读到，与「诊断不出 BFF」不变量不一致。实际载荷是否含诊断文本未证实（疑点 Q1 给出验证方法），故按覆盖缺口定级。</div>
+    <div class="ev">建议：将投影改写推广为全部 reads 类响应与全部 emit 事件的默认处理（白名单放行已知安全字段）；为 state/summary 增加与 catalog 同款「响应体不含诊断串」断言。</div>
+  </div>
+
+  <h2 id="s4"><span class="num">4</span>发现项 · P3（影响有限，择机收敛）</h2>
+
+  <div class="finding p3"><h4><span class="pill p-gray">P3</span> R-06 · 会话写路径的观察登录校验是「可选头」，依赖配套部署顺序</h4>
+  <div class="ev"><code>workbench.ts:800-801</code> 对会话写调用 <code>verifyEditLogin(..., false)</code>，:1806-1813 无头请求整体跳过（为无头客户端保留；bootstrap GET :2378 则强制）。旧 console 制品 + 换 Cookie 窗口内仍可借新登录创建/派生。docs/02 §11.10.10 已如实声明该过渡窗口。建议在部署/回退 Runbook 固化「先 BFF 后浏览器制品」顺序。</div></div>
+
+  <div class="finding p3"><h4><span class="pill p-gray">P3</span> R-07 · 模型目录 BFF 仅顶层结构校验，groups/routableProviders 逐字透传</h4>
+  <div class="ev"><code>workbench.ts:141-176</code> 校验顶层类型后，:169-171 对 groups/routableProviders 逐字透传；凭据不外泄实质依赖锁定版 DSH（0.2.2-rc.3）目录 DTO 本身不含敏感字段。建议按已知字段集 allowlist 收敛，或在 DSH 升级检查单加入目录 DTO 字段核对项。</div></div>
+
+  <div class="finding p3"><h4><span class="pill p-gray">P3</span> R-08 · 冷恢复 reconcile 静默丢弃绑定，无 cancel 兜底</h4>
+  <div class="ev"><code>workbench.ts:2524-2529</code> 对不在 <code>runs.active</code> 名单的已提交绑定直接删除（runtime-context.ts reconcile），仅 retireRun 产生的 abandonedRuns 补发 <code>run.cancel</code>（:2531-2534）；极端时序下旧队列项可能失去「退役即取消」。建议 reconcile 删除时将 runId 一并进入 abandonedRuns。</div></div>
+
+  <div class="finding p3"><h4><span class="pill p-gray">P3</span> R-09 · BFF 租约表只增不清，长时运行内存单调增长</h4>
+  <div class="ev"><code>workbench.ts:628-646</code> <code>lease()</code> 以含客户端可控 generation 的键写入，过期/撤销命中仅 fail 409 从不删除；全仓 <code>leases.delete/clear</code> 零命中（对照 acceptedPrompts :2518 有清理）。仅已认证用户可触发、单条目小，属慢性泄漏而非可利用 DoS。建议命中过期条目时删除或定时清扫。</div></div>
+
+  <div class="finding p3"><h4><span class="pill p-gray">P3</span> R-10 · repositories GET 鉴权「读后复核」块未复用既有 stale 模式</h4>
+  <div class="ev"><code>workbench.ts:1451-1453</code> 前检与 :1462-1464 慢读后复核表达式完全相同（防 TOCTOU，行为正确），但未复用 <code>prepared()/stale()</code> 既有模式，易被误判为死代码。建议合并为带注释的「读前快检+读后复核」辅助函数。</div></div>
+
+  <div class="finding p3"><h4><span class="pill p-gray">P3</span> R-11 · Native RPC 信封校验/降级骨架两处近似重复</h4>
+  <div class="ev"><code>workbench.ts:110-183</code> <code>publicModelCatalog</code> 与 <code>dsh/bridge/wire.ts</code> <code>publicNativeSessionResponse</code> 独立实现同一套「type/rpcId 信封校验 + gateway/internal 降级 + no-store」（wire.ts:36-43 与 workbench.ts:128-139 同口径）。建议抽 <code>withNativeEnvelope()</code> 到 wire.ts，catalog 只留专属字段校验。</div></div>
+
+  <div class="finding p3"><h4><span class="pill p-gray">P3</span> R-12 · SessionHistoryPage 契约在 dsh/client 内联重复定义</h4>
+  <div class="ev"><code>packages/contracts/src/index.ts:38-49</code> 与 <code>dsh/client/runtime.ts:49-60</code> 逐字段相同且无编译期关联（dsh/ 不依赖 @rdws/contracts 属合理分层，故为张力非违例）。建议 console 侧以 <code>satisfies</code> 类型测试锚定等价。</div></div>
+
+  <div class="finding p3"><h4><span class="pill p-gray">P3</span> R-13 · console 直接依赖上游 DSH 类型包，绕过 dsh/client 适配层</h4>
+  <div class="ev"><code>apps/console/package.json:17</code> 声明 <code>@deepseek-ai/dsh-api-session-controller</code>；<code>conversation.tsx:12</code>、<code>session-model.tsx:2</code> 直接 import SessionBinding 类型，未走 <code>@rdws/dsh-client</code>。违反 AGENTS.md「业务代码通过公开适配层访问」（目前仅类型级，无运行时穿透）。建议由 dsh-client re-export，console 移除直接依赖。</div></div>
+
+  <div class="finding p3"><h4><span class="pill p-gray">P3</span> R-14 · <code>poc</code> 魔法项目 ID 硬编码 7 处</h4>
+  <div class="ev"><code>native-projects.ts:86,91,124</code> 与 <code>dsh/host/web.ts</code>（HEAD）:192/272/360/434 的 <code>projectId === 'poc'</code> 兼容分支散布（README:88 文档化了该过渡约定）。建议收敛为单一常量并注明移除条件。</div></div>
+
+  <div class="finding p3"><h4><span class="pill p-gray">P3</span> R-15 · 头名、轮询间隔与运行参数魔法值散布</h4>
+  <div class="ev"><code>x-rdws-edit-session</code> 字面量 63 处（相邻头已有常量先例 workbench.ts:87-88）；<code>refetchInterval: 2000</code> ×5 处；令牌 20s、并发 4、探测 maxTokens 1024、连接池 max 5 等无配置面也无具名常量。端口/路径类已有 env 配置面（RDWS_*），本条仅限无配置面参数。建议头名集中 contracts、运行参数提具名常量。</div></div>
+
+  <div class="finding p3"><h4><span class="pill p-gray">P3</span> R-16 · UI 小重复：能力标签 map 双份、登录屏令牌值复制</h4>
+  <div class="ev"><code>capability-approvals.tsx:11</code> 与 <code>capability-templates.tsx:29</code> 各自定义相同标签 map；<code>login-screen.css:2-8</code> 的 <code>--login-*</code> 色值与 theme.css 暗色令牌同值复制而非引用。建议上移 contracts / 注释锚定来源令牌。</div></div>
+
+  <div class="finding p3"><h4><span class="pill p-gray">P3</span> R-17 · 测试样板重复：41 处手读 test-accounts、18 个集成文件自建 Pool</h4>
+  <div class="ev"><code>readFile(join(runtimeHome,'secrets/test-accounts.json'))</code> 在 tests/ 下 41 处逐字重复；tests/integration 18 文件各自 <code>new Pool(...)</code>；helpers 已有 4 个但缺这两个最常用件。凭据文件位置变更需改 40+ 处。建议补 <code>tests/helpers/test-accounts.ts</code> 与共享 pool 构造。</div></div>
+
+  <h2 id="s5"><span class="num">5</span>交叉印证与正面观察</h2>
+  <ul>
+    <li><b>三面独立发现同一结构债（R-04）</b>：A2、B、C 三个互不通气的评审面都报出 syncer/orchestrator 未包化——高置信度，且说明它已在阻碍多个视角。</li>
+    <li><b>申明诚实性经得起交叉检验</b>：两个规格面 + 精简面独立得出「无虚报、无越清单实现、待验收状态如实保留」的一致结论；16 视图覆盖表与路由事实由基线校验脚本等式强制。</li>
+    <li><b>无第二权威</b>：PG 仅存身份映射/回执/事件留痕/锚点坐标（锚点只存 journal_name/through_byte/sha256，无正文）；会话历史每次经 BFF 从原生日志活取，无消息日志落库；模型配置走原生 Provider/Credentials——台账「原生日志保持轨迹权威」「不另建模型调用权威」两条不变量在代码中成立。</li>
+    <li><b>无死代码、无依赖冗余</b>：contracts 66 个导出逐一 grep 全部有使用；四份 package.json 依赖逐项有使用点；console 22 个 feature 组件全部可达；trace 脚本互相 import 复用非复制。</li>
+    <li><b>无 DSH 静默 fork</b>：上游锁版 0.2.2-rc.3 + <code>dsh/upstream/manifest.json</code>（reviewedSourceCommit + npm integrity）；插件深层导入走上游 package.json 声明的公开导出面。</li>
+    <li><b>零依赖解析器是已批准决策</b>：XLSX/CSV 未引第三方库，浏览器端手写 ZIP 容器解析 + DecompressionStream（requirement-import-xlsx.ts），对应 docs/02 §11.21.5 已批准方案；解析权威单一（浏览器）、校验权威单一（BFF），服务端不重复解析。</li>
+    <li><b>精简纪律总体好</b>：未发现投机功能、无主开关、纯透传包装仅 1 处（5 行 re-export 接缝，判定可接受）；T06 执行层「仅测试可达」对应 docs/02 §11.20 声明的隔离验证边界，产品保持零工具是清单既定项。</li>
+  </ul>
+
+  <h2 id="s6"><span class="num">6</span>安全核对摘要（D 面）</h2>
+  <p>结论：<b>APPROVE_WITH_CHANGES，无阻塞项</b>。SECURITY.md 逐条声明的服务端强制点均在 HEAD 代码中找到对应实现与判定顺序；其记录的残余风险（R-A、R-B）描述与代码现状仍相符。除 R-05（脱敏旁路面）与 R-09（租约泄漏）外，六域核对要点：</p>
+  <table>
+    <tr><th>域</th><th>核对要点（全部通过）</th></tr>
+    <tr><td>认证与登录绑定</td><td>认证动作白名单 + set-cookie 单独回写 + 限流键服务端覆写；会话校验 active+authEpoch+双到期，代次回退不能复活旧会话；观察登录绑定在 Native HTTP/WS/bootstrap/被动读/会话写/模板写各判定点服务端强制，绑定=SHA-256(登录,项目,需求)；连接期 1s 轮询复核 + 撤权断桥；revocation-races 7 类竞争测试与代码判定点一一对应</td></tr>
+    <tr><td>授权边界</td><td>跨项目访问由 DB 行归属 + 事务内复核 + onSend 响应前再鉴权三层拒绝；管理命令仅 7 种账号/角色/审批/模板操作，无任何文件/命令面；MemberRole 不含 project_admin（管理权≠写权）；上下文快照 codeWrite:false；Agent 工具零授权；模型三层选择（平台锁定/项目允许集/个人会话）与 T13 验收口径一致</td></tr>
+    <tr><td>注入与路径</td><td>工作树参数强校验（UUID/40hex/64hex/精确命名）+ 目录属主 0700 + realpath + git exec-array 固定参数；批量导入六层防御（4MiB/8MiB 解压上限、CRC、拒 DOCTYPE/ENTITY、拒外链关系、拒公式单元格、4096 行上限 + BFF 2MiB bodyLimit + 服务端二次校验 + 事务内角色复查）；Seatbelt 拒网络/拒写树外/拒 symlink/JSON 引号化路径；trace 脚本正则校验 + 参数化 SQL</td></tr>
+    <tr><td>凭据与脱敏</td><td>catalog 白名单 + 失败文案替换（覆盖缺口见 R-05/R-07）；Fastify logger:false、better-auth 日志禁用、Native stderr 仅 drain；API key 走 apiKeyEnv 引用 + 0600 凭据文件 + BFF 校验私有位</td></tr>
+    <tr><td>原生通道</td><td>Native 绑定 127.0.0.1:0，就绪证明 HMAC 绑定 port+generation；/_rdws/* 全部 HMAC 签票（aud + 撤权名单），控制操作绑定 operation+bodyHash；外发暂停 fail-closed（sandbox-exec deny network* 仅放行本机 bind/inbound、不继承代理 env、BFF 在 runs.admit 之前拒 503、非法值启动失败）；环回直连 agent:false + 拒重定向/upgrade；继承 IPC 双向拒收句柄 + nonce 防重放 + 回复前再核撤权</td></tr>
+    <tr><td>数据完整性</td><td>迁移 0010：锚点表 SECURITY DEFINER 触发器（search_path 锁定 + REVOKE PUBLIC）、写者角色仅 USAGE+SELECT+INSERT(列) 且运行时核验隔离性、应用账号无法访问 audit 表；requirement_event 应用角色 REVOKE UPDATE/DELETE；绑定表仅允许更新两列；历史读取服务端校验归属 + seq 单调 + 截断一致</td></tr>
+  </table>
+
+  <h2 id="s7"><span class="num">7</span>待验证疑点（只读评审无法闭环，附验证方法）</h2>
+  <table>
+    <tr><th>#</th><th>疑点</th><th>验证方法</th></tr>
+    <tr><td>Q1</td><td>R-05 是否构成已证泄漏：session/state、session/summary 及其他 emit 事件是否实际携带供应商诊断文本</td><td>用合成供应商夹具（参照 tests/web-live/model-egress-pause.spec.ts）制造 provider 失败，以浏览器身份 POST <code>/api/dsh/:id/native/api/session/state</code> 与 <code>session/summary</code>，对响应体 grep 供应商特征串；命中则 R-05 升级为已证泄漏</td></tr>
+    <tr><td>Q2</td><td>冷恢复 reconcile 时序竞态（R-08 的未证实部分）</td><td>在 native-queued-recovery.test.ts 注入「runs.active 首查不含刚提交 run、复核时含」的受控载体，断言绑定不被丢弃或被补 cancel</td></tr>
+    <tr><td>Q3</td><td>「整仓 201 项 / 浏览器 40 项」等清单执行计数为静态量级核对，非复跑证实</td><td>干净检出执行 pnpm check、pnpm test:e2e 对照（需共享资源排队窗口）</td></tr>
+    <tr><td>Q4</td><td>真实环境验收（T03 双项目 Native、T04 Gitee HTTPS+SSH 验签、T05 真实工作树、T06 Seatbelt 实机）为文档+留卷证据，未复跑</td><td>按 docs/02 各节记录命令在隔离库/运行根复跑聚焦测试，并读取 state/exports 留存回执比对</td></tr>
+    <tr><td>Q5</td><td>R-06 残余窗口实测：旧 console 制品 + 换 Cookie 的会话写</td><td>部署演练保留旧构建产物 + 换 Cookie 实测 create/fork 是否 401</td></tr>
+    <tr><td>Q6</td><td>capabilityRelease 生产注入路径未闭环：注册表唯一读取点是 Host 构造默认参数，已审核能力如何进入 release 未见本区间实现</td><td>核对 docs/05 T14 后续切片与台账 §T14 规划（清单已如实登记「待运营制品」缺口）</td></tr>
+    <tr><td>Q7</td><td>裸 db.transaction 路径无序列化重试是否有意（R-02）</td><td>台账检索导入提交/40001 相关决策；或对导入提交路径注入 40001 观察行为</td></tr>
+    <tr><td>Q8</td><td>自定义迁移与 schema.ts 最终一致性（0005 触发器、0010 audit schema）无法静态证明等价</td><td>pnpm db:generate 后确认无新 diff（涉及数据库，需排队）</td></tr>
+    <tr><td>Q9</td><td>SECURITY.md「依赖审计（11-18）」picomatch GHSA 状态无法复跑</td><td>允许运行命令时执行 pnpm audit --prod --audit-level high 核对</td></tr>
+    <tr><td>Q10</td><td>导入文本未做公式前缀消毒——当前 PoC 无任何导出路径，不构成现实攻击面</td><td>若后续新增 CSV/表格导出，在导出侧消毒或登记残余风险</td></tr>
+    <tr><td>Q11</td><td>直连档 Native 子进程仍继承代理 env（f9c9fca 申明「沿原规则」）：若 DSH 内部存在未绕代理的自环 fetch，本机代理可看到短租约签票请求</td><td>沿用 f9c9fca 的程序化代理对照法，核对代理计数是否出现 Native 自环目标</td></tr>
+  </table>
+
+  <h2 id="s8"><span class="num">8</span>显式跳过</h2>
+  <ul>
+    <li>性能与每请求开销（如 allowedAsset 每资源 bootstrap 往返）、包体与构建产物、视觉/Demo 一致性（属用户侧验收）。</li>
+    <li>运行任何测试/构建/迁移/启动服务（共享资源协调约束）；依赖审计复跑（Q9）。</li>
+    <li>真实 GitLab 出站交付（T09）、Linux 验收（T21）、生产档（R-A 已申明不覆盖）、部署批准。</li>
+    <li>未提交 WIP（model-carrier 相关 8 个文件）全部内容；DSH 上游 SDK/网关内部实现（仅评审 RDWS 侧适配与策略挂接）。</li>
+    <li>测试代码内部质量深挖（仅核对引用关系与样板重复）；demo/ 原型。</li>
+  </ul>
+
+  <h2 id="s9"><span class="num">9</span>建议下一步</h2>
+  <ol>
+    <li><b>随下个功能切片归还的 P2</b>：T07 接线或 T13 统一出口领取时顺带拆分 workbench.ts（R-01）；T19 交付包前完成 syncer/orchestrator 包化（R-04）；R-02/R-03 改动小，可各作一次独立小提交。</li>
+    <li><b>立即可做的小修（P3，低风险）</b>：租约清理（R-09）、reconcile 兜底（R-08）、poc 常量化（R-14）、信封骨架抽取（R-11）。</li>
+    <li><b>优先闭环 Q1</b>：用现有合成供应商夹具实测 state/summary 是否携带诊断——它决定 R-05 是覆盖缺口还是已证泄漏，并应补对应断言。</li>
+    <li><b>流程面</b>：清单状态登记诚实、证据锚点完整，建议维持现有「完成一项即回写状态与证据」的节奏；R-01 拆分后可放松 workbench.ts 的单写协调约束。</li>
+    <li><b>验证疑点按需排期</b>：Q3/Q4/Q8/Q9 需要运行窗口，建议在共享资源排队时批量执行。</li>
+  </ol>
+
+  <h2 id="sA"><span class="num">A</span>附录 · 评审面原始终论</h2>
+  <table>
+    <tr><th>评审面</th><th>范围</th><th>结论</th><th>原始发现</th></tr>
+    <tr><td>A1 规格 · 会话/模型/轨迹</td><td>T02、T13、T16 全部子项 vs 代码与测试（15 个必查申明点逐项核对；docs/02 锚点 36 个全部存在）</td><td><span class="pill p-green">APPROVE</span></td><td>3×P3（R-06/07/08）</td></tr>
+    <tr><td>A2 规格 · 平台/需求/仓库</td><td>T00/T01/T03/T04/T05/T06/T11/T14/T20 逐任务 + 16 视图覆盖表</td><td><span class="pill p-green">APPROVE</span></td><td>2×P3（R-04 之一、R-10）</td></tr>
+    <tr><td>B 精简（过度/发散/冗余）</td><td>全区间非测试代码 + 越清单扫描 + 第二权威检查</td><td><span class="pill p-blue">APPROVE_WITH_CHANGES</span></td><td>1×P2（R-01）+ 2×P3（R-04 之一、R-11）</td></tr>
+    <tr><td>C 结构/复用/配置化</td><td>架构边界、迁移纪律、依赖方向、重复与魔法值</td><td><span class="pill p-blue">APPROVE_WITH_CHANGES</span></td><td>4×P2（R-01 至 R-04）+ 6×P3（R-12 至 R-17）</td></tr>
+    <tr><td>D 安全专项</td><td>六域对照 SECURITY.md 与台账不变量（全部取证于 HEAD）</td><td><span class="pill p-blue">APPROVE_WITH_CHANGES</span></td><td>1×P2（R-05）+ 1×P3（R-09）</td></tr>
+  </table>
+  <p class="src">原始发现 19 条，去重合并 2 组（workbench 巨石、包化问题）后为 17 条；全部 19 条均由主评审逐行复核证据后才收录。评审全程只读；未提交 WIP 未引用为任何证据。</p>
+
+  <div class="foot">RDWS 实现评审报告 · 生成于 2026-11-19 · 五面独立评审 + 主评审逐行复核 · 判据：AGENTS.md / SECURITY.md / docs 00·02·04·05 · 评审区间 bf0570a..ccad89d</div>
+</div>
+</body>
+</html>

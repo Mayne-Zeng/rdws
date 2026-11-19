@@ -903,6 +903,19 @@
   <p>独立交付首审 APPROVE_WITH_CHANGES。现有 direct 与隔离受限 Host 复用 PostgreSQL 归属检查及共享读取预算，实际项目错配时供应商零新增。已复现 FD4 流同步关闭早于 close 事件的窗口，修订即时检查流状态并传播取消，保留原有回压、客户端取消及邻流。实际继承通道挂起复验时关闭，供应商零新增。定点反例覆盖载体报头和编码后的私有调用元数据。二轮独立复审 APPROVE，两项 P1 及证据缺口均已关闭。</p>
   <p>最终 <code>caffeinate -i pnpm check</code> 返回 0（38 文件、224 项通过，1 项按平台跳过，类型、lint、格式及构建通过）。构建仍提示主包体积。<code>caffeinate -i pnpm test:e2e</code> 返回 0（40 项），<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>feat: bind Native model attempts to authorized steps</code>。回退沿 BFF 已有 direct／paused 启动模式，当前改动没有数据库迁移。</p>
 
+  <h4 id="t13-model-egress-transport-boundary-20261119">11.16.24 TLS 供应商请求的实际传输定序验证</h4>
+  <p>R3，基线 <code>86cd912</code>。§11.16.17 要求在实际供应商传输处定序。当前 <code>authorizeModelAttempt</code> 末端仅进入受信回调。本机 Node 24.20.0 的证书验证 HTTPS 实验已观察到 <code>request.end</code> 入队、撤权标记、随后收到实际请求。TLS 已连接时写入回调可作为成功后置证据，回调和失败状态无法定位第一个不可撤回字节。现有 BFF 绑定可配置回环端口，Native 锁按运行根和项目隔离，同库启动另一 BFF 或另一个授权写入者仍缺排他保证。保持 BFF 的 direct／paused 启动契约，本阶段对真实 TLS 最终传输建立可复跑的精确证据。</p>
+  <ol>
+    <li>macOS 夹具使用仓库锁定的 Node 24.20.0 和已有 <code>openssl</code> 测试工具，缺失时验证失败。父测试只在 <code>127.0.0.1</code> 预连真实 TCP，将连接经 Node 支持的 stdio 继承交给单个试验写入所有者，关闭父方副本。继承 FD 先用公开的 <code>net.Socket({fd})</code> 接管为非阻塞连接。子进程使用公开的 <code>tls.connect</code> Duplex，Node 核对独立临时证书的信任和正确 IP SAN；启用证书验证并以错 SAN 对照。固定 TLS 1.2 仅用于区分应用与握手记录，握手后禁用重新协商。每条连接至多发一个有界合成请求。记录解析跨分块积累 5 字节头与有界正文、消费尾随记录，遇未知、超长、截断或额外应用记录即关闭。禁止私有 Node socket 句柄、外部供应商、真实认证材料、新增依赖／迁移和产品启用。</li>
+    <li>试验所有者在同一事件循环持授权标记及顺序号。明文队列、已加密记录和 Node 接受写入的返回值属于准备。在同一同步段核对授权并对继承套接字执行 <code>writeSync</code>。正数返回是内核已接受相应字节的后置见证，该同步调用可以包含多次底层写入，撤权不能插入其中。未写入、首次交付、部分交付与全部交付分别留证。第一次受控提交零长度后仍待写，先撤权再放行时保持零。受控只写应用记录前缀后关闭，记录一次首次交付、零条完整提交，并以对端独立 TCP 观察核对实际收到正字节密文前缀。对端 TLS 应用读取及完整请求另计，未知结果禁止重放原连接。正式背压、重试、恢复和重授权按 §11.16.17 实施。</li>
+    <li>正反两条真实 TLS 连接分别运行。加密请求停在有权检查前，先置失效再唤醒时未执行首次应用写入，接收侧应用密文、解密字节及完整请求均为零。正例先让内核接收完整请求携带的密文，接收侧独立 TCP 观察点截住密文直到撤权后再转给 TLS 供应商，核对该次应用解析和完整合成标记。区分本地内核、接收侧密文与供应商应用完成三类证据。另验证 TLS 分片、拼接、截断及 <code>request.end</code> 在握手延迟期间的反例。仅保留顺序号、长度、结果等证据，正文和认证头只使用夹具内合成标记。连接、子进程、证书材料有明确的超时与清理路径。</li>
+    <li>本阶段验收覆盖实际 TLS 传输和受控所有者。正式同库所有者须覆盖 logout、角色／账号、需求人员及选模权限，确认第二 BFF 或迁移写者无法绕开。数据库断线或租约过期不能单独证明旧所有者停稳。正式接线须验证真实授权入口、原步骤与选模截止、旧代和复授、部分交付结果未知及全部请求用途。启用前须取得具名部署方认可瞬时处理正文与认证头、实证物理阻断直连及出口故障零回退，并以两种合成标记查验正常及故障路径的日志、诊断和持久队列。回退删除试验和证据即可，产品运行态无迁移。执行本机 TLS 定点、相邻继承通道回归、项目全量门禁和基线校验，独立双面评审方案后实施。</li>
+  </ol>
+  <p>方案 A/B 二版均 APPROVE。首审补足独立接收侧计数、TLS 记录分片和截断、实际受控密文前缀、错 SAN、零字节及部署准入。锁定 Node 24.20.0 本机夹具实测，撤权先及零长度注入后撤权均为零密文和零 HTTP 请求。夹具主动只提交密文前缀，独立 TCP 观察点确认收到前缀，TLS 供应商的解密字节和完整请求仍为零。完整写入先于撤权，观察点在撤权后转交密文，供应商验证收到一次完整请求、合成认证头和正文。TLS 握手延迟时已排队的请求在撤权标记后到达。Node <code>finish</code> 只见证整条请求已进入传输，不能定位首次真实交付。<a href="https://nodejs.org/download/release/v24.20.0/docs/api/http.html#event-finish">锁定版 Node 传输说明</a>。</p>
+  <p>聚焦 <code>caffeinate -i pnpm test tests/integration/model-egress-wire.test.ts tests/integration/model-carrier-protocol.test.ts tests/integration/native-model-carrier.test.ts tests/integration/native-model-attempt-authority.test.ts</code> 返回 0（4 文件、18 项）。交付首审发现首记录截断时可能误留等待，且退出等待超时会丢失真正的子进程关闭观察。准备完成时核对整条记录，实际截断夹具复现主动拒绝与零交付。退出超时后保留观察，清理等待专用子进程实际关闭。新夹具验证 TLS 1.2 下的传输边界，正式产品仍需把原登录、撤权入口和唯一授权所有者接到同一边界。</p>
+  <p>独立交付复审 APPROVE，关闭首审两项 P2。确认受控前缀和零长度试验分别证明真正的部分交付和零字节交付，真实网络背压及 EAGAIN 仍由正式传输接线验收。</p>
+  <p>最终 <code>caffeinate -i pnpm check</code> 返回 0（39 文件、232 项通过、1 项按平台跳过，类型、lint、格式和构建通过），构建保留既有主包体积提示。<code>caffeinate -i pnpm test:e2e</code> 返回 0（40 项），<code>pnpm validate:baseline</code> 返回 0（29 任务、62 追溯点、16 视图）。本地修订为 <code>test: verify TLS model egress delivery ordering</code>。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

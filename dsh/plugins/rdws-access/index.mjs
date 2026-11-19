@@ -11,6 +11,7 @@ import {
   targetSession,
   isRecord,
   onlyKeys,
+  RDWS_TOOL_GUARD_DENIAL,
 } from '../../bridge/access.ts';
 import { bootInjections } from '@deepseek-ai/dsh-client-modules';
 import { RemoteStreamMuxServer } from '@deepseek-ai/dsh-api-gateway/src/stream-server.ts';
@@ -34,7 +35,10 @@ export const inject = [
 export function apply(ctx, config) {
   if (process.send)
     process.once('disconnect', () => process.kill(process.pid, 'SIGTERM'));
-  ctx.tools.guard(() => 'Tools are disabled in this RDWS stage');
+  ctx.tools.guard(() => ({
+    reason: 'Tools are disabled in this RDWS stage',
+    info: RDWS_TOOL_GUARD_DENIAL,
+  }));
   ctx.on(
     'agent/created',
     ({ agent }) => {

@@ -300,11 +300,16 @@ export function BusinessAuditEvents({
                   </p>
                 )}
                 {requirement && (
-                  <p>
+                  <p className="session-actions">
                     <Link
                       to={`/?${new URLSearchParams({ project, requirement, view: 'trace', panel: 'anchors' })}`}
                     >
                       查看物理锚点
+                    </Link>
+                    <Link
+                      to={`/?${new URLSearchParams({ project, requirement, view: 'trace', panel: 'execution' })}`}
+                    >
+                      查看执行事件
                     </Link>
                   </p>
                 )}

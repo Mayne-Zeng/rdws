@@ -6,6 +6,8 @@ export const sessionHistoryPath =
   '/api/requirements/:id/sessions/:sessionId/history';
 export const sessionAnchorsPath =
   '/api/requirements/:id/sessions/:sessionId/anchors';
+export const sessionExecutionPath =
+  '/api/requirements/:id/sessions/:sessionId/execution';
 export const sessionTemplatePath =
   '/api/requirements/:id/sessions/:sessionId/capability-template';
 export const businessAuditPath = '/api/requirements/:id/business-audit';
@@ -37,6 +39,7 @@ export const isPassiveRequirementRead = (request: FastifyRequest) =>
   (request.routeOptions.url === sessionsPath ||
     request.routeOptions.url === sessionHistoryPath ||
     request.routeOptions.url === sessionAnchorsPath ||
+    request.routeOptions.url === sessionExecutionPath ||
     request.routeOptions.url === sessionTemplatePath ||
     request.routeOptions.url === businessAuditPath);
 export const isProjectAuditRead = (request: FastifyRequest) =>

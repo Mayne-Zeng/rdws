@@ -152,13 +152,14 @@ export function ProjectWorkspace({
     requirementListStatus !== 404;
   function navigate(next: View, id = selected) {
     if (protectedForm) return;
+    const panel = search.get('panel');
     setSearch({
       project: project.id,
       view: next,
       ...(id ? { requirement: id } : {}),
       ...(next === 'trace' &&
         view === 'trace' &&
-        search.get('panel') === 'anchors' && { panel: 'anchors' }),
+        (panel === 'anchors' || panel === 'execution') && { panel }),
     });
     setMobile(false);
   }

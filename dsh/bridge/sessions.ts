@@ -1,16 +1,112 @@
 import { randomUUID } from 'node:crypto';
 import type { NativeWebHost } from '../host/web.ts';
-import { isRecord, type Grant } from './access.ts';
+import type { SessionExecutionEvent } from '@rdws/contracts';
+import { isRecord, RDWS_TOOL_GUARD_DENIAL, type Grant } from './access.ts';
 export interface NativeEvent {
   seq: number;
   type: string;
   data: Record<string, unknown>;
   surfaceOp?: unknown;
+  sourceEventSeqs?: unknown;
 }
 export interface NativePage {
   cursor: number;
   hasMore: boolean;
   records: { type: 'event'; event: NativeEvent }[];
+}
+
+function position(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function toolResultStatus(
+  message: Record<string, unknown>,
+  error: unknown,
+): SessionExecutionEvent['status'] {
+  if (message.isError === false)
+    return isRecord(error) &&
+      (typeof error.name === 'string' || typeof error.code === 'string')
+      ? 'outcome-unknown'
+      : 'result-returned';
+  if (message.isError !== true) return 'outcome-unknown';
+  if (isRecord(error)) {
+    const { name, code } = error;
+    if (
+      name === RDWS_TOOL_GUARD_DENIAL.name &&
+      code === RDWS_TOOL_GUARD_DENIAL.code
+    )
+      return 'blocked';
+    if (
+      (name === 'ToolNotStartedError' && code === 'TOOL_NOT_STARTED') ||
+      (name === 'AbortError' && code === 'ABORTED_BEFORE_DISPATCH')
+    )
+      return 'not-started';
+    if (name === 'ToolOutcomeUnknownError' && code === 'TOOL_OUTCOME_UNKNOWN')
+      return 'outcome-unknown';
+  }
+  return 'result-error';
+}
+
+export function projectSessionExecution(
+  records: NativePage['records'],
+  session: { sourceSessionId: string | null; sourceThroughSeq: number | null },
+): SessionExecutionEvent[] {
+  const bySeq = new Map(records.map(({ event }) => [event.seq, event]));
+  return records.flatMap(({ event }) => {
+    const { seq, type, data, sourceEventSeqs, surfaceOp } = event;
+    const { turn, step } = data;
+    if (!position(turn) || !position(step)) return [];
+    const origin =
+      session.sourceSessionId === null && session.sourceThroughSeq === null
+        ? 'session'
+        : session.sourceSessionId &&
+            (session.sourceThroughSeq === -1 ||
+              position(session.sourceThroughSeq))
+          ? seq <= session.sourceThroughSeq
+            ? 'inherited'
+            : 'session'
+          : 'unknown';
+    const eventFields = { seq, turn, step, origin } as const;
+    if (type === 'tool/call')
+      return typeof data.callId === 'string' && data.callId.length > 0
+        ? [{ ...eventFields, status: 'requested' }]
+        : [];
+    const { message } = data;
+    if (
+      type !== 'tool/result' ||
+      surfaceOp !== 'append' ||
+      !isRecord(message) ||
+      message.role !== 'tool' ||
+      typeof message.toolCallId !== 'string' ||
+      !message.toolCallId ||
+      !isRecord(message.source) ||
+      message.source.kind !== 'tool' ||
+      message.source.callId !== message.toolCallId
+    )
+      return [];
+    let sourceSeq: number | undefined;
+    if (Array.isArray(sourceEventSeqs) && sourceEventSeqs.length === 1) {
+      const [ref] = sourceEventSeqs;
+      if (position(ref) && ref < seq) {
+        const candidate = bySeq.get(ref);
+        if (
+          !candidate ||
+          (candidate.type === 'tool/call' &&
+            candidate.data.callId === message.toolCallId &&
+            candidate.data.turn === turn &&
+            candidate.data.step === step)
+        )
+          sourceSeq = ref;
+      }
+    }
+    return [
+      {
+        ...eventFields,
+        status: toolResultStatus(message, data.error),
+        ...(sourceSeq === undefined ? {} : { sourceSeq }),
+      },
+    ];
+  });
 }
 export async function sessionRpc(
   host: NativeWebHost,

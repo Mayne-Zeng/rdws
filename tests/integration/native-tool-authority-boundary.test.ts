@@ -294,6 +294,7 @@ test('the formal Host rejects actual model tool calls even when an Agent-scoped 
             turn: 1,
             step: 1,
             message: { toolCallId: callId, isError: true },
+            error: { name: 'RdwsToolGuardError', code: 'RDWS_TOOLS_DISABLED' },
           },
         },
       ]);

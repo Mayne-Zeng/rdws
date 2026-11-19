@@ -5,6 +5,10 @@ import {
   createHash,
 } from 'node:crypto';
 export const LEASE_MS = 20_000;
+export const RDWS_TOOL_GUARD_DENIAL = {
+  name: 'RdwsToolGuardError',
+  code: 'RDWS_TOOLS_DISABLED',
+} as const;
 export interface Grant {
   aud: string;
   purpose: 'browser' | 'create' | 'fork' | 'service';

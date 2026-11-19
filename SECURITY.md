@@ -64,6 +64,8 @@ T17 的应用角色仅获准执行指定的只读函数，按有效登录、真�
 
 浏览器按原观察登录读取会话锚点。BFF 根据实际 Cookie 绑定身份，出站前再次校验有效期、项目和需求读权、会话归属及撤权代次。工作台的锚点模式读取已提交摘要，当前原件的核验与文件访问归独立校验流程。[锚点联查权限](docs/02-directory-and-engineering-design.html#t17-session-anchor-readback-plan-20261120)
 
+会话执行事件沿用原观察登录及确切会话关联。BFF 仅为指定会话发出 Native 读取委托，出站复核当前授权。页面和 CSV 只读取脱敏逻辑摘要，原工具名、参数、错误正文及结果内容留在原始记录的受控读取范围。执行准入继续使用既有根守卫。[执行事件权限与状态](docs/02-directory-and-engineering-design.html#t17-session-execution-audit-plan-20261120)
+
 自动截止只处理独立运维方提供的停稳原件或可信不可变快照。它在同一只读文件描述符上核对 Native 文件头、物理边界、摘要和可观察的文件变化。格式损坏、读失败或超出处理预算时停止记录。恢复核对保留原快照和原字节截止。 [T16 自动截止方案](docs/02-directory-and-engineering-design.html#t16-automatic-cutoff-plan-20261119)
 
 ## 需求模板绑定

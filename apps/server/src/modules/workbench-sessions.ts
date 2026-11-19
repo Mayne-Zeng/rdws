@@ -5,11 +5,12 @@ import {
   SessionCreate,
   SessionFork,
   type SessionAnchorPage,
+  type SessionExecutionPage,
   type SessionTemplateStatus,
 } from '@rdws/contracts';
 import { schema } from '@rdws/db';
 import { and, eq, sql } from 'drizzle-orm';
-import { sessionPage } from '@rdws/dsh/sessions';
+import { projectSessionExecution, sessionPage } from '@rdws/dsh/sessions';
 import { isDemandPreset } from '@rdws/dsh/web';
 import { isRecord, onlyKeys } from '@rdws/dsh/access';
 import {
@@ -18,12 +19,22 @@ import {
   sessionForkPath,
   sessionTemplatePath,
   sessionAnchorsPath,
+  sessionExecutionPath,
 } from './workbench-paths.ts';
 import { fail, type WorkbenchRuntime } from './workbench-runtime.ts';
 import { isMicrosecondTimestamp } from './workbench-audit.ts';
 
 const anchorPageSize = 25;
 const anchorId = /^[a-f0-9]{64}$/;
+const executionPageSize = 50;
+
+function executionPosition(value: unknown) {
+  return typeof value === 'string' &&
+    /^\d+$/.test(value) &&
+    Number.isSafeInteger(Number(value))
+    ? Number(value)
+    : undefined;
+}
 
 export function registerSessions(
   app: FastifyInstance,
@@ -123,6 +134,79 @@ export function registerSessions(
           tail && page.rows.length > anchorPageSize
             ? { id: tail.id, recordedAt: tail.recordedAt }
             : null,
+      };
+    },
+  );
+
+  app.get<{ Params: { id: string; sessionId: string } }>(
+    sessionExecutionPath,
+    { exposeHeadRoute: false },
+    async (request): Promise<SessionExecutionPage> => {
+      const original = requestDemandScope(request);
+      const { id, sessionId } = request.params;
+      if (original.requirementId !== id) fail(404, '需求不存在');
+      await business.authorizeRequirement(
+        original,
+        id,
+        original.projectId,
+        'reader',
+        undefined,
+        sessionId,
+      );
+      const query = request.query;
+      if (!isRecord(query) || !onlyKeys(query, ['throughSeq', 'beforeSeq']))
+        fail(400, '执行事件读取参数不正确');
+      const throughSeq = executionPosition(query.throughSeq);
+      const beforeSeq = executionPosition(query.beforeSeq);
+      if (
+        (query.throughSeq !== undefined || query.beforeSeq !== undefined) &&
+        (throughSeq === undefined ||
+          beforeSeq === undefined ||
+          beforeSeq < 1 ||
+          beforeSeq > throughSeq)
+      )
+        fail(400, '执行事件分页位置不正确');
+      const scope = await access(request.headers, id);
+      if (
+        scope.who.userId !== original.userId ||
+        scope.who.authSessionId !== original.authSessionId ||
+        scope.item.projectId !== original.projectId
+      )
+        fail(401, '授权已变化');
+      const session = scope.sessions.find((row) => row.id === sessionId);
+      if (!session) fail(403, '无权读取该会话执行事件');
+      if (!scope.item.nativeWorkspaceId) fail(503, '执行事件暂不可用');
+      const runtime = await projects.get(original.projectId);
+      const delegation = {
+        ...grant({ ...scope, runtime, epoch: original.epoch }),
+        readSessionIds: [sessionId],
+        ownSessionIds: [],
+      };
+      const page = await sessionPage(
+        runtime.native,
+        delegation,
+        sessionId,
+        throughSeq,
+        beforeSeq,
+      ).catch(() => fail(503, '执行事件暂不可用'));
+      if (
+        beforeSeq !== undefined &&
+        page.records.some(({ event }) => event.seq >= beforeSeq)
+      )
+        fail(503, '执行事件分页位置已变化');
+      const retained = page.records.slice(-executionPageSize);
+      const leading = retained[0];
+      return {
+        projectId: original.projectId,
+        requirementId: id,
+        sessionId,
+        sessionOwnerId: session.ownerId,
+        throughSeq: page.cursor,
+        next:
+          leading && (page.hasMore || retained.length < page.records.length)
+            ? { throughSeq: page.cursor, beforeSeq: leading.event.seq }
+            : null,
+        events: projectSessionExecution(retained, session),
       };
     },
   );

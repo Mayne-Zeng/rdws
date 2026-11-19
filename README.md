@@ -194,6 +194,8 @@ pnpm --silent trace:anchor verify "$journal" "$through_byte"
 
 迁移 0013 为工作台提供应用角色专用的只读投影。在需求档案或审计中心展开业务事件并点击「查看物理锚点」，选择会话后可查看已提交的记录和导出当前页 CSV。锚点模式查询 PostgreSQL，用户可从这里切换到逻辑轨迹。核验当前原件使用上面的独立 `verify` 命令。[T17 锚点联查方案](docs/02-directory-and-engineering-design.html#t17-session-anchor-readback-plan-20261120)
 
+在业务事件详情或会话轨迹选择「查看执行事件」，可按会话读取 Native 逻辑历史中的调用和结果状态，按固定切点翻页并导出当前页 CSV。信息包含轮次、步骤、来源序号及派生继承标识。当前根守卫继续拒绝工具调用，并为新记录附加可识别的拒绝身份。实际执行验收按 T07 推进。[T17 执行事件设计](docs/02-directory-and-engineering-design.html#t17-session-execution-audit-plan-20261120)
+
 ## 这个仓库现在有什么
 
 | 路径                                            | 内容                                                             |

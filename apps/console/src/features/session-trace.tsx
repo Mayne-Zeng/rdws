@@ -6,6 +6,7 @@ import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import { api } from '../lib/ui.tsx';
 import { SessionHistory } from './session-history.tsx';
 import { SessionAnchors } from './session-anchors.tsx';
+import { SessionExecution } from './session-execution.tsx';
 import { WORKBENCH_POLL_INTERVAL_MS } from '../lib/query.ts';
 
 export function SessionTrace({
@@ -25,12 +26,12 @@ export function SessionTrace({
   const [accessLost, setAccessLost] = useState(false);
   const [route] = useSearchParams();
   const anchorsOnly = route.get('panel') === 'anchors';
-  const alternate = new URLSearchParams({
+  const executionOnly = route.get('panel') === 'execution';
+  const traceScope = {
     project: projectId,
     requirement: requirementId,
     view: 'trace',
-  });
-  if (!anchorsOnly) alternate.set('panel', 'anchors');
+  };
   const loginChanged =
     userId !== observedLogin.userId || sessionId !== observedLogin.sessionId;
   const directory = useQuery({
@@ -66,9 +67,27 @@ export function SessionTrace({
       <div className="page-heading core-page-heading">
         <h1 id="trace-heading">会话轨迹</h1>
         {!loginChanged && (
-          <Link to={`/?${alternate}`}>
-            {anchorsOnly ? '打开逻辑轨迹' : '查看物理锚点'}
-          </Link>
+          <nav className="list-toolbar" aria-label="轨迹模式">
+            {(anchorsOnly || executionOnly) && (
+              <Link to={`/?${new URLSearchParams(traceScope)}`}>
+                打开逻辑轨迹
+              </Link>
+            )}
+            {!executionOnly && (
+              <Link
+                to={`/?${new URLSearchParams({ ...traceScope, panel: 'execution' })}`}
+              >
+                查看执行事件
+              </Link>
+            )}
+            {!anchorsOnly && (
+              <Link
+                to={`/?${new URLSearchParams({ ...traceScope, panel: 'anchors' })}`}
+              >
+                查看物理锚点
+              </Link>
+            )}
+          </nav>
         )}
       </div>
       {loginChanged ? (
@@ -121,6 +140,16 @@ export function SessionTrace({
           {session &&
             (anchorsOnly ? (
               <SessionAnchors
+                key={session.id}
+                projectId={projectId}
+                requirementId={requirementId}
+                sessionId={session.id}
+                userId={userId}
+                loginId={observedLogin.sessionId}
+                onAccessLost={loseAccess}
+              />
+            ) : executionOnly ? (
+              <SessionExecution
                 key={session.id}
                 projectId={projectId}
                 requirementId={requirementId}

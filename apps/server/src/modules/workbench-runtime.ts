@@ -29,6 +29,7 @@ import {
   isTemplateBindingRequest,
   isPassiveRequirementRead,
   sessionAnchorsPath,
+  sessionExecutionPath,
   isProjectAuditRead,
   isCrossProjectAuditRead,
   isProjectAccessAuditRead,
@@ -709,16 +710,18 @@ export function createWorkbenchRuntime(
     if (path !== '/api/projects' && !project && !demand) return;
     const templateBinding = isTemplateBindingRequest(request);
     const passiveRead = isPassiveRequirementRead(request);
-    const anchorRead =
-      passiveRead && request.routeOptions.url === sessionAnchorsPath;
+    const exactSessionRead =
+      passiveRead &&
+      (request.routeOptions.url === sessionAnchorsPath ||
+        request.routeOptions.url === sessionExecutionPath);
     const projectAudit = isProjectAuditRead(request);
     const accessAudit = isProjectAccessAuditRead(request);
     const epoch = authorizationEpoch;
     const who = await actor(request.headers);
     if (templateBinding) verifyEditLogin(request, who.authSessionId);
-    if (projectAudit || accessAudit || anchorRead)
+    if (projectAudit || accessAudit || exactSessionRead)
       verifyEditLogin(request, who.authSessionId, true);
-    if ((passiveRead && !anchorRead) || isSessionWrite(request))
+    if ((passiveRead && !exactSessionRead) || isSessionWrite(request))
       verifyEditLogin(request, who.authSessionId, false);
     if (personnel) verifyEditLogin(request, who.authSessionId, true);
     const requirementId = demand ? decodeURIComponent(demand[1]!) : undefined;
@@ -761,7 +764,7 @@ export function createWorkbenchRuntime(
               projectId,
               requirementId,
               authority: 'reader',
-              ...(anchorRead && {
+              ...(exactSessionRead && {
                 nativeSessionId: (request.params as { sessionId: string })
                   .sessionId,
               }),

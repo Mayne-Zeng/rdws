@@ -5,7 +5,7 @@ import { prepareSession } from '../helpers/auth-session.ts';
 import { readTestAccounts } from '../helpers/test-accounts.ts';
 import { createTestPool } from '../helpers/test-pool.ts';
 
-test('business audit opens recorded anchors without loading the Native trace', async ({
+test('business audit opens execution and anchor summaries without loading the Native trace', async ({
   page,
   baseURL,
 }, testInfo) => {
@@ -27,6 +27,7 @@ test('business audit opens recorded anchors without loading the Native trace', a
   let isolated = false;
   let releaseOld: (() => void) | undefined;
   let releaseAuth: (() => void) | undefined;
+  let releaseExecution: (() => void) | undefined;
   try {
     expect(
       (await db.query('select current_database() db, session_user role'))
@@ -130,13 +131,145 @@ test('business audit opens recorded anchors without loading the Native trace', a
       .getByRole('list', { name: '业务审计事件' })
       .getByText(title, { exact: false })
       .click();
-    await audit.getByRole('link', { name: '查看物理锚点' }).click();
+    let executionState: 'ready' | 'hold' | 'unavailable' = 'ready';
+    let executionHeld = false,
+      executionSent = false;
+    const delayedExecution = new Promise<void>((resolve) => {
+      releaseExecution = resolve;
+    });
+    await page.route(
+      `**/api/requirements/${demand}/sessions/*/execution*`,
+      async (route) => {
+        expect(route.request().headers()['x-rdws-edit-session']).toBe(
+          original.session.id,
+        );
+        const url = new URL(route.request().url());
+        const selected = url.pathname.endsWith(`/${session}/execution`)
+          ? session
+          : empty;
+        const before = url.searchParams.get('beforeSeq');
+        if (before) expect(url.searchParams.get('throughSeq')).toBe('111');
+        const json = {
+          projectId: project,
+          requirementId: demand,
+          sessionId: selected,
+          sessionOwnerId: original.user.id,
+          throughSeq: 111,
+          next:
+            selected === empty || before === '12'
+              ? null
+              : { throughSeq: 111, beforeSeq: before === '62' ? 12 : 62 },
+          events:
+            selected === empty || before === '62'
+              ? []
+              : before === '12'
+                ? [
+                    {
+                      seq: 1,
+                      turn: 1,
+                      step: 1,
+                      status: 'requested',
+                      origin: 'inherited',
+                    },
+                  ]
+                : [
+                    {
+                      seq: 63,
+                      turn: 1,
+                      step: 1,
+                      status: 'blocked',
+                      origin: 'inherited',
+                      sourceSeq: 62,
+                      raw: 'SYNTHETIC_BROWSER_RAW',
+                    },
+                  ],
+        };
+        if (selected === session && executionState === 'unavailable')
+          return route.fulfill({
+            status: 503,
+            json: { error: 'Synthetic unavailable projection' },
+          });
+        if (selected === session && executionState === 'hold') {
+          executionHeld = true;
+          await delayedExecution;
+          await route.fulfill({ json }).catch(() => {});
+          executionSent = true;
+          return;
+        }
+        return route.fulfill({ json });
+      },
+    );
+    await audit.getByRole('link', { name: '查看执行事件' }).click();
     const viaAudit = new URL(page.url()).searchParams;
     expect(viaAudit.get('project')).toBe(project);
     expect(viaAudit.get('requirement')).toBe(demand);
-    expect(viaAudit.get('panel')).toBe('anchors');
+    expect(viaAudit.get('panel')).toBe('execution');
     const trace = page.getByRole('region', { name: '会话轨迹', exact: true });
     const select = trace.getByLabel('选择会话');
+    const execution = trace.getByRole('region', { name: '会话执行事件' });
+    const blocked = execution.getByText('策略已拒绝', { exact: true });
+    const exportExecution = execution.getByRole('button', {
+      name: '导出当前页执行事件 CSV',
+    });
+    const executionEmpty = execution.getByText('此页暂无可展示的执行事件。');
+    await select.selectOption(session);
+    await blocked.click();
+    await expect(execution.getByText('Native 来源 #62')).toBeVisible();
+    const executionDownload = page.waitForEvent('download');
+    await exportExecution.click();
+    const resultCsv = await executionDownload;
+    expect(resultCsv.suggestedFilename()).toBe(`execution-${session}.csv`);
+    const executionData = await readFile(await resultCsv.path(), 'utf8');
+    expect(executionData).toContain(
+      '"111","63","策略已拒绝","1","1","派生继承","62"',
+    );
+    expect(executionData).not.toContain('SYNTHETIC_BROWSER_RAW');
+    await execution.getByRole('button', { name: '下一页执行事件' }).click();
+    await expect(executionEmpty).toBeVisible();
+    await expect(exportExecution).toHaveCount(0);
+    await execution.getByRole('button', { name: '下一页执行事件' }).click();
+    await expect(
+      execution.getByText('调用请求已记录', { exact: true }),
+    ).toBeVisible();
+    await execution.getByRole('button', { name: '返回最新执行事件' }).click();
+    await expect(blocked).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ colorScheme: 'light' });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await execution.screenshot({
+      path: testInfo.outputPath('session-execution-light-390.png'),
+    });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await expect(page.locator('html')).toHaveAttribute('theme-mode', 'dark');
+    await execution.screenshot({
+      path: testInfo.outputPath('session-execution-dark-390.png'),
+    });
+    await page.setViewportSize({ width: 1280, height: 820 });
+    await select.selectOption(empty);
+    await expect(executionEmpty).toBeVisible();
+    executionState = 'hold';
+    await select.selectOption(session);
+    await expect.poll(() => executionHeld).toBe(true);
+    await select.selectOption(empty);
+    await expect(executionEmpty).toBeVisible();
+    releaseExecution?.();
+    await expect.poll(() => executionSent).toBe(true);
+    await expect(blocked).toHaveCount(0);
+    executionState = 'unavailable';
+    await select.selectOption(session);
+    await expect(
+      execution.getByText('读取执行事件失败，请重试。'),
+    ).toBeVisible();
+    await expect(exportExecution).toHaveCount(0);
+    executionState = 'ready';
+    await execution.getByRole('button', { name: '重试读取执行事件' }).click();
+    await expect(blocked).toBeVisible();
+    await trace.getByRole('link', { name: '查看物理锚点' }).click();
+    expect(new URL(page.url()).searchParams.get('panel')).toBe('anchors');
     const panel = trace.getByRole('region', { name: '已记录物理锚点' });
     const download = panel.getByRole('button', { name: '导出当前页锚点 CSV' });
     const digest = panel.getByText(sha, { exact: true });
@@ -244,6 +377,7 @@ test('business audit opens recorded anchors without loading the Native trace', a
   } finally {
     releaseOld?.();
     releaseAuth?.();
+    releaseExecution?.();
     try {
       if (isolated) {
         await db.query(

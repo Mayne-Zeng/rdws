@@ -1488,6 +1488,20 @@
   <p><code>pnpm test:e2e tests/e2e/session-trace.spec.ts tests/e2e/project-audit.spec.ts tests/e2e/requirement-details.spec.ts</code> 通过 5 项。首轮合成资料事件缺少 T11 契约的变更对象，造成档案加载失败，补齐夹具后通过。工作台从跨项目和需求业务审计走真实路由，读取本机隔离测试库里的合成摘要记录，换会话、换需求、旧登录、读取失败及 CSV 均有反例或对照。明暗 390px 截图验证哈希换行。浏览器锚点路线的逻辑历史、Native API 与 Native WebSocket 请求均为零。§11.22.5 保留真实 Native 原件与独立校验证据，正式环境核验另行记录。</p>
   <p>Node 24.20.0 和 Apple Git 2.54.0 下，<code>pnpm test</code> 通过 49 文件、289 项，1 项既有平台条件跳过。<code>pnpm test:e2e --shard=1/2</code> 与 <code>pnpm test:e2e --shard=2/2</code> 各通过 24 项。类型、lint、格式、构建、基线与补丁完整性检查均通过。</p>
 
+  <h4 id="t17-session-execution-audit-plan-20261120">11.22.7 T17 会话执行事件审计</h4>
+  <p>Change / R3，基线 <code>5ca8221</code>。依据 I2-AUTH、D7、T16 和 T17，以已有 Native 可读逻辑历史给出会话内的执行事件摘要。继续以原生日志及独立锚点承担物理证据。沿用 T07 当前禁用工具的准入规则，根拒绝增加稳定错误身份，原理由和拒绝优先级保持。回退本批接线恢复原入口，历史兼容，无迁移。</p>
+  <ol>
+    <li>新增 <code>GET /api/requirements/:id/sessions/:sessionId/execution</code>，与物理锚点共用强制原观察登录、no-store、确切会话读权和关闭自动 HEAD。以实际 Cookie 和进站 epoch 绑定原账号、真实项目、需求及会话。出站一条 PostgreSQL 查询复核这些条件，随后同步检查到期、撤权和请求 epoch。暂不可用与授权失败使用各自错误。</li>
+    <li>使用已有 Native 工作区映射，从对应项目的 Native 查询指定会话 <code>session/events</code>。委托票只列该会话的读 ID，不含本人操作 ID。回读可拉起 Native 宿主，使用被动观察。工作区创建、PG 映射写入、模型轮次和工具执行分别由既有受控入口承担。锁定逻辑切点，保留 Native 返回的最后最多 50 条原始记录供本页投影。续页游标取保留记录中最早的原始序号。Native 续页标记或原始记录超过 50 条时均保留续页，空显示的中间页仍可向前。拒绝越界和不前进页。</li>
+    <li>仅投影 <code>tool/call</code> 和 append 类型的 <code>tool/result</code>。调用只证明出现请求，返回成功仅说明逻辑结果。恢复的 <code>TOOL_NOT_STARTED</code>、<code>TOOL_OUTCOME_UNKNOWN</code>、<code>ABORTED_BEFORE_DISPATCH</code> 按锁定错误名、代码及错误标志分类。当前根拒绝保留无条件拒绝和同一理由，按锁定 SDK 的结构化拒绝接口写入固定错误身份。只用该身份识别策略拒绝，旧文本、其它错误及缺标志仍保守分类。仅输出有界整数序号、轮次和步骤、固定状态、合格的单个 Native 来源序号及当前会话归属。若同页有来源记录，核对它是同一调用；跨页仅保留 Native 给出的引用位置。跳过替换结果及其来源。输出仅呈现逻辑摘要，按持久派生切点标识继承前缀，冻结切点缺失时保留来源不明。工具名、调用字符串、参数、错误正文和返回内容留在原权威记录。会话归属不证明具体执行者。</li>
+    <li>从业务事件详情进入确切项目和需求的 <code>view=trace&amp;panel=execution</code>，由用户选择可访问会话。轨迹页保持逻辑轨迹、执行事件及物理锚点各自选择，侧栏换需求保留当前查看模式。登录、会话、需求或页界变化重挂载，旧请求取消，读取错误隐藏旧记录和当前页 CSV，失权回到现有目录重验。CSV 只导出本页会话关联与脱敏字段。</li>
+    <li>真实锁定 Native 的已有根拒绝夹具验证声明前后守卫、真实调用/结果、固定拒绝身份及执行体零入口。BFF 聚焦覆盖读取动作、错误矩阵、恢复、继承、替换、跨页来源、大于 50 条原始事件仍能从截短位置继续翻页、空显示续页、固定切点、权限原观察及出站重绑/撤权。浏览器覆盖业务审计导航、会话切换、错误与迟到、CSV、明暗窄屏及相邻物理锚点和逻辑轨迹。验证聚焦真实 Native、整仓、浏览器两分片、静态与基线。启用实际执行及交付事件仍按源任务验收。</li>
+  </ol>
+
+  <p id="t17-session-execution-audit-evidence-20261120">R3 双面方案及独立交付复审均 APPROVE。锁定 SDK 核对了恢复补齐和派生前缀、原结果与替换结果，以及根守卫的结构化拒绝接口。分页复审明确续页取截短后最早保留的原始序号。<code>pnpm test tests/integration/session-execution.test.ts</code> 在接线路径前返回 404，接线后通过。真实签名 Native 的两个根拒绝夹具路径均写入相同固定错误身份，原结果文本保留，执行体计数为零。</p>
+  <p><code>pnpm test tests/integration/session-execution.test.ts tests/integration/session-anchors.test.ts tests/integration/native-tool-authority-boundary.test.ts</code> 通过 4 项。BFF 使用隔离 PostgreSQL 与合成 Native 时间线验证原观察登录、出站重绑和撤权、截短与空显示续页、来源追溯和最小字段。<code>pnpm test:e2e tests/e2e/session-trace.spec.ts tests/e2e/project-audit.spec.ts tests/e2e/requirement-details.spec.ts</code> 通过 5 项。浏览器用合成执行状态检验真实审计导航、空页续读、历史切点、换会话迟到结果、错误恢复、导出白名单和明暗 390px 页面。锁定 Native 本机夹具与浏览器交互各自提供对应证据。</p>
+  <p>Node 24.20.0 和 Apple Git 2.54.0 下，<code>pnpm test</code> 通过 50 文件、290 项，1 项既有平台条件跳过。<code>pnpm test:e2e --shard=1/2</code> 与 <code>pnpm test:e2e --shard=2/2</code> 各通过 24 项。类型、lint、格式、构建、基线及补丁完整性检查均通过。</p>
+
   <h2 id="s0"><span class="num">0</span>评审结论</h2>
   <div class="verdict">
     <div class="vtitle">总体判定</div>

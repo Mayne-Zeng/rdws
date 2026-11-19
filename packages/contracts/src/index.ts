@@ -58,6 +58,33 @@ export interface SessionAnchorPage {
   items: (SessionAnchorCursor & { throughByte: number; sha256: string })[];
   next: SessionAnchorCursor | null;
 }
+export const sessionExecutionLabels = {
+  requested: '调用请求已记录',
+  blocked: '策略已拒绝',
+  'result-returned': '工具结果已返回',
+  'result-error': '工具返回错误',
+  'not-started': '未开始执行',
+  'outcome-unknown': '结果未知',
+} as const;
+
+export interface SessionExecutionEvent {
+  seq: number;
+  turn: number;
+  step: number;
+  status: keyof typeof sessionExecutionLabels;
+  origin: 'session' | 'inherited' | 'unknown';
+  sourceSeq?: number;
+}
+
+export interface SessionExecutionPage {
+  projectId: string;
+  requirementId: string;
+  sessionId: string;
+  sessionOwnerId: string;
+  throughSeq: number;
+  next: { throughSeq: number; beforeSeq: number } | null;
+  events: SessionExecutionEvent[];
+}
 export interface RequirementWorktree {
   repositoryId: string;
   baseCommit: string;

@@ -16,8 +16,8 @@ import {
 import { connect, createServer } from 'node:net';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
-import { DemandWorktrees } from '../../apps/orchestrator/src/demand-worktrees.ts';
-import { RepositoryMirrors } from '../../apps/syncer/src/mirror.ts';
+import { DemandWorktrees } from '@rdws/orchestrator';
+import { RepositoryMirrors } from '@rdws/syncer/mirror';
 import {
   runMacosWorktree,
   type ExecutionRequest,

@@ -1,5 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
-import { loadEnvironment } from './scripts/env.mjs';
+import { loadEnvironment } from '@rdws/runtime-config';
 loadEnvironment('test');
 export default defineConfig({
   testDir: './tests/e2e',

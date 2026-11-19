@@ -1,7 +1,7 @@
 import { mkdir, writeFile, access } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import { runtimeHome } from './env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 await mkdir(join(runtimeHome, 'secrets'), { recursive: true, mode: 0o700 });
 for (const dir of [
   'config',

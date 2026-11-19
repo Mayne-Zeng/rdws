@@ -20,7 +20,7 @@ import type {
   RequirementImportRow,
 } from '@rdws/contracts';
 import { capabilityKey, taskAssignmentMaterial } from '@rdws/contracts';
-import type { PublishedBaseline } from '../../../syncer/src/mirror.ts';
+import type { PublishedBaseline } from '@rdws/syncer/mirror';
 import {
   importTargetLogins,
   normalizeImportRows,

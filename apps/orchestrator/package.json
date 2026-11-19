@@ -1,0 +1,12 @@
+{
+  "name": "@rdws/orchestrator",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/demand-worktrees.ts"
+  },
+  "dependencies": {
+    "@rdws/db": "workspace:*",
+    "@rdws/syncer": "workspace:*"
+  }
+}

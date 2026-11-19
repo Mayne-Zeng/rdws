@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { buildApp } from '@rdws/server';
 import { fixtureBinding } from '../helpers/native-browser.ts';
 import { NativeWebHost } from '@rdws/dsh/web';
-import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
+import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
 loadEnvironment('test');
 class FailedAdmissionHost extends NativeWebHost {
   mode: 'sideband' | 'rejected' | 'accepted' = 'sideband';

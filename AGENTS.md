@@ -2,7 +2,7 @@
 
 ## 项目边界与结构
 
-RDWS 正在按已确认规格分阶段实现最小 Web PoC。`apps/console` 是 React 工作台，`apps/server` 是 Fastify API / BFF；`apps/syncer` 由 API 在同步任务内调用，独占 sources 基线写入；编排按后续阶段进入 `apps/orchestrator`。`packages/contracts` 存共享业务契约，`packages/db` 存 Drizzle 模型和迁移。
+RDWS 正在按已确认规格分阶段实现最小 Web PoC。`apps/console` 是 React 工作台，`apps/server` 是 Fastify API / BFF。`apps/syncer` 是同步任务使用的私有工作区包，独占 sources 基线写入。`apps/orchestrator` 是需求工作树编排的私有工作区包。`packages/contracts` 存共享业务契约，`packages/db` 存 Drizzle 模型和迁移，`packages/runtime-config` 提供共享运行根和环境加载。
 
 DSH 接入归 `dsh/`，`dsh/client` 承载原生浏览器运行时适配，业务代码通过公开适配层访问；运行数据归独立 `RDWS_HOME`，不进 Git。`demo/` 是历史假数据原型，单文件约束仅适用于原型，不约束工程代码。
 

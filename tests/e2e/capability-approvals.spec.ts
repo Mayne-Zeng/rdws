@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { Pool } from 'pg';
-import { runtimeHome } from '../../scripts/env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
 
 test('platform approval recovery reads the current retired version without resubmitting changed content', async ({

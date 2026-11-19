@@ -40,15 +40,9 @@ import {
   normalizePersonnel,
   type RequirementAuthority,
 } from './business.ts';
-import {
-  MirrorRequestError,
-  RepositoryMirrors,
-} from '../../../syncer/src/mirror.ts';
-import { MirrorConfigError } from '../../../syncer/src/config.ts';
-import {
-  DemandWorktrees,
-  type DemandRepositories,
-} from '../../../orchestrator/src/demand-worktrees.ts';
+import { MirrorRequestError, RepositoryMirrors } from '@rdws/syncer/mirror';
+import { MirrorConfigError } from '@rdws/syncer/config';
+import { DemandWorktrees, type DemandRepositories } from '@rdws/orchestrator';
 import {
   createProjectRuntimes,
   type ProjectRuntime,
@@ -71,9 +65,10 @@ import {
   authorizeStreamFrame,
   publicNativeSessionResponse,
   publicNativeStreamFrame,
+  withNativeEnvelope,
 } from '@rdws/dsh/wire';
 import { currentAccount, type createAuth } from './auth.ts';
-import { runtimeHome } from '../../../../scripts/env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 type Database = ReturnType<typeof connectDatabase>['db'];
 type Auth = ReturnType<typeof createAuth>;
 const templateBindingPath = '/api/requirements/:id/capability-template';
@@ -110,63 +105,41 @@ function fail(statusCode: number, message: string): never {
     publicMessage: message,
   });
 }
-async function publicModelCatalog(response: Response, rpcId: unknown) {
+function publicModelCatalog(response: Response, rpcId: unknown) {
   const message = '模型目录暂不可用';
-  if (!response.ok || typeof rpcId !== 'string') {
-    await response.body?.cancel().catch(() => {});
-    fail(503, message);
-  }
-  const incoming: unknown = await response.json().catch(() => undefined);
-  if (
-    !isRecord(incoming) ||
-    incoming.type !== 'server-response' ||
-    incoming.rpcId !== rpcId ||
-    !isRecord(incoming.result)
-  )
-    fail(503, message);
-
-  const envelope = { type: 'server-response', rpcId };
-  const options = { headers: { 'cache-control': 'no-store' } };
-  const { result } = incoming;
-  if (result.ok === false) {
-    return Response.json(
-      {
-        ...envelope,
-        result: {
+  return withNativeEnvelope(
+    response,
+    rpcId,
+    (result) => {
+      if (result.ok === false)
+        return {
           ok: false,
           error: { code: 'gateway/internal', message, details: {} },
-        },
-      },
-      options,
-    );
-  }
-  const catalog = result.value;
-  if (
-    result.ok !== true ||
-    !isRecord(catalog) ||
-    !isRecord(catalog.default) ||
-    !Array.isArray(catalog.groups) ||
-    !Array.isArray(catalog.routableProviders) ||
-    !Array.isArray(catalog.failures)
-  )
-    fail(503, message);
-  const failures = catalog.failures.map((failure: unknown) => {
-    if (
-      !isRecord(failure) ||
-      typeof failure.id !== 'string' ||
-      typeof failure.name !== 'string'
-    )
-      fail(503, message);
-    return {
-      id: failure.id,
-      name: failure.name,
-      message: '供应商模型目录暂不可用',
-    };
-  });
-  return Response.json(
-    {
-      ...envelope,
-      result: {
+        };
+      const catalog = result.value;
+      if (
+        result.ok !== true ||
+        !isRecord(catalog) ||
+        !isRecord(catalog.default) ||
+        !Array.isArray(catalog.groups) ||
+        !Array.isArray(catalog.routableProviders) ||
+        !Array.isArray(catalog.failures)
+      )
+        return;
+      const failures = catalog.failures.map((failure: unknown) => {
+        if (
+          !isRecord(failure) ||
+          typeof failure.id !== 'string' ||
+          typeof failure.name !== 'string'
+        )
+          fail(503, message);
+        return {
+          id: failure.id,
+          name: failure.name,
+          message: '供应商模型目录暂不可用',
+        };
+      });
+      return {
         ok: true,
         value: {
           default: catalog.default,
@@ -174,9 +147,9 @@ async function publicModelCatalog(response: Response, rpcId: unknown) {
           routableProviders: catalog.routableProviders,
           failures,
         },
-      },
+      };
     },
-    options,
+    () => fail(503, message),
   );
 }
 class PendingAuthority extends Error {

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { loadEnvironment } from './env.mjs';
+import { loadEnvironment } from '@rdws/runtime-config';
 loadEnvironment();
 const action = process.argv[2];
 const commands = {

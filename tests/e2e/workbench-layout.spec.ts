@@ -3,7 +3,7 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { runtimeHome } from '../../scripts/env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
 
 test('five real workbench entries preserve the Demo geometry and readable themes', async ({

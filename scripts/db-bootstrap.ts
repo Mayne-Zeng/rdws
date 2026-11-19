@@ -1,5 +1,5 @@
 import { Pool } from 'pg';
-import { loadEnvironment } from './env.mjs';
+import { loadEnvironment } from '@rdws/runtime-config';
 loadEnvironment('bootstrap');
 const pool = new Pool({ connectionString: process.env.DATABASE_ADMIN_URL });
 try {

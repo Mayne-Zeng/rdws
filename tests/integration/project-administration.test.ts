@@ -10,7 +10,7 @@ import { Pool } from 'pg';
 import { hashPassword } from 'better-auth/crypto';
 import { buildApp } from '@rdws/server';
 import { fixtureBinding } from '../helpers/native-browser.ts';
-import { runtimeHome, loadEnvironment } from '../../scripts/env.mjs';
+import { runtimeHome, loadEnvironment } from '@rdws/runtime-config';
 import type { ManagementCommand } from '@rdws/contracts';
 loadEnvironment('test');
 let loginClient = 0;

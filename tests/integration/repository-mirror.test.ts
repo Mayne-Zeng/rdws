@@ -13,9 +13,9 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { httpsGitFixture, fixtureGit } from '../helpers/https-git.ts';
 import { expect, test, vi } from 'vitest';
-import { RepositoryMirrors } from '../../apps/syncer/src/mirror.ts';
-import { credential } from '../../apps/syncer/src/config.ts';
-import { mirrorGit, MirrorGitError } from '../../apps/syncer/src/git.ts';
+import { RepositoryMirrors } from '@rdws/syncer/mirror';
+import { credential } from '@rdws/syncer/config';
+import { mirrorGit, MirrorGitError } from '@rdws/syncer/git';
 
 test('an unconfigured project reads as empty without creating runtime state', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rdws-mirror-'));
@@ -433,7 +433,7 @@ test('worker interruption leaves the HTTP Git group identifiable behind the dura
       '--input-type=module',
       '-e',
       `
-    import { RepositoryMirrors } from './apps/syncer/src/mirror.ts';
+    import { RepositoryMirrors } from '@rdws/syncer/mirror';
     const [,root,id] = process.argv;
     const store = new RepositoryMirrors(root);
     await store.sync('poc', 'app', 'fixture-worker', id, () => {

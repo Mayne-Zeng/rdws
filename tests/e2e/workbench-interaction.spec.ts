@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { runtimeHome } from '../../scripts/env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
 
 test.beforeEach(async ({ page, baseURL }) => {

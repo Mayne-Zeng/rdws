@@ -25,7 +25,7 @@ import { expect, test } from 'vitest';
 import { createBusiness } from '../../apps/server/src/modules/business.ts';
 import { createProjectContextReader } from '../../apps/server/src/modules/native-projects.ts';
 import { ContextRuns } from '../../apps/server/src/modules/runtime-context.ts';
-import { loadEnvironment } from '../../scripts/env.mjs';
+import { loadEnvironment } from '@rdws/runtime-config';
 import { modelTlsCertificate } from '../helpers/model-tls.ts';
 
 test.skipIf(process.platform !== 'darwin')(

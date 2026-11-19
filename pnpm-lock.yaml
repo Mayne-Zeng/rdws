@@ -26,9 +26,18 @@ importers:
       '@rdws/dsh':
         specifier: workspace:*
         version: link:dsh
+      '@rdws/orchestrator':
+        specifier: workspace:*
+        version: link:apps/orchestrator
+      '@rdws/runtime-config':
+        specifier: workspace:*
+        version: link:packages/runtime-config
       '@rdws/server':
         specifier: workspace:*
         version: link:apps/server
+      '@rdws/syncer':
+        specifier: workspace:*
+        version: link:apps/syncer
       '@types/node':
         specifier: ^24.0.0
         version: 24.19.2
@@ -112,6 +121,15 @@ importers:
         specifier: 8.3.8
         version: 8.3.8(@types/node@24.19.2)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.0)
 
+  apps/orchestrator:
+    dependencies:
+      '@rdws/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@rdws/syncer':
+        specifier: workspace:*
+        version: link:../syncer
+
   apps/server:
     dependencies:
       '@better-auth/drizzle-adapter':
@@ -132,6 +150,15 @@ importers:
       '@rdws/dsh':
         specifier: workspace:*
         version: link:../../dsh
+      '@rdws/orchestrator':
+        specifier: workspace:*
+        version: link:../orchestrator
+      '@rdws/runtime-config':
+        specifier: workspace:*
+        version: link:../../packages/runtime-config
+      '@rdws/syncer':
+        specifier: workspace:*
+        version: link:../syncer
       ajv-formats:
         specifier: 3.0.1
         version: 3.0.1
@@ -150,6 +177,12 @@ importers:
       ws:
         specifier: 8.23.0
         version: 8.23.0
+
+  apps/syncer:
+    dependencies:
+      '@rdws/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
 
   dsh:
     dependencies:
@@ -231,6 +264,8 @@ importers:
       drizzle-kit:
         specifier: 0.31.11
         version: 0.31.11
+
+  packages/runtime-config: {}
 
 packages:
 

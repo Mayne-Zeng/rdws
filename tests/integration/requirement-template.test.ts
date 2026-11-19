@@ -6,7 +6,7 @@ import { Pool } from 'pg';
 import { buildApp } from '@rdws/server';
 import type { ManagementCommand, TemplateBindingInput } from '@rdws/contracts';
 import { grantApplication } from '../../scripts/db-migrate.ts';
-import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
+import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
 
 loadEnvironment('test');
 const origin = process.env.RDWS_ORIGIN!;

@@ -13,9 +13,9 @@ import { buildApp } from '@rdws/server';
 import { importLimits, type RequirementImportRow } from '@rdws/contracts';
 import { Pool, type PoolClient } from 'pg';
 import { afterAll, beforeAll, expect, test, vi } from 'vitest';
-import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
+import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
 import { httpsGitFixture } from '../helpers/https-git.ts';
-import { RepositoryMirrors } from '../../apps/syncer/src/mirror.ts';
+import { RepositoryMirrors } from '@rdws/syncer/mirror';
 
 loadEnvironment('test');
 const config = {

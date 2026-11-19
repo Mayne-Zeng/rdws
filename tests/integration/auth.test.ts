@@ -4,7 +4,7 @@ import { afterAll, beforeAll, expect, test, vi } from 'vitest';
 import { Pool } from 'pg';
 import { buildApp } from '@rdws/server';
 import { NativeWebHost } from '@rdws/dsh/web';
-import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
+import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
 
 const lookupFault = vi.hoisted(() => ({
   column: undefined as 'token' | 'id' | undefined,

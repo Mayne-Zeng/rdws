@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { runtimeHome } from '../../scripts/env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
 
 test('repository navigation displays the empty state for a real unconfigured project', async ({

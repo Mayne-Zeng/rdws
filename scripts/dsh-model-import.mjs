@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir, access } from 'node:fs/promises';
 import { parseEnv } from 'node:util';
 import { join } from 'node:path';
-import { runtimeHome } from './env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 const home = join(runtimeHome, 'runtime', 'dsh', 'project-poc');
 const profile = join(home, 'profiles', 'rdws');
 const credentialsPath = join(home, '.credentials.yaml');

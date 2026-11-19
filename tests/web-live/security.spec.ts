@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import WebSocket from 'ws';
 import { signGrant } from '@rdws/dsh/access';
-import { runtimeHome } from '../../scripts/env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 let base: string;
 let cookie: string;
 let leadCookie: string;

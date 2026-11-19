@@ -11,7 +11,7 @@ import { NativeWebHost } from '@rdws/dsh/web';
 import { actionAllowed, type Grant } from '@rdws/dsh/access';
 import { forkBoundary } from '@rdws/dsh/sessions';
 import { parseRemoteStreamServerMessage } from '@rdws/dsh/wire';
-import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
+import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
 loadEnvironment('test');
 const pool = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
 let account: { username: string; password: string };

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { buildApp } from '@rdws/server';
 import { bodyHash, signGrant } from '@rdws/dsh/access';
 import { Pool } from 'pg';
-import { runtimeHome } from '../../scripts/env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
 import { nativeReady } from '../helpers/native-ready.ts';
 

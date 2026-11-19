@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { loadEnvironment } from './env.mjs';
+import { loadEnvironment } from '@rdws/runtime-config';
 loadEnvironment(process.env.RDWS_MODE || 'development');
 const children = [
   spawn('pnpm', ['--filter', '@rdws/server', 'dev'], {

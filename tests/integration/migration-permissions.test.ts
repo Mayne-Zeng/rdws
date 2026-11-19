@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import { Pool } from 'pg';
 import { grantApplication } from '../../scripts/db-migrate.ts';
-import { loadEnvironment } from '../../scripts/env.mjs';
+import { loadEnvironment } from '@rdws/runtime-config';
 loadEnvironment('test');
 test('failed privilege setup cannot leave audit update and delete rights committed', async () => {
   const pool = new Pool({

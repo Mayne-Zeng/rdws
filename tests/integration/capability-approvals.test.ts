@@ -6,7 +6,7 @@ import { Pool } from 'pg';
 import { afterAll, beforeAll, expect, test, vi } from 'vitest';
 import { buildApp } from '@rdws/server';
 import { currentAccount } from '../../apps/server/src/modules/auth.ts';
-import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
+import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
 
 loadEnvironment('test');
 const origin = process.env.RDWS_ORIGIN!;

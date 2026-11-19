@@ -3,7 +3,7 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { Pool } from 'pg';
-import { runtimeHome } from '../../scripts/env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 function assistantTexts(value: unknown): string[] {
   const result: string[] = [];
   const visit = (v: unknown) => {

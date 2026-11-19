@@ -1,7 +1,7 @@
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Client, type PoolClient } from 'pg';
-import { loadEnvironment } from './env.mjs';
+import { loadEnvironment } from '@rdws/runtime-config';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import {

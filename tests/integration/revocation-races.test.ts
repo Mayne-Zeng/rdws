@@ -13,7 +13,7 @@ import {
 } from '../helpers/native-browser.ts';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { LEASE_MS } from '@rdws/dsh/access';
-import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
+import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
 loadEnvironment('test');
 const pool = new Pool({ connectionString: process.env.DATABASE_MIGRATION_URL });
 let manager: string;

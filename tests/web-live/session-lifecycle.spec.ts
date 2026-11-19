@@ -5,7 +5,7 @@ import { readFile, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { Pool } from 'pg';
-import { runtimeHome } from '../../scripts/env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 import { signGrant } from '@rdws/dsh/access';
 import { zstdDecompressSync, zstdCompressSync } from 'node:zlib';
 import { NativeWebHost } from '@rdws/dsh/web';

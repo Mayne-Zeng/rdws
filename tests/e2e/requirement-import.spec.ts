@@ -9,7 +9,7 @@ import type {
   RequirementImportRow,
 } from '@rdws/contracts';
 import { prepareSession } from '../helpers/auth-session.ts';
-import { runtimeHome } from '../../scripts/env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 
 test('CSV and XLSX can be corrected, validated and committed with recoverable per-row results', async ({
   page,

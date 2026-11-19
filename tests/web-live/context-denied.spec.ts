@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { buildApp } from '@rdws/server';
-import { runtimeHome } from '../../scripts/env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 for (const failure of ['denied', 'timeout'] as const)
   test(
     'native context ' + failure + ' stops model and preserves retry text',

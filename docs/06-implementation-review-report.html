@@ -6,7 +6,7 @@
 <title>RDWS · 实现评审报告（Codex 持续研发批次 2026-11-18/19）</title>
 <style>
   :root{--brand:#0E7490;--brand-dark:#0B596E;--brand-soft:#E6F3F6;--brand-line:#B9DEE6;
-    --ink:#1C2530;--ink-2:#43505E;--ink-3:#6B7885;--line:#E2E7EB;--bg:#F5F7F8;--paper:#FFF;
+    --ink:#1C2530;--ink-2:#43505E;--ink-3:#5F6D7B;--line:#E2E7EB;--bg:#F5F7F8;--paper:#FFF;
     --red:#B3373A;--red-bg:#FCEDEC;--amber:#9A6410;--amber-bg:#FDF4E3;--green:#24735A;--green-bg:#EAF5F0;--gray-bg:#F0F3F5}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}
@@ -33,7 +33,7 @@
   th,td{border-bottom:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
   th{background:#F0F6F7;color:var(--brand-dark);font-weight:700;font-size:12px}
   tr:last-child td{border-bottom:none}
-  td code{font-size:11.5px}
+  td code{font-size:12.5px}
   .pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:3px;white-space:nowrap}
   .p-red{background:var(--red-bg);color:var(--red)}.p-amber{background:var(--amber-bg);color:var(--amber)}
   .p-green{background:var(--green-bg);color:var(--green)}.p-blue{background:var(--brand-soft);color:var(--brand-dark)}
@@ -43,7 +43,7 @@
   .kpi{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin:18px 0}
   .kpi div{background:var(--paper);border:1px solid var(--line);border-radius:4px;padding:14px 16px}
   .kpi b{display:block;font-size:22px;color:var(--brand);line-height:1.3;font-variant-numeric:tabular-nums}
-  .kpi span{font-size:11.5px;color:var(--ink-3)}
+  .kpi span{font-size:12.5px;color:var(--ink-3)}
   .finding{background:var(--paper);border:1px solid var(--line);border-left:4px solid var(--amber);padding:14px 18px;margin:14px 0;border-radius:0 4px 4px 0}
   .finding.p3{border-left-color:var(--line)}
   .finding h4{margin:0 0 6px;font-size:14.5px}
@@ -171,7 +171,7 @@
   <div class="finding p3"><h4><span class="pill p-gray">P3</span> <span class="pill p-amber">缓办 · 随 §11.16.17</span> R-08 · 冷恢复 reconcile 静默丢弃绑定，无 cancel 兜底</h4>
   <div class="ev"><code>workbench.ts:2524-2529</code> 对不在 <code>runs.active</code> 名单的已提交绑定直接删除（runtime-context.ts reconcile），仅 retireRun 产生的 abandonedRuns 补发 <code>run.cancel</code>（:2531-2534）；极端时序下旧队列项可能失去「退役即取消」。建议 reconcile 删除时将 runId 一并进入 abandonedRuns。</div></div>
 
-  <div class="finding p3"><h4><span class="pill p-gray">P3</span> <span class="pill p-green">已修复 64ac3e8</span> R-09 · BFF 租约表只增不清，长时运行内存单调增长</h4>
+  <div class="finding p3"><h4><span class="pill p-gray">P3</span> <span class="pill p-amber">待有界回收方案</span> R-09 · BFF 租约表只增不清，长时运行内存单调增长</h4>
   <div class="ev"><code>workbench.ts:628-646</code> <code>lease()</code> 以含客户端可控 generation 的键写入，过期/撤销命中仅 fail 409 从不删除；全仓 <code>leases.delete/clear</code> 零命中（对照 acceptedPrompts :2518 有清理）。仅已认证用户可触发、单条目小，属慢性泄漏而非可利用 DoS。建议命中过期条目时删除或定时清扫。</div></div>
 
   <div class="finding p3"><h4><span class="pill p-gray">P3</span> <span class="pill p-green">已修复 afdccda</span> R-10 · repositories GET 鉴权「读后复核」块未复用既有 stale 模式</h4>
@@ -256,14 +256,14 @@
   </ol>
 
   <h2 id="s10"><span class="num">10</span>修复处置与合并指引（2026-11-19 修复批次）</h2>
-  <p>本报告发布当日，主评审在<b>独立 worktree 分支</b>完成一轮修复。分支不改动 main、未合并；由 Codex 在协调窗口按本节指引合并与续办。以下内容即合并与后续修复的交接指引。</p>
+  <p>主评审在独立 worktree 分支完成首轮修复，原始提交及合并指引保留在下表。协调检出已合入该分支，本地验收与剩余发现的当前状态见 <a href="#s10-delivery">§10.5</a>。</p>
   <table>
     <tr><th>分支项</th><th>值</th></tr>
     <tr><td>分支 / worktree</td><td><code>review-fixes-20261119</code> · <code>.agents/worktrees/review-fixes-20261119</code>（本地分支，未推送）</td></tr>
     <tr><td>基点</td><td><code>46633f9</code>（feat: enforce durable runtime authorization ownership）</td></tr>
     <tr><td>提交</td><td>8 个（见下表）；11 文件，+146/-105；<b>无新增迁移、无接口契约变更</b>（错误文案除外，见行为变化清单）</td></tr>
     <tr><td>验证</td><td>tsc / eslint / prettier --check / pnpm build 全过；vitest 全量 <b>40 文件 246 通过 / 1 跳过</b>（原有 skip）</td></tr>
-    <tr><td>未运行</td><td>pnpm test:e2e、pnpm test:web-live（共享端口 5173/5317/3303 与真实环境约束）——合并后必补</td></tr>
+    <tr><td>原分支未运行</td><td>pnpm test:e2e、pnpm test:web-live（共享端口 5173/5317/3303 与真实环境约束）。后续实跑范围见 §10.5。</td></tr>
   </table>
   <h3>10.1 已合入分支的修复（8 提交）</h3>
   <table>
@@ -271,7 +271,7 @@
     <tr><td><code>3071c68</code></td><td>能力标签 map 收敛到 contracts 单源（capabilityKindLabels）</td><td>R-16</td></tr>
     <tr><td><code>7cee43d</code></td><td>SessionBinding 类型经 @rdws/dsh-client 适配层路由；console 移除 @deepseek-ai/dsh-api-session-controller 直接依赖</td><td>R-13</td></tr>
     <tr><td><code>bdcbd4b</code></td><td>fail() 附加 publicMessage——43 条用户文案实际到达前端（此前 4xx 一律「请求参数不正确」）</td><td>R-03</td></tr>
-    <tr><td><code>64ac3e8</code></td><td>租约过期/撤销命中时删除条目，消除 BFF 慢性内存泄漏</td><td>R-09</td></tr>
+    <tr><td><code>64ac3e8</code></td><td>尝试在命中过期或撤销租约时回收条目。集成时撤回该行为，见 §10.5。</td><td>R-09</td></tr>
     <tr><td><code>afdccda</code></td><td>repositories 路由「读前快检+读后复核」收敛为具名辅助函数（TOCTOU 防护语义不变）</td><td>R-10</td></tr>
     <tr><td><code>a54088d</code></td><td>事务超时参数统一进带重试的 wrapper（支持 transactionTimeout/isolationLevel 透传）；导入提交、人员编辑、recoverPersonnelCommit 检查接入 40001/40P01 自动重试</td><td>R-02</td></tr>
     <tr><td><code>bb479c4</code></td><td>approvals 能力类型恢复 + 锁文件同步（R-13/R-16 收尾）</td><td>—</td></tr>
@@ -282,7 +282,7 @@
   <ol>
     <li><b>合并窗口</b>：按清单「协调与资源登记」排队，选共享测试资源空闲时。</li>
     <li><b>合并前</b>：核对 main 是否已前进（分支基点 <code>46633f9</code>）。若 main 新增提交，先在分支 merge/rebase main 并重跑 <code>pnpm test</code>。重点冲突面：workbench.ts 的 fail 定义（:107）、lease（:629）、repositories 路由（:1449）——均<b>不在</b> T13 出口定序热区；business.ts 事务区；contracts 标签区；dsh/client/runtime.ts；console 的 conversation / session-model / capability-approvals / capability-templates。</li>
-    <li><b>行为变化清单</b>（合并评审对照用）：① 4xx/503 错误响应 message 变为具体中文文案（R-03）；② 导入提交/人员编辑/恢复检查在 40001/40P01 下自动重试 ≤3 次，manage 与 publishRepository 保持单次（R-02）；③ 过期租约即时删除（R-09）；④ console 不再直接依赖 @deepseek-ai/dsh-api-session-controller（R-13，锁文件已同步）。无新增迁移、无接口形状变更。</li>
+    <li><b>行为变化清单</b>（合并评审对照用）。工作台 4xx/503 返回具体中文文案（R-03）。导入提交、人员编辑及恢复检查遇到 40001/40P01 时最多尝试三次，manage 与 publishRepository 保持单次事务（R-02）。console 通过适配包引用 SessionBinding（R-13，已同步锁文件）。合并范围保持现有迁移和接口形状。R-09 的回收尝试在复审后撤回。</li>
     <li><b>合并后必跑</b>：<code>pnpm check</code> 全量 + <code>pnpm test:e2e</code>。特别核对 E2E 是否有断言旧的通用错误文案（「请求参数不正确」）的用例——R-03 之后这些路径返回具体文案，如有需同步更新断言（集成测试已确认无此类断言）。</li>
     <li><b>合并方式</b>：merge --no-ff 或 rebase 由协调者定；合并后可删除分支与 worktree。</li>
   </ol>
@@ -290,18 +290,34 @@
   <table>
     <tr><th>发现</th><th>处置</th><th>建议时机与验收要点</th></tr>
     <tr><td>R-01 workbench 巨石</td><td><span class="pill p-amber">随任务线</span></td><td>下一个整文件改写 workbench.ts 的任务（T07 接线 / T13 统一出口）先拆分路由模块再实施；验收=会话/传输/导入/仓库/管理各归域文件，内存状态收敛为显式 runtime 对象</td></tr>
-    <tr><td>R-04 包化</td><td><span class="pill p-amber">待同步窗口</span></td><td>与 Codex 同步后补 apps/syncer、apps/orchestrator 最小 package.json + imports 改 workspace 引用，env.mjs 下沉；<b>T19 可运行交付包验收前必须完成</b></td></tr>
-    <tr><td>R-05 脱敏旁路</td><td><span class="pill p-amber">随 §11.16.17</span></td><td>先闭环疑点 Q1（合成供应商实测 session/state、session/summary 是否携带诊断串）再定方案；验收=全部 reads 路径与 emit 事件有「不含诊断串」断言</td></tr>
-    <tr><td>R-06 可选头过渡</td><td><span class="pill p-gray">文档项</span></td><td>部署/回退 Runbook 固化「先 BFF 后浏览器制品并重载」顺序</td></tr>
-    <tr><td>R-07 目录透传偏薄</td><td><span class="pill p-gray">待 DSH 勘察</span></td><td>DSH 升级检查单加入目录 DTO 字段核对项，或按已知字段集 allowlist 收敛</td></tr>
+    <tr><td>R-04 包化</td><td><span class="pill p-green">包化完成</span></td><td>同步器、编排和运行配置使用私有 workspace 包。T19 继续验收可运行交付包及干净环境安装。</td></tr>
+    <tr><td>R-05 脱敏旁路</td><td><span class="pill p-amber">Q1 已实测</span></td><td>锁定版的 <code>session/state</code> 与 <code>session/summary</code> 结果见 §10.5。随 §11.16.17 继续核对全部 reads 与 emit 事件。</td></tr>
+    <tr><td>R-06 可选头过渡</td><td><span class="pill p-green">文档完成</span></td><td>README 固化更新和回退的「先 BFF 后浏览器制品并重载」顺序。</td></tr>
+    <tr><td>R-07 目录透传偏薄</td><td><span class="pill p-green">检查项已补</span></td><td>README 的 DSH 升级核对包含候选版目录 DTO 与 BFF 失败投影。</td></tr>
     <tr><td>R-08 reconcile 兜底</td><td><span class="pill p-amber">随 §11.16.17</span></td><td>reconcile 删除的绑定进入 abandonedRuns 或删除前复核 run.status；随出口定序重写一并实施（疑点 Q2 附受控载体验证法）</td></tr>
-    <tr><td>R-11 信封重复</td><td><span class="pill p-amber">原生转发热区</span></td><td>抽取 withNativeEnvelope 到 wire.ts；避开原生转发改动期</td></tr>
-    <tr><td>R-12 契约锚定</td><td><span class="pill p-gray">低优先</span></td><td>console 侧以 satisfies/类型测试锚定 SessionHistoryPage 等价</td></tr>
-    <tr><td>R-14 poc 魔法 ID</td><td><span class="pill p-amber">web.ts 热区</span></td><td>收敛为单一常量并注明 README 兼容依据与移除条件；待 web.ts 稳定后</td></tr>
+    <tr><td>R-09 租约回收</td><td><span class="pill p-amber">待方案</span></td><td>保留已退役代次不能再签票的行为，设计有界回收并验证同代次重复请求、新代次重连和撤权。</td></tr>
+    <tr><td>R-11 信封重复</td><td><span class="pill p-green">已收敛</span></td><td>目录与会话 RPC 共用 <code>withNativeEnvelope</code>，各自投影数据与错误。</td></tr>
+    <tr><td>R-12 契约锚定</td><td><span class="pill p-green">已锚定</span></td><td>console 类型测试要求实际历史读取返回值与 <code>SessionHistoryPage</code> 等价。</td></tr>
+    <tr><td>R-14 poc 魔法 ID</td><td><span class="pill p-green">已收敛</span></td><td>原生默认项目常量供 Host 与选路共用，README 记录兼容来源和移除条件。</td></tr>
     <tr><td>R-15 魔法值散布</td><td><span class="pill p-gray">低优先</span></td><td>头名集中 contracts、轮询间隔/池参数具名常量</td></tr>
     <tr><td>R-17 测试样板</td><td><span class="pill p-gray">单独批次</span></td><td>补 tests/helpers/test-accounts 与共享 pool 构造，41 处逐文件迁移</td></tr>
   </table>
-  <p class="src">修复分支未包含上表各项；Codex 续办时以本表 + 对应发现项正文为验收依据。</p>
+  <p class="src">各项沿用本表与对应发现正文的验收判据。协调窗口的实际处置记录在 §10.5。</p>
+
+  <h3 id="s10-delivery">10.5 协调窗口合并与后续维护（2026-11-19）</h3>
+  <p>评审分支先合入 <code>dc03a01</code>，修订 <code>6595857</code> 通过独立复审后以 <code>1760bb5</code> 合入本地 <code>main</code>。合并树与已验证分支文件树完全一致，原八项提交及已有 TLS 1.3 转发均可沿合并历史追溯。</p>
+  <ul>
+    <li>R-02 在真实回滚后注入 <code>40001</code> 或 <code>40P01</code>，修订前两项均返回 503。修订同步清理将要重试的本次栅栏，两项均保存成功、仅写一条回执并完成撤权。未知提交继续由原回执恢复路径核对。</li>
+    <li>R-09 首次请求过期代次返回 409，原修订会让同代次第二次请求得到新票。恢复拒绝后，对同代次连续返回 409，新代次仍正常签票。租约回收继续待有界设计及独立审阅，需同时核对退役代次和正常重连。</li>
+    <li>合入前定点回归 26 项通过，全量 <code>pnpm test</code> 通过 41 文件、262 项，1 项既有跳过。首轮失败来自独立工作树选中 macOS 的 Git 转发器，调整本轮 PATH 以使用工程 Node 24 与已验证的 Git 后，本机隔离执行的 7 项全部通过。配置和沙箱策略沿用仓库版本。</li>
+    <li>合并后在同一文件树运行 <code>pnpm check</code>，类型、lint、格式、41 文件 262 项及构建通过，1 项既有跳过。<code>pnpm test:e2e</code> 的两个分片分别通过 22 项。工作台错误文案没有过期 E2E 断言，认证接口的坏 JSON 仍由通用文案用例覆盖。<code>pnpm validate:baseline</code> 通过 29 项任务、62 个追溯点、16 个视图。</li>
+  </ul>
+
+  <p>R-04 方案与交付独立复审均 APPROVE。<code>env.mjs</code> 原样迁至 <code>@rdws/runtime-config</code>，69 处导入改用工作区入口，锁文件新增 9 条内部链接。离线冻结安装通过。Node 直调验证默认及显式 <code>RDWS_HOME</code>，根包和 server 的包解析命中同一入口。更新/回退顺序、目录升级检查与旧项目兼容条件见 <a href="../README.md">README</a>。</p>
+  <p>R-05 的 Q1 通过真实 Native、测试库、普通项目成员和本机回环合成供应商验证。原生会话日志确有诊断标记，BFF <code>session/state</code> 返回 200，<code>session/events</code> 保留通用失败语义，均未包含标记。锁定版 DSH 的 RPC 注册表中没有 <code>session/summary</code>，该路径返回通用 503。其他 read 和 emit 的覆盖按 §11.16.17 继续办理。该夹具无需调用真实供应商。</p>
+  <p>R-11、R-12、R-14 和 Q1 取证经独立交付复审通过。R-01 随下一次工作台路由整体改动，R-08 随 T13 出口定序实施。R-09 的有界回收仍待设计。</p>
+  <p>续办批次的 <code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check '!**/.agents/worktrees/**'</code>、<code>pnpm build</code> 及基线校验通过。格式检查从主工作树排除其内嵌的独立评审工作树。<code>pnpm test</code> 通过 42 文件、263 项，另有 1 项既有跳过。E2E 两个分片各通过 22 项。<code>pnpm test:web-live tests/web-live/model-egress-pause.spec.ts</code> 初次在既有恢复按钮步骤超时，原命令复跑通过 1 项，覆盖 Q1，使用真实供应商的其余 live 用例本轮未执行。</p>
+  <p>报告可读性修订后，Chromium 无页面错误，两组文字对比度为 4.76:1 和 4.93:1，触发字号提示的正文为 12.5px。报告保留原章节布局。</p>
 
   <h2 id="sA"><span class="num">A</span>附录 · 评审面原始终论</h2>
   <table>
@@ -314,7 +330,7 @@
   </table>
   <p class="src">原始发现 19 条，去重合并 2 组（workbench 巨石、包化问题）后为 17 条；全部 19 条均由主评审逐行复核证据后才收录。评审全程只读；未提交 WIP 未引用为任何证据。</p>
 
-  <div class="foot">RDWS 实现评审报告 · 生成于 2026-11-19 · 五面独立评审 + 主评审逐行复核 · 判据：AGENTS.md / SECURITY.md / docs 00·02·04·05 · 评审区间 bf0570a..ccad89d · 修复批次 review-fixes-20261119（§10，待 Codex 按指引合并）</div>
+  <div class="foot">RDWS 实现评审报告 · 生成于 2026-11-19 · 五面独立评审 + 主评审逐行复核 · 判据：AGENTS.md / SECURITY.md / docs 00·02·04·05 · 评审区间 bf0570a..ccad89d · 本地合并 1760bb5（§10.5）</div>
 </div>
 </body>
 </html>

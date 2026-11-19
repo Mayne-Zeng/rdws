@@ -1,4 +1,5 @@
 import {
+  LEGACY_POC_PROJECT_ID,
   NativeWebHost,
   projectNativeConfiguration,
   validProjectId,
@@ -88,12 +89,12 @@ export function createProjectRuntimes(
     const registration = (async () => {
       const configuration =
         nativeProfiles?.get(project) ??
-        (project === 'poc'
+        (project === LEGACY_POC_PROJECT_ID
           ? testConfiguration
           : await projectNativeConfiguration(root, project).catch(
               () => undefined,
             ));
-      if (project !== 'poc' && !configuration)
+      if (project !== LEGACY_POC_PROJECT_ID && !configuration)
         businessError(503, '项目运行时尚未配置');
       if (closing) businessError(503, '项目运行时暂不可用');
       return register(
@@ -126,7 +127,7 @@ export function createProjectRuntimes(
     },
     async configured(project: string) {
       if (live.has(project)) return true;
-      if (project === 'poc') return true;
+      if (project === LEGACY_POC_PROJECT_ID) return true;
       return projectNativeConfiguration(root, project).then(
         () => true,
         () => false,

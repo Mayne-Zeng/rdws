@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { hashPassword } from 'better-auth/crypto';
 import { eq } from 'drizzle-orm';
 import { connectDatabase, schema } from '@rdws/db';
-import { loadEnvironment, runtimeHome } from './env.mjs';
+import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
 const mode = process.env.RDWS_MODE || 'development';
 loadEnvironment(mode);
 const { pool, db } = connectDatabase(process.env.DATABASE_MIGRATION_URL!);

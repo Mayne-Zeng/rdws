@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { signGrant } from '@rdws/dsh/access';
-import { runtimeHome } from '../../scripts/env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 test('real native Web session and streaming', async ({ page }) => {
   const accounts: { username: string; password: string }[] = JSON.parse(
     await readFile(join(runtimeHome, 'secrets', 'test-accounts.json'), 'utf8'),

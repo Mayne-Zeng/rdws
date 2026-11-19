@@ -16,7 +16,7 @@ import { bootstrapNative } from '../helpers/native-browser.ts';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, expect, test, vi } from 'vitest';
-import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
+import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
 
 loadEnvironment('test');
 const options = {

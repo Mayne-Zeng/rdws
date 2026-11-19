@@ -43,6 +43,7 @@ export {
   type ModelWireOutcome,
 } from './model-https.ts';
 const req = createRequire(import.meta.url);
+export const LEGACY_POC_PROJECT_ID = 'poc';
 export async function writeOwner(
   handle: Awaited<ReturnType<typeof open>>,
   value: unknown,
@@ -195,7 +196,7 @@ export class NativeWebHost {
   constructor(
     readonly runtimeHome: string,
     readonly configurationHome?: string,
-    readonly projectId = 'poc',
+    readonly projectId: string = LEGACY_POC_PROJECT_ID,
     release: readonly ReleasedCapability[] = capabilityRelease,
     readonly modelEgress: NativeModelEgress | 'mediated' = 'direct',
     modelTransport?: NativeModelTransport,
@@ -275,7 +276,7 @@ export class NativeWebHost {
       await writeOwner(this.lock, { pid: process.pid, mode: 'web' });
       const keyFile = join(
         secrets,
-        this.projectId === 'poc'
+        this.projectId === LEGACY_POC_PROJECT_ID
           ? 'dsh-bff-key'
           : 'dsh-bff-key-' + this.projectId,
       );
@@ -363,7 +364,9 @@ export class NativeWebHost {
       }
       const overlay = join(
         controls,
-        this.projectId === 'poc' ? 'web.cordis.yml' : instance + '.cordis.yml',
+        this.projectId === LEGACY_POC_PROJECT_ID
+          ? 'web.cordis.yml'
+          : instance + '.cordis.yml',
       );
       if (
         await lstat(overlay).then(
@@ -437,7 +440,7 @@ export class NativeWebHost {
                   contextEvidenceFile: join(
                     this.runtimeHome,
                     'runtime',
-                    this.projectId === 'poc'
+                    this.projectId === LEGACY_POC_PROJECT_ID
                       ? 'context-evidence.jsonl'
                       : 'context-evidence-' + this.projectId + '.jsonl',
                   ),

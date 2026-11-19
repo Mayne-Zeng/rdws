@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { parse } from 'yaml';
 import { createProjectRuntime, prepareNativeProfile } from '@rdws/dsh/host';
 import { summarizeFrames, type ProbeFrame } from '@rdws/dsh/events';
-import { runtimeHome } from './env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 const home = join(runtimeHome, 'runtime', 'dsh', 'project-poc');
 const runId = randomUUID();
 const workspace = join(

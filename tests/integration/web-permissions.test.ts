@@ -11,7 +11,7 @@ import {
   resourceRoles,
   type Grant,
 } from '@rdws/dsh/access';
-import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
+import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
 loadEnvironment('test');
 const app = buildApp({
   databaseUrl: process.env.DATABASE_URL!,

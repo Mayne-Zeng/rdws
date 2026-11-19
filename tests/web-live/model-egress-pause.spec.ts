@@ -20,7 +20,7 @@ import { zstdDecompressSync } from 'node:zlib';
 import { Pool } from 'pg';
 import WebSocket from 'ws';
 import { buildApp } from '@rdws/server';
-import { runtimeHome } from '../../scripts/env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 import { bootstrapNative, observedLogin } from '../helpers/native-browser.ts';
 
 async function freePort() {
@@ -31,6 +31,19 @@ async function freePort() {
     reserved.close((error) => (error ? reject(error) : resolve())),
   );
   return port;
+}
+
+function journalText(bytes: Buffer) {
+  const events: string[] = [];
+  for (let consumed = 0; consumed < bytes.length;) {
+    const chunk = zstdDecompressSync(bytes.subarray(consumed), {
+      info: true,
+    }) as unknown as { buffer: Buffer; engine: { bytesWritten: number } };
+    expect(chunk.engine.bytesWritten).toBeGreaterThan(0);
+    consumed += chunk.engine.bytesWritten;
+    events.push(chunk.buffer.toString());
+  }
+  return events.join('');
 }
 
 test('macOS pause confines the real Native Host and the same browser can resume', async ({
@@ -56,6 +69,8 @@ test('macOS pause confines the real Native Host and the same browser can resume'
     connectionString: process.env.DATABASE_MIGRATION_URL,
   });
   const supplierCalls: string[] = [];
+  const supplierDiagnostic = 'synthetic-model-response-diagnostic';
+  let supplierFailure = false;
   const supplier = createServer(async (request, response) => {
     if (request.url !== '/v1/chat/completions') {
       response.writeHead(404).end();
@@ -64,6 +79,11 @@ test('macOS pause confines the real Native Host and the same browser can resume'
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     supplierCalls.push(Buffer.concat(chunks).toString());
+    if (supplierFailure) {
+      response.writeHead(500, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: { message: supplierDiagnostic } }));
+      return;
+    }
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     for (const choice of [
       {
@@ -535,16 +555,7 @@ test('macOS pause confines the real Native Host and the same browser can resume'
     expect(afterPause.subarray(0, beforePause.length).equals(beforePause)).toBe(
       true,
     );
-    const events: string[] = [];
-    for (let consumed = 0; consumed < afterPause.length;) {
-      const chunk = zstdDecompressSync(afterPause.subarray(consumed), {
-        info: true,
-      }) as unknown as { buffer: Buffer; engine: { bytesWritten: number } };
-      expect(chunk.engine.bytesWritten).toBeGreaterThan(0);
-      consumed += chunk.engine.bytesWritten;
-      events.push(chunk.buffer.toString());
-    }
-    const pausedJournal = events.join('');
+    const pausedJournal = journalText(afterPause);
     expect(pausedJournal).not.toContain(newKey.requestId);
     expect(pausedJournal).not.toContain(submissions[1]!.requestId);
     expect(supplierCalls).toHaveLength(2);
@@ -572,6 +583,48 @@ test('macOS pause confines the real Native Host and the same browser can resume'
     );
     expect(submissions).toHaveLength(3);
     expect(submissions[2]?.content).toEqual(submissions[1]?.content);
+
+    await test.step('Native state and summary responses omit a supplier diagnostic', async () => {
+      const binding = await bootstrapNative(resumed, reader.cookie, id);
+      const sessionId = first.sessionId;
+      const read = (action: string, request: object = { sessionId }) =>
+        call(resumed, binding, request, { action, cookie: reader.cookie });
+      const address = { kind: 'session', sessionId };
+      supplierFailure = true;
+      const failed = await call(resumed, resumedBinding, {
+        sessionId,
+        requestId: randomUUID(),
+        mode: 'queue',
+        content: [{ type: 'text', text: 'Synthetic supplier failure' }],
+      });
+      expect(failed.json().result).toMatchObject({
+        ok: true,
+        value: { accepted: true },
+      });
+      await expect
+        .poll(async () => (await read('events', { address })).body)
+        .toContain('本轮模型请求失败，请稍后重试。');
+      const state = await read('state');
+      expect(state.statusCode).toBe(200);
+      expect(state.json().result).toMatchObject({
+        ok: true,
+        value: { running: false },
+      });
+      expect(state.body).not.toContain(supplierDiagnostic);
+      const summary = await read('summary');
+      expect(summary.statusCode).toBe(503);
+      expect(summary.json()).toEqual({
+        error: '会话请求暂不可用，请稍后重试。',
+      });
+      expect(summary.body).not.toContain(supplierDiagnostic);
+      expect((await read('events', { address })).body).not.toContain(
+        supplierDiagnostic,
+      );
+      await stop(resumed);
+      expect(journalText(await readFile(journal))).toContain(
+        supplierDiagnostic,
+      );
+    });
   } finally {
     WebSocket.prototype.send = originalSend;
     if (oldMode === undefined) delete process.env[modeKey];

@@ -18,9 +18,9 @@ import { expect, test, vi } from 'vitest';
 import { buildApp } from '@rdws/server';
 import { connectDatabase } from '@rdws/db';
 import { NativeWebHost } from '@rdws/dsh/web';
-import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
+import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
 import { fixtureGit, httpsGitFixture } from '../helpers/https-git.ts';
-import { DemandWorktrees } from '../../apps/orchestrator/src/demand-worktrees.ts';
+import { DemandWorktrees } from '@rdws/orchestrator';
 import { createBusiness } from '../../apps/server/src/modules/business.ts';
 
 loadEnvironment('test');

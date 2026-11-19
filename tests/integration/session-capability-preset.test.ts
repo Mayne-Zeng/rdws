@@ -20,7 +20,7 @@ import { NativeWebHost } from '@rdws/dsh/web';
 import { Pool } from 'pg';
 import WebSocket from 'ws';
 import { expect, test, vi } from 'vitest';
-import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
+import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
 import { DemandPresets } from '../../dsh/host/presets.ts';
 
 loadEnvironment('test');

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { Pool } from 'pg';
 import type { TemplateBindingInput } from '@rdws/contracts';
-import { runtimeHome } from '../../scripts/env.mjs';
+import { runtimeHome } from '@rdws/runtime-config';
 import { prepareSession } from '../helpers/auth-session.ts';
 
 test('requirement template recovery stays with the same command and the current authorized view', async ({

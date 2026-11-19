@@ -21,9 +21,9 @@ import {
   readOwned,
   safeDirectory,
   safeId,
-} from '../../syncer/src/config.ts';
-import { mirrorGit, MirrorGitError } from '../../syncer/src/git.ts';
-import type { RepositoryMirrors } from '../../syncer/src/mirror.ts';
+} from '@rdws/syncer/config';
+import { mirrorGit, MirrorGitError } from '@rdws/syncer/git';
+import type { RepositoryMirrors } from '@rdws/syncer/mirror';
 
 export type DemandRepositories =
   (typeof schema.requirementWorktreePlan.$inferSelect)['repositories'];

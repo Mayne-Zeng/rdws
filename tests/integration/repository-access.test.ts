@@ -6,7 +6,7 @@ import { Pool } from 'pg';
 import { buildApp } from '@rdws/server';
 import { connectDatabase } from '@rdws/db';
 import { createBusiness } from '../../apps/server/src/modules/business.ts';
-import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
+import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
 import { httpsGitFixture } from '../helpers/https-git.ts';
 
 loadEnvironment('test');

@@ -1,0 +1,13 @@
+{
+  "name": "@rdws/syncer",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./config": "./src/config.ts",
+    "./git": "./src/git.ts",
+    "./mirror": "./src/mirror.ts"
+  },
+  "dependencies": {
+    "@rdws/contracts": "workspace:*"
+  }
+}

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { buildApp } from '@rdws/server';
 import { connectDatabase } from '@rdws/db';
 import { createBusiness } from '../../apps/server/src/modules/business.ts';
-import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
+import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
 loadEnvironment('test');
 const app = buildApp({
   databaseUrl: process.env.DATABASE_URL!,

@@ -18,7 +18,7 @@ import { NativeWebHost } from '@rdws/dsh/web';
 import { buildApp } from '@rdws/server';
 import { Pool } from 'pg';
 import { expect, test } from 'vitest';
-import { loadEnvironment, runtimeHome } from '../../scripts/env.mjs';
+import { loadEnvironment, runtimeHome } from '@rdws/runtime-config';
 import { bootstrapNative, observedLogin } from '../helpers/native-browser.ts';
 
 loadEnvironment('test');

@@ -12,6 +12,9 @@
   "dependencies": {
     "@rdws/contracts": "workspace:*",
     "@rdws/db": "workspace:*",
+    "@rdws/orchestrator": "workspace:*",
+    "@rdws/runtime-config": "workspace:*",
+    "@rdws/syncer": "workspace:*",
     "@better-auth/drizzle-adapter": "1.7.25",
     "@fastify/type-provider-typebox": "6.3.0",
     "typebox": "1.4.7",

@@ -121,40 +121,59 @@ export function publicNativeStreamFrame(text: string) {
   return JSON.stringify(frame);
 }
 
-export async function publicNativeSessionResponse(
+const nativeResponseOptions = { headers: { 'cache-control': 'no-store' } };
+
+export async function withNativeEnvelope(
   response: Response,
   rpcId: unknown,
-  history: boolean,
+  project: (
+    result: Record<string, unknown>,
+  ) => Record<string, unknown> | undefined,
+  unavailable: () => Response,
 ) {
-  const options = { headers: { 'cache-control': 'no-store' } };
-  const unavailable = () =>
-    Response.json({ error: sessionFailure }, { ...options, status: 503 });
+  if (!response.ok || typeof rpcId !== 'string') {
+    await response.body?.cancel().catch(() => {});
+    return unavailable();
+  }
   const body: unknown = await response.json().catch(() => undefined);
   if (
-    !response.ok ||
-    typeof rpcId !== 'string' ||
     !isRecord(body) ||
     body.type !== 'server-response' ||
     body.rpcId !== rpcId ||
     !isRecord(body.result)
   )
     return unavailable();
-  const envelope = { type: 'server-response', rpcId };
-  const { result } = body;
-  if (result.ok === false && isRecord(result.error)) {
-    return Response.json(
-      {
-        ...envelope,
-        result: { ok: false, error: publicRemoteFailure(result.error.code) },
-      },
-      options,
-    );
-  }
-  if (result.ok !== true) return unavailable();
-  const value = result.value;
-  if (history) {
-    if (!isRecord(value) || !Array.isArray(value.records)) return unavailable();
-    value.records.forEach(projectEntry);
-  }
-  return Response.json({ ...envelope, result: { ok: true, value } }, options);
+  const result = project(body.result);
+  if (!result) return unavailable();
+  return Response.json(
+    { type: 'server-response', rpcId, result },
+    nativeResponseOptions,
+  );
+}
+
+export function publicNativeSessionResponse(
+  response: Response,
+  rpcId: unknown,
+  history: boolean,
+) {
+  return withNativeEnvelope(
+    response,
+    rpcId,
+    (result) => {
+      if (result.ok === false && isRecord(result.error))
+        return { ok: false, error: publicRemoteFailure(result.error.code) };
+      if (result.ok !== true) return;
+      const value = result.value;
+      if (history) {
+        if (!isRecord(value) || !Array.isArray(value.records)) return;
+        value.records.forEach(projectEntry);
+      }
+      return { ok: true, value };
+    },
+    () =>
+      Response.json(
+        { error: sessionFailure },
+        { ...nativeResponseOptions, status: 503 },
+      ),
+  );
 }

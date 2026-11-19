@@ -1054,6 +1054,17 @@
   <p id="t13-selection-boundary-evidence-20261120">独立方案复审 APPROVE。新用例通过真实 Native Web Host 的签名运行服务和 non-owner 接口，用合成 HTTP 供应商核对两个模型的实际正文。第一步响应挂起时，两条已准入的引导输入按原请求 ID 记在同一会话的下一步。释放后，Native 的非取消 splice 一次领取两条，选模事件落在同一轮的第 1 步与第 2 步之间，供应商在第 2 次调用实际收齐两条正文并使用目标模型。不同修订的两条输入也被完整领取，分别覆盖模型相同和模型不同。两组终态均为 <code>blocked</code>，无第二步、无选模事件、供应商入口无新增。相邻会话和实例默认仍为初始模型。</p>
   <p>将同步选模临时移到微任务时，正例第二次 HTTP 未到达（实际 1，期望 2）。临时只去掉修订相等条件、保留模型相等条件时，同模型异修订负例终态变成 <code>completed</code>（期望 <code>blocked</code>）。两类故障注入均退出 1。恢复后，<code>pnpm test tests/integration/native-model-selection-boundary.test.ts tests/integration/project-native-paths.test.ts tests/integration/native-queued-recovery.test.ts</code> 通过 3 文件、5 项。探针从合成映射取得原请求修订，生产接口保存、发送前持久快照、首写证明和派生门禁仍按后续方案推进。交付复审首轮发现原负例同时改变模型与修订，追加同模型异修订用例和单条件反例后复审 APPROVE。</p>
 
+  <h4 id="t13-prompt-observation-plan-20261120">11.16.36 T13 原提示词接纳的原生只读取证</h4>
+  <p>Change / R2，基线 <code>22b7266</code>。正式保存方案两面评审发现，现有 <code>session/prompt</code> 可能激活 Agent，旧键缺失时该入口会走新入箱。保留本机证据切片，使用同一锁定 Native、真实签名运行绑定和合成回环供应商验证只读查证。试验模块随本地测试 Profile 加载，无产品路由、生产代码或库迁移。</p>
+  <ol>
+    <li>读取 <code>ctx.sessionQuery.observeSession</code> 不可变切点和 <code>inheritedEventCount</code>，以整个观察前缀的原始消息 ID 判定首次出现，再排除继承区。用本工作区、会话、原用户、原 Peer nonce 和原请求键定位第一次 <code>agent/inbox/spliced</code> 插入。探针只记索引、次数和状态。内存观察标记为活动。显式原生 <code>flush</code> 返回真后，在派生及关闭之前直接从独立 JSONL 文件读出相同原始接纳位置，另外在内存重读检查位置稳定。冷启用于另证只读观察没有激活或写入。原生冷读可提取准确接纳正证。找不到、授权身份不匹配或读取不可用均保留未知。</li>
+    <li>以签名 non-owner 真提示词得到一条真实供应商到达。活动观察先核对一次接纳，再刷盘确认同事件。用真实 fork 将旧输入复制到固定切点下的新会话。子会话能看见继承原事件，查证仍报告未知。分别核对同父会话的未知旧键和另一用户。关闭并重启后，从未激活的原会话冷读接纳，同次探针前后均无 Agent，新会话仍只有继承来源。只读观察不追加原生日志，不增加模型请求，记录型回读不会被误当新入箱证明。</li>
+    <li>暂时移除继承位置约束，要求子会话断言实际失败。随后恢复并运行原生邻域、类型、lint、格式、构建和基线。此证据不判定任一历史缺席请求从未尝试，也不提供自动重试授权。正式受签名只读接口、持久派发状态、共享 PG 的借用回收及多模型发送由 §11.16.35 的实施评审核对。</li>
+  </ol>
+
+  <p id="t13-prompt-observation-evidence-20261120">独立方案首审要求在关闭或派生前直接检查物理记录，修订后 APPROVE。锁定 Native 通过普通文本 queue 发起唯一真实本机供应商请求。在响应挂起期间，对活动会话定位原用户、Peer nonce 和原键的首次入箱。显式 <code>sessions.flush</code> 返回真。立即读取物理 JSONL，准确核对同一序号、消息 ID 和原始身份。错原键、错用户和同用户错 Peer 只返回未知。</p>
+  <p>实际原生派生复制了该条输入。按完整前缀首次出现和本会话继承边界查证，子会话只看到继承来源。关闭重开后，原会话从准备态日志取回同一正证，子会话仍为未知。两者观察前后均没有 Agent，当次创建计数为零，两份原生日志 SHA-256 不变，供应商仍只有最初的一次请求。去掉继承位置或原 Peer nonce 检查时，各自错误返回已接纳，两项故障注入均退出 1。恢复后 <code>pnpm test tests/integration/native-prompt-observation.test.ts tests/integration/native-queued-recovery.test.ts tests/integration/project-native-paths.test.ts</code> 通过 3 文件、5 项。独立交付复审 APPROVE。类型、lint、格式、构建和基线通过。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

@@ -1241,6 +1241,12 @@
   <p>定点命令 <code>caffeinate -i pnpm test tests/integration/write-handoff.test.ts tests/integration/local-execution.test.ts tests/integration/authority-owner.test.ts</code> 退出 0，三文件 19 项。本切片从隔离入口验证，迁移仅落一次性测试库。若租约到期和持久化短时故障同时发生，真实停稳证据尚未恢复提交期间保留旧代拒写。旧登录已失效时，由 Broker 内部排空核对，产品接线需覆盖连接恢复后的补结算触发。</p>
   <p>最终 <code>caffeinate -i pnpm test</code> 退出 0，44 文件、273 项通过、1 项既有条件跳过。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check '!**/.agents/worktrees/**'</code>、<code>pnpm build</code>、<code>pnpm validate:baseline</code> 及补丁检查均返回 0。交付随 <code>feat: enforce isolated write handoff</code> 本地提交。浏览器写会话管理、锁定 Native 工具接线和真实产品退出／撤权另有联合验收。</p>
 
+  <h4 id="t07-native-tool-wire-evidence-20261120">11.20.4 Native 工具与受管模型请求核对</h4>
+  <p>两位独立专家核对锁定 Native、正式 BFF 和隔离写 Broker。下一本机切片先接唯一受审文本写代理，验证原生工具结果和下一模型步骤。<code>buildApp</code> 继续持有同库唯一所有者，写 Broker、Native 与模型出口复用代次和鉴权池，关停同步关闭准入，确认各路排空后释放。隔离 Broker 的独立启动器继续供测试。现有人员撤权仅针对部分成员变化，产品接线还应覆盖负责人更替、最后一项未完成任务结束或改派，以及原登录退出。各变更需要原操作回执和独立待确认状态。</p>
+  <p>实际工具声明顺序为领取入箱、解析工具、再调用 <code>agent/pre-step</code>。第一个代理宜用 Agent 作用域的条件注册，按当前领取批次和写代建立声明限制。工具启动另核对原登录、本人会话、真实 Agent 与步骤、调用及规范化参数，再走持证 Broker 和 T06。全局默认拒绝及其余工具禁用继续沿用。跨登录输入批次先保持只读，普通文本批次继续走原路径。执行通道需要自己的有界开始、取消和终态语义，上下文通道保持短请求。恢复或派生以当前持久会话重新申请，历史工具结果不产生当前写权。</p>
+  <p><code>node --import tsx --input-type=module -</code> 从项目锁包加载正式 LlmRuntime 与 PiAi，以 Node 24.20.0 和本机回环 HTTP 合成供应商发送三个请求。文本对照被现有 <code>prepareMainModelBody</code> 接受。带声明的真实请求含 <code>tools[].type/function</code>，<code>function</code> 含名称、说明和参数 schema。另一个请求已无当前声明，但带 <code>assistant.tool_calls</code> 和 <code>role:tool</code> 的历史，调用参数为 JSON 字符串，结果含 <code>tool_call_id</code> 与文本 <code>content</code>。现有正文校验拒绝这两种形态，探针退出 0。两个受影响时点都需自己的正反例，且真实工具声明的授权应一直延伸到第一实际外发。此探针观察锁定 SDK 形态，执行代理、真实 Seatbelt 结果、正式 TLS 定序和浏览器投影仍需联合验证。</p>
+  <p>技术裁决先以合成模型核对工具链，再扩正式 mediated 的精确允许形状；两步都维持生产现有入口。涉及真实工作树文本、工具参数和结果的模型外发及历史保留，具名部署方按 R-B 与 §11.16.17 确认范围和数据处理。本机验证先使用合成内容。正式接线会分别核对当步声明与已持久历史，避免读回旧工具事件重新授权执行。</p>
+
   <h3 id="t11-maintenance-acceptance-20261119">11.21 T11 已确认的导入与人员维护</h3>
   <p>2026-11-19 用户确认需求批量导入采用同页的上传、预览、修正与整批提交。上传后动态显示解析和校验进度，下方逐条呈现需求明细、状态与可定位的问题。用户可在同页修正并重新校验。预览和校验阶段不写业务数据。全部通过后由用户显式整批提交入库，提交结果继续在同页逐条呈现。</p>
   <p>参与者和开发负责人维护按当前项目角色授权。移除参与者或更换负责人时，相关未完成子任务须显式交给当前具备资格的接手人，并保留原分派记录。验收覆盖无资格接手、已有分派记录保留，以及原有阶段与任务按钮权限。</p>

@@ -1455,8 +1455,14 @@ export async function registerWorkbench(
     async (request): Promise<ProjectRepositories> => {
       const { projectId } = request.params;
       const who = await actor(request.headers);
-      if (!(await projectRoles(who.userId, projectId)).length)
-        businessError(403, '无权访问当前项目');
+      // Fast check before the slow mirror scan, then re-verify after it (TOCTOU guard).
+      const ensureProjectRoles = async () => {
+        await actor(request.headers);
+        const roles = await projectRoles(who.userId, projectId);
+        if (!roles.length) businessError(403, '无权访问当前项目');
+        return roles;
+      };
+      await ensureProjectRoles();
       let repositories;
       try {
         repositories = await mirrors.list(projectId);
@@ -1465,9 +1471,7 @@ export async function registerWorkbench(
           businessError(409, '仓库配置无效，请联系运行维护者核对');
         throw error;
       }
-      await actor(request.headers);
-      const roles = await projectRoles(who.userId, projectId);
-      if (!roles.length) businessError(403, '无权访问当前项目');
+      const roles = await ensureProjectRoles();
       return { repositories, canSync: roles.includes('project_admin') };
     },
   );

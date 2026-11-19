@@ -1084,6 +1084,20 @@
   <p id="t13-prompt-observation-evidence-20261120">独立方案首审要求在关闭或派生前直接检查物理记录，修订后 APPROVE。锁定 Native 通过普通文本 queue 发起唯一真实本机供应商请求。在响应挂起期间，对活动会话定位原用户、Peer nonce 和原键的首次入箱。显式 <code>sessions.flush</code> 返回真。立即读取物理 JSONL，准确核对同一序号、消息 ID 和原始身份。错原键、错用户和同用户错 Peer 只返回未知。</p>
   <p>实际原生派生复制了该条输入。按完整前缀首次出现和本会话继承边界查证，子会话只看到继承来源。关闭重开后，原会话从准备态日志取回同一正证，子会话仍为未知。两者观察前后均没有 Agent，当次创建计数为零，两份原生日志 SHA-256 不变，供应商仍只有最初的一次请求。去掉继承位置或原 Peer nonce 检查时，各自错误返回已接纳，两项故障注入均退出 1。恢复后 <code>pnpm test tests/integration/native-prompt-observation.test.ts tests/integration/native-queued-recovery.test.ts tests/integration/project-native-paths.test.ts</code> 通过 3 文件、5 项。独立交付复审 APPROVE。类型、lint、格式、构建和基线通过。</p>
 
+  <h4 id="t13-attachment-wire-evidence-plan-20261120">11.16.37 T13 附件正文证据</h4>
+  <p>Change / R3，基线 <code>9b21319</code>。沿 §11.16.17 和锁定原生适配器验证受信出口将看到的实际字节。此次交付独立的内存证据提取和自动化夹具，作为后续逐次授权的输入。现有受管转发继续使用已有文本路由，文件和消息首写仍待各自的原授权和定序完成。</p>
+  <ol>
+    <li>使用现有 Node 24.20.0 与适配器序列化形状。Files 仅接受锁定 Node 从原始 FormData 生成的有限 multipart 语法，精确校验 Content-Type、顺序、分隔符、文件元信息与完整正文终点。要求 <code>expires_after[anchor]=created_at</code>、<code>expires_after[seconds]</code> 介于 3600 和 2592000，以及单个非空已知图片 MIME 的 <code>file</code>。接受上限沿现有出口 1 MiB。文件名用于校验形状，摘要取实际文件字节。</li>
+    <li>Messages 由固定外层、消息及块结构组成。使用严格 UTF-8，要求字节与锁定序列化的 <code>JSON.stringify</code> 输出一致，封闭重复键与异构解析。核对实际模型、流式状态、Token 上限、思考选项，允许现有文本及助手思考块。普通用户图片块只接受规范 base64 和不透明 <code>file_id</code>。拒绝工具块、未知扩展、远端引用和多余的字段，坚持现有工具阶段边界。图像前的普通文本可能带 Native 生成的句柄和本地路径，作为日后需审定的消息正文。线上位置采用序列化后的消息和块下标，不作为原入箱身份。</li>
+    <li>临时证据只保留整份请求快照的 SHA-256 与长度、实际转换变体的 SHA-256 与长度、申报 MIME、上传期限，以及 Messages 图片位置或不透明引用的 SHA-256。保留重复出现的顺序。此处验证 MIME 申报及字节形状，图片解码和可信变体由原输入转换链承担。证据寿命限于当前准备过程，原正文、文件名、文件引用原值、认证头和环境配置留在各自边界。</li>
+    <li>当前 Native 缓存按端点、认证域和变体共享，其记录和 Signal 不作为原登录证明。Files 及 Messages 分别需要独立尝试身份及首写授权。后续 Messages 复用须由受信的已提交上传回执证明端点、认证代、附件字节和有效期，再复核自己的原输入及授权。锁定适配器的回退和缓存失效重试均重新核对实际出站字节；现有文本 <code>step.wireAttempt</code> 已提交状态不能直接作为 Files 子尝试。真实出站前还须审定正文中的路径与原始内容边界。</li>
+    <li>先用 Node 标准 FormData 和 JSON 严格构造验收样本，覆盖过量、重复、序尾、边界歧义、内嵌工具／外链、字段错配及无规范 base64。再以已有受限 Native 和 FD 4 夹具读取实际回环观测字节，分别证明真实 Files 和内联的图片摘要一致、缓存引用进入另一独立 Messages 尝试。保留旧撤销／拒绝、内联回退、无直连及诊断检查。运行定点、全量、静态和基线。此次代码可单提交回退。</li>
+  </ol>
+
+  <p id="t13-attachment-wire-evidence-20261120">双面独立方案复审及独立交付复审均 APPROVE。复审核对锁定 SDK 的实际三字段 FormData、JSON 序列化及变体与缓存域。实现限定 ASCII 有界供应商引用，短时证据只保留摘要。<code>pnpm test tests/integration/model-attachment-evidence.test.ts</code> 在实现前因模块不存在而失败，完成后通过 3 项。严格接受锁版线上形状，覆盖重复键、余部、边界歧义、无效文件名/媒体、异常扩展、工具嵌套、非规范 base64 及长度超限。</p>
+  <p><code>pnpm test tests/integration/model-attachment-evidence.test.ts tests/integration/native-model-carrier.test.ts tests/integration/native-messages-dispatch.test.ts</code> 通过 3 个文件、6 项。现有受限 Native 通过 FD 4 产生真实 Files 和 Messages 字节。父端记录的测试摘要逐次与回环供应商实际到达一致，实际 multipart 与内联 PNG 的变体摘要相同。缓存引用的摘要在另一 Native 调用的 Messages 中被观察到，独立尝试标识保留。拒绝及内联回退继续按原夹具验证。测试使用合成认证与内容，生产 Files/Messages 准入仍按 §11.16.17。</p>
+  <p>Node 24.20.0 和 Apple Git 2.54.0 下，<code>pnpm test</code> 通过 51 文件、293 项，1 项既有平台条件跳过。类型、lint、格式、构建、基线和补丁完整性检查均通过。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

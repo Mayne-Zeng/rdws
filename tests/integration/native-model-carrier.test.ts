@@ -18,6 +18,10 @@ import { NativeWebHost } from '@rdws/dsh/web';
 import { buildApp } from '@rdws/server';
 import { nativeLoopbackRequest } from '../../dsh/host/loopback-http.ts';
 import type { ModelCarrierRequest } from '../../dsh/bridge/model-carrier.ts';
+import {
+  readDeepSeekFilesEvidence,
+  readDeepSeekMessagesEvidence,
+} from '../../apps/server/src/modules/model-attachment-evidence.ts';
 
 const readyWrite = vi.hoisted(() => ({
   after: undefined as ((path: string) => void) | undefined,
@@ -49,6 +53,18 @@ test.skipIf(process.platform !== 'darwin')(
       attemptId: string;
       call: ModelCarrierRequest['call'];
     }[] = [];
+    const filesEvidence = new Map<
+      string,
+      NonNullable<ReturnType<typeof readDeepSeekFilesEvidence>>
+    >();
+    const messagesEvidence = new Map<
+      string,
+      NonNullable<ReturnType<typeof readDeepSeekMessagesEvidence>>
+    >();
+    const supplierEvidence = new Map<
+      string,
+      { bytes: number; sha256: string }
+    >();
     const arrivals: {
       path: string;
       attempt: unknown;
@@ -75,6 +91,11 @@ test.skipIf(process.platform !== 'darwin')(
         const bytes = Buffer.concat(chunks);
         const path = request.url!;
         const source = String(request.headers['x-fixture-session']);
+        if (path === '/ds/v1/files' || path === '/ds/v1/messages')
+          supplierEvidence.set(String(request.headers['x-fixture-attempt']), {
+            bytes: bytes.length,
+            sha256: createHash('sha256').update(bytes).digest('hex'),
+          });
         const arrival = {
           path,
           source,
@@ -228,10 +249,33 @@ test.skipIf(process.platform !== 'darwin')(
           headers.set('x-fixture-session', source ?? '');
           headers.set('x-fixture-attempt', request.attemptId);
           const destination = new URL(request.destination);
+          let body: RequestInit['body'] = request.body;
+          if (request.routeId === 'files' || request.routeId === 'messages') {
+            const wire = Buffer.from(
+              await new Response(request.body).arrayBuffer(),
+            );
+            const type = request.headers.get('content-type');
+            if (request.routeId === 'files') {
+              const evidence = readDeepSeekFilesEvidence(wire, type);
+              if (!evidence)
+                throw new Error('Unexpected Native Files evidence');
+              filesEvidence.set(request.attemptId, evidence);
+            } else {
+              const evidence = readDeepSeekMessagesEvidence(
+                wire,
+                type,
+                'fixture-vision',
+              );
+              if (!evidence)
+                throw new Error('Unexpected Native Messages evidence');
+              messagesEvidence.set(request.attemptId, evidence);
+            }
+            body = Uint8Array.from(wire);
+          }
           return nativeLoopbackRequest(origin, destination.pathname, {
             method: 'POST',
             headers,
-            body: request.body,
+            body,
             signal: request.signal,
           });
         },
@@ -398,6 +442,52 @@ test.skipIf(process.platform !== 'darwin')(
         },
         { path: '/ds/v1/messages', source: 'deepseek', file: fileId },
       ]);
+      const files = calls.find(
+        ({ call, routeId }) =>
+          call.sessionId === 'shared-first' && routeId === 'files',
+      )!;
+      const cached = calls.find(
+        ({ call, routeId }) =>
+          call.sessionId === 'deepseek' && routeId === 'messages',
+      )!;
+      const inline = calls.find(
+        ({ call, routeId }) =>
+          call.sessionId === 'deepseek-inline' && routeId === 'messages',
+      )!;
+      expect(files.call.id).not.toBe(cached.call.id);
+      const uploaded = filesEvidence.get(files.attemptId);
+      expect(uploaded).toMatchObject({
+        expiresAfterSeconds: 604800,
+        image: {
+          mediaType: 'image/png',
+          sha256:
+            '999f1d1527ee7e79266f16add5430fff76b1225d742464a5b1ff1f02971bb8ee',
+        },
+      });
+      expect(messagesEvidence.get(inline.attemptId)?.images).toEqual([
+        {
+          kind: 'inline',
+          messageIndex: 0,
+          blockIndex: 2,
+          image: uploaded!.image,
+        },
+      ]);
+      expect(messagesEvidence.get(cached.attemptId)?.images).toEqual([
+        {
+          kind: 'file',
+          messageIndex: 0,
+          blockIndex: 2,
+          fileIdSha256: createHash('sha256').update(fileId).digest('hex'),
+        },
+      ]);
+      expect(supplierEvidence).toEqual(
+        new Map(
+          [...filesEvidence, ...messagesEvidence].map(([attempt, evidence]) => [
+            attempt,
+            evidence.request,
+          ]),
+        ),
+      );
       expect(errors).toEqual([]);
       const before = calls.length;
       lifecycle.abort();

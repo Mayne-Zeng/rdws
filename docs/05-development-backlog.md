@@ -197,6 +197,7 @@
   - 实现前验证：[发出前的传输证据](02-directory-and-engineering-design.html#t13-provider-dispatch-probe-20261119)。已在锁定版本的 PiAi HTTP 路径核对首次推理、429 后重试及独立后台标题。夹具可阻断指定的实际请求，标题原生记录可追溯到原消息。产品授权方案继续按 §11.16.7 复审。
   - 已交付子项：[首消息标题的受管出口](02-directory-and-engineering-design.html#t13-title-wiring-evidence-20261120)。锁定 Native、隔离受管 PostgreSQL 和本机 HTTPS 核对原消息刷盘、主轮释放、登录撤权与实际标题写出。双面交付复审、定点 20 项、整仓 278 项及两组浏览器共 44 项通过。开关限定在回环集成夹具，正式环境、附件外发和会话选模继续按各自判据验收。
   - 实现前验证：[DeepSeek Messages 与 Files](02-directory-and-engineering-design.html#t13-deepseek-messages-dispatch-probe-20261119)。回环实证核对上传、内联回退、缓存文件引用及扩展准备失败，确认 Files 与 Messages 各有实际外发边界。工作台图片输入及产品逐次授权未在此探针启用。
+  - 已本地交付验证子项：[附件正文证据](02-directory-and-engineering-design.html#t13-attachment-wire-evidence-20261120)。真实受限 Native 的上传、内联和缓存引用生成可供逐次授权比对的字节及位置摘要。聚焦 6 项、独立复审、整仓 293 项、静态及基线通过。
   - 实现前验证：[入箱领取选模与派生边界](02-directory-and-engineering-design.html#t13-claim-selection-probe-20261119)。实际排队发送确认本轮原模型及下轮目标模型，阻止后仍可能把未外发的选择带入派生。后续以已确认的出口及派生验收为准，现有证据用于实施方案。
   - 已交付修复：[冷恢复后首次新发送](02-directory-and-engineering-design.html#t13-queued-recovery-evidence-20261119)。已刷盘的旧输入保留在 Native 原始日志。新的有效入箱才取消缺少运行绑定的旧活动项，首次新发送完成，旧键在再次冷启后仍可核对。独立复审、整仓 187 项、浏览器 34 项、本机 Native 通知故障回归及基线通过。
   - 实现前验证：[Native 模型出口的本机隔离](02-directory-and-engineering-design.html#t13-native-egress-confinement-20261119)。锁定版 DSH 在 macOS IPv4 回环中可经出口完成 PiAi、DeepSeek Files 和 Messages，系统拒绝计划外直连，出口关闭后同进程发起新请求失败。同一 Native 进程的 Web 端点持续可访问。独立复审、整仓 190 项及基线通过。正式 Host 接线、端点身份与撤权定序按 §11.16.17 继续验证。

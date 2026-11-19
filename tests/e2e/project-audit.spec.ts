@@ -14,17 +14,40 @@ test('project audit searches authorized demands, exports a page and resets on pr
   const secondProject = 'audit-browser-' + randomUUID();
   const foreignProject = 'audit-browser-' + randomUUID();
   const projects = [project, secondProject, foreignProject];
+  const runLabel = project.slice(-8);
   const demands = [
-    { id: randomUUID(), projectId: project, title: '业务审计验收甲' },
-    { id: randomUUID(), projectId: project, title: '业务审计验收乙' },
-    { id: randomUUID(), projectId: project, title: '项目内未授权需求' },
-    { id: randomUUID(), projectId: secondProject, title: '另一项目已授权需求' },
-    { id: randomUUID(), projectId: foreignProject, title: '外部项目需求' },
+    {
+      id: randomUUID(),
+      projectId: project,
+      title: '业务审计验收甲 ' + runLabel,
+    },
+    {
+      id: randomUUID(),
+      projectId: project,
+      title: '业务审计验收乙 ' + runLabel,
+    },
+    {
+      id: randomUUID(),
+      projectId: project,
+      title: '项目内未授权需求 ' + runLabel,
+    },
+    {
+      id: randomUUID(),
+      projectId: secondProject,
+      title: '另一项目已授权需求 ' + runLabel,
+    },
+    {
+      id: randomUUID(),
+      projectId: foreignProject,
+      title: '外部项目需求 ' + runLabel,
+    },
   ];
   const ids = demands.map(({ id }) => id);
   const marker = 'SYNTHETIC_PROJECT_AUDIT_PRIVATE_' + randomUUID();
   let isolated = false;
   let releaseOld: (() => void) | undefined;
+  let releaseCross: (() => void) | undefined;
+  let releaseAuth: (() => void) | undefined;
   try {
     expect(
       (await db.query('select current_database() db, session_user role'))
@@ -37,7 +60,7 @@ test('project audit searches authorized demands, exports a page and resets on pr
     for (const [index, projectId] of projects.entries()) {
       await db.query('insert into project(id,name) values($1,$2)', [
         projectId,
-        '审计浏览器夹具 ' + (index + 1),
+        index < 2 ? '=审计浏览器夹具' : '无权审计项目',
       ]);
       if (index < 2)
         await db.query("insert into project_member values($1,$2,'tester')", [
@@ -176,6 +199,75 @@ test('project audit searches authorized demands, exports a page and resets on pr
       audit.getByText(demands[0]!.title, { exact: false }),
     ).toHaveCount(0);
 
+    let holdCross = false;
+    let crossReady = false;
+    let crossReleased = false;
+    const crossPath = '/api/audit/business';
+    const crossHeld = new Promise<void>((resolve) => {
+      releaseCross = resolve;
+    });
+    await page.route(`**${crossPath}*`, async (route) => {
+      expect(route.request().headers()['x-rdws-edit-session']).toBe(
+        login.session.id,
+      );
+      if (!holdCross) return route.continue();
+      const response = await route.fetch();
+      expect(response.status()).toBe(200);
+      crossReady = true;
+      await crossHeld;
+      await route.fulfill({ response }).catch(() => {});
+      crossReleased = true;
+    });
+    const range = audit.getByLabel('业务事件范围');
+    await expect(range).toHaveValue('current');
+    await range.selectOption('accessible');
+    await search.fill(runLabel);
+    await submit.click();
+    const firstCrossEvent = events.getByText(demands[0]!.title, {
+      exact: false,
+    });
+    const secondCrossEvent = events.getByText(demands[3]!.title, {
+      exact: false,
+    });
+    await expect(firstCrossEvent).toBeVisible();
+    await expect(secondCrossEvent).toBeVisible();
+    await expect(
+      events.getByText(demands[2]!.title, { exact: false }),
+    ).toHaveCount(0);
+    await expect(
+      events.getByText(demands[4]!.title, { exact: false }),
+    ).toHaveCount(0);
+    await firstCrossEvent.click();
+    await expect(
+      events
+        .getByRole('listitem')
+        .filter({ hasText: demands[0]!.title })
+        .getByText('项目标识 ' + project, { exact: true }),
+    ).toBeVisible();
+    await secondCrossEvent.click();
+    await expect(
+      events
+        .getByRole('listitem')
+        .filter({ hasText: demands[3]!.title })
+        .getByText('项目标识 ' + secondProject, { exact: true }),
+    ).toBeVisible();
+    const crossRequested = page.waitForEvent('download');
+    await download.click();
+    const crossCsv = await crossRequested;
+    expect(crossCsv.suggestedFilename()).toBe(
+      'cross-project-business-audit.csv',
+    );
+    const crossData = await readFile(await crossCsv.path(), 'utf8');
+    expect(crossData).toContain('"项目标识","项目名称","需求标识"');
+    expect(crossData).toContain(
+      `"${project}","'=审计浏览器夹具","${demands[0]!.id}"`,
+    );
+    expect(crossData).toContain(
+      `"${secondProject}","'=审计浏览器夹具","${demands[3]!.id}"`,
+    );
+    expect(crossData).not.toContain(foreignProject);
+    expect(crossData).not.toContain(marker);
+
     await page.setViewportSize({ width: 390, height: 844 });
     await page.emulateMedia({ colorScheme: 'light' });
     expect(
@@ -184,19 +276,74 @@ test('project audit searches authorized demands, exports a page and resets on pr
       ),
     ).toBe(true);
     await audit.screenshot({
-      path: testInfo.outputPath('project-audit-light-390.png'),
+      path: testInfo.outputPath('cross-project-audit-light-390.png'),
     });
     await page.emulateMedia({ colorScheme: 'dark' });
     await expect(page.locator('html')).toHaveAttribute('theme-mode', 'dark');
     await audit.screenshot({
-      path: testInfo.outputPath('project-audit-dark-390.png'),
+      path: testInfo.outputPath('cross-project-audit-dark-390.png'),
     });
+    await page.setViewportSize({ width: 1280, height: 820 });
+    holdCross = true;
+    await submit.click();
+    await expect.poll(() => crossReady).toBe(true);
+    await expect(download).toHaveCount(0);
+    await range.selectOption('current');
+    await expect(secondCrossEvent).toBeVisible();
+    releaseCross?.();
+    await expect.poll(() => crossReleased).toBe(true);
+    await expect(firstCrossEvent).toHaveCount(0);
+    holdCross = false;
+
+    const authHeld = new Promise<void>((resolve) => {
+      releaseAuth = resolve;
+    });
+    await page.route('**/api/auth/get-session', async (route) => {
+      await authHeld;
+      await route.continue();
+    });
+    const replacement = await prepareSession(
+      page.context(),
+      baseURL!,
+      accounts.find(({ username }) => username === 'tester')!,
+    );
+    expect(replacement.user.id).toBe(login.user.id);
+    expect(replacement.session.id).not.toBe(login.session.id);
+    const oldLogin = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === crossPath &&
+        response.status() === 401,
+    );
+    await range.selectOption('accessible');
+    expect((await oldLogin).request().headers()['x-rdws-edit-session']).toBe(
+      login.session.id,
+    );
+    await expect(audit.getByText('读取跨项目审计失败，请重试。')).toBeVisible();
+    await expect(firstCrossEvent).toHaveCount(0);
+    await expect(download).toHaveCount(0);
+    const observed = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === '/api/auth/get-session' &&
+        response.status() === 200,
+    );
+    releaseAuth?.();
+    await page.clock.setFixedTime(new Date(Date.now() + 10_000));
+    await page.evaluate(() =>
+      document.dispatchEvent(new Event('visibilitychange')),
+    );
+    expect((await (await observed).json()).session.id).toBe(
+      replacement.session.id,
+    );
+    await expect(range).toHaveCount(0);
+    await expect(firstCrossEvent).toHaveCount(0);
     await page.goto(`/?project=${foreignProject}&view=audit`);
     await expect(
       page.getByRole('heading', { name: '无法访问指定项目' }),
     ).toBeVisible();
   } finally {
     releaseOld?.();
+    releaseCross?.();
+    releaseAuth?.();
     try {
       if (isolated) {
         await db.query(

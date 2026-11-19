@@ -29,6 +29,7 @@ import {
   isTemplateBindingRequest,
   isPassiveRequirementRead,
   isProjectAuditRead,
+  isCrossProjectAuditRead,
   isProjectAccessAuditRead,
   isPlatformAccountAuditRead,
   isSessionWrite,
@@ -603,6 +604,7 @@ export function createWorkbenchRuntime(
     const passiveRead = isPassiveRequirementRead(request);
     const auditRead =
       isProjectAuditRead(request) ||
+      isCrossProjectAuditRead(request) ||
       isProjectAccessAuditRead(request) ||
       isPlatformAccountAuditRead(request);
     const sessionWrite = isSessionWrite(request);
@@ -994,6 +996,7 @@ export function createWorkbenchRuntime(
     ready,
     readyAccess,
     recoverPersonnelFence,
+    recoverPersonnelFences,
     requestDemandScope,
     responseScopes,
     revokeMember,

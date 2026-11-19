@@ -29,6 +29,7 @@ const options = {
 const pool = createTestPool('migration');
 const app = buildApp(options);
 const project = 'details-' + randomUUID(),
+  peerProject = 'details-' + randomUUID(),
   foreignProject = 'details-' + randomUUID();
 const demand = randomUUID(),
   race = randomUUID(),
@@ -37,6 +38,9 @@ const demand = randomUUID(),
   projectAuditFirst = randomUUID(),
   projectAuditSecond = randomUUID(),
   projectAuditHidden = randomUUID(),
+  crossProjectFirst = randomUUID(),
+  crossProjectPeer = randomUUID(),
+  crossProjectMismatch = randomUUID(),
   foreign = randomUUID(),
   unassigned = randomUUID(),
   nativeDemand = randomUUID();
@@ -48,6 +52,9 @@ const demands = [
   projectAuditFirst,
   projectAuditSecond,
   projectAuditHidden,
+  crossProjectFirst,
+  crossProjectPeer,
+  crossProjectMismatch,
   foreign,
   unassigned,
   nativeDemand,
@@ -66,13 +73,189 @@ app.addHook('preSerialization', async (request, _reply, payload) => {
       request.url.startsWith(
         `/api/requirements/${auditDemand}/business-audit`,
       ) ||
-      request.url.startsWith(`/api/projects/${project}/business-audit`))
+      request.url.startsWith(`/api/projects/${project}/business-audit`) ||
+      request.url.startsWith('/api/audit/business'))
   ) {
     const callback = beforeResponse;
     beforeResponse = undefined;
     await callback();
   }
   return payload;
+});
+
+test('searches authorized business events across projects and fences exact lookahead ownership', async () => {
+  const path = '/api/audit/business';
+  const read = (
+    user: string,
+    filters: Record<string, string>,
+    observed = members.get(user)!.sessionId,
+  ) =>
+    app.inject({
+      url: path + '?' + new URLSearchParams(filters),
+      headers: {
+        cookie: members.get(user)!.cookie,
+        'x-rdws-edit-session': observed,
+      },
+    });
+  const tester = members.get('tester')!;
+  const keyword = 'Cross-project %_ ' + randomUUID();
+  const marker = 'SYNTHETIC_PRIVATE_CROSS_AUDIT_' + randomUUID();
+  await pool.query('update requirement set title=$1 where id=any($2::text[])', [
+    keyword,
+    [crossProjectFirst, crossProjectPeer, crossProjectMismatch, foreign],
+  ]);
+  await pool.query("insert into project_member values($1,$2,'developer')", [
+    peerProject,
+    tester.id,
+  ]);
+  await pool.query(
+    "insert into requirement_participant values($1,$2,'developer')",
+    [crossProjectPeer, tester.id],
+  );
+  const at = '2026-02-10T01:02:03.314159Z';
+  const older = '2026-02-10T01:02:03.314158Z';
+  const seed = async (demandId: string, ids: string[], recordedAt: string) =>
+    pool.query(
+      `insert into requirement_event(id,requirement_id,kind,actor_id,source,command_id,version,"after",created_at)
+      select id,$2,'requirement.details',$3,'web',$4,1,$5::jsonb,$6::timestamptz
+      from unnest($1::text[]) as id`,
+      [
+        ids,
+        demandId,
+        members.get('lead')!.id,
+        marker,
+        JSON.stringify({ description: marker }),
+        recordedAt,
+      ],
+    );
+  const firstIds = Array.from({ length: 25 }, () => randomUUID())
+    .sort()
+    .reverse();
+  const peerId = randomUUID(),
+    lastId = randomUUID(),
+    mismatchId = randomUUID(),
+    outsiderId = randomUUID();
+  const invalidId = '!' + randomUUID();
+  await seed(crossProjectFirst, [...firstIds, invalidId], at);
+  await seed(crossProjectPeer, [peerId], older);
+  await seed(crossProjectFirst, [lastId], '2026-02-10T01:02:03.314157Z');
+  await seed(crossProjectMismatch, [mismatchId], at);
+  await seed(foreign, [outsiderId], at);
+
+  const filters = { q: keyword, kind: 'requirement.details' };
+  const first = await read('tester', filters);
+  expect(first.statusCode).toBe(200);
+  expect(first.headers['cache-control']).toBe('no-store');
+  const page = first.json();
+  expect(page.scope).toBe('accessible-projects');
+  expect(page.events.map(({ id }: { id: string }) => id)).toEqual(firstIds);
+  expect(
+    page.events.every(
+      ({
+        projectId,
+        projectName,
+      }: {
+        projectId: string;
+        projectName: string;
+      }) => projectId === project && projectName === 'Synthetic details',
+    ),
+  ).toBe(true);
+  expect(page.next).toEqual({ at, id: firstIds.at(-1) });
+  const next = await read('tester', {
+    ...filters,
+    beforeAt: page.next.at,
+    beforeId: page.next.id,
+  });
+  expect(next.statusCode).toBe(200);
+  expect(next.json()).toMatchObject({
+    next: null,
+    events: [
+      {
+        id: peerId,
+        projectId: peerProject,
+        projectName: 'Synthetic details',
+        requirementId: crossProjectPeer,
+        requirementTitle: keyword,
+      },
+      { id: lastId, projectId: project, requirementId: crossProjectFirst },
+    ],
+  });
+  for (const excluded of [
+    marker,
+    mismatchId,
+    outsiderId,
+    foreignProject,
+    invalidId,
+  ])
+    expect(first.body + next.body).not.toContain(excluded);
+  expect((await read('admin', filters)).json()).toEqual({
+    scope: 'accessible-projects',
+    next: null,
+    events: [],
+  });
+  expect((await read('tester', { q: marker })).json().events).toEqual([]);
+  expect((await read('tester', { projectId: foreignProject })).statusCode).toBe(
+    400,
+  );
+  expect((await read('tester', { beforeAt: at })).statusCode).toBe(400);
+  expect((await read('tester', filters, randomUUID())).statusCode).toBe(401);
+  expect((await app.inject({ url: path })).statusCode).toBe(401);
+  expect(
+    (await app.inject({ url: path, headers: { cookie: tester.cookie } }))
+      .statusCode,
+  ).toBe(401);
+  expect(
+    (
+      await app.inject({
+        url: path,
+        method: 'HEAD',
+        headers: { cookie: tester.cookie },
+      })
+    ).statusCode,
+  ).toBe(404);
+
+  beforeResponse = async () => {
+    await pool.query('update requirement set project_id=$1 where id=$2', [
+      project,
+      crossProjectPeer,
+    ]);
+  };
+  try {
+    const moved = await read('tester', filters);
+    expect(moved.statusCode).toBe(403);
+    expect(moved.json()).not.toHaveProperty('events');
+    expect(
+      (
+        await read('tester', {
+          ...filters,
+          beforeAt: at,
+          beforeId: firstIds.at(-1)!,
+        })
+      ).json().events,
+    ).toContainEqual(
+      expect.objectContaining({ id: peerId, projectId: project }),
+    );
+  } finally {
+    beforeResponse = undefined;
+    await pool.query('update requirement set project_id=$1 where id=$2', [
+      peerProject,
+      crossProjectPeer,
+    ]);
+  }
+
+  beforeResponse = async () => {
+    await pool.query(
+      "delete from project_member where project_id=$1 and user_id=$2 and role='developer'",
+      [peerProject, tester.id],
+    );
+  };
+  try {
+    const revoked = await read('tester', filters);
+    expect(revoked.statusCode).toBe(403);
+    expect(revoked.body).not.toContain(firstIds[0]!);
+  } finally {
+    beforeResponse = undefined;
+  }
 });
 
 test('searches project business events with exact microsecond cursors and rechecks lookahead access', async () => {
@@ -457,11 +640,10 @@ beforeAll(async () => {
       sessionId: current.json().session.id,
     });
   }
-  await pool.query('insert into project(id,name) values($1,$3),($2,$3)', [
-    project,
-    foreignProject,
-    'Synthetic details',
-  ]);
+  await pool.query(
+    'insert into project(id,name) values($1,$4),($2,$4),($3,$4)',
+    [project, peerProject, foreignProject, 'Synthetic details'],
+  );
   const manager = members.get('manager')!.id,
     lead = members.get('lead')!.id,
     pm = members.get('pm')!.id,
@@ -475,7 +657,11 @@ beforeAll(async () => {
       'insert into requirement(id,project_id,title,description,acceptance,lead_id,created_by) values($1,$2,$3,$4,$5,$6,$7)',
       [
         id,
-        id === foreign ? foreignProject : project,
+        id === foreign
+          ? foreignProject
+          : id === crossProjectPeer || id === crossProjectMismatch
+            ? peerProject
+            : project,
         'Original title',
         'Original description',
         'Original acceptance',
@@ -521,10 +707,10 @@ afterAll(async () => {
     );
     await pool.query(
       'delete from project_member where project_id=any($1::text[])',
-      [[project, foreignProject]],
+      [[project, peerProject, foreignProject]],
     );
     await pool.query('delete from project where id=any($1::text[])', [
-      [project, foreignProject],
+      [project, peerProject, foreignProject],
     ]);
   } finally {
     await pool.end();

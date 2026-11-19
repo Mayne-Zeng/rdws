@@ -35,10 +35,16 @@ function csvCell(value: string | number | null) {
 
 export function downloadBusinessAudit(
   scopeId: string,
-  events: (BusinessAuditEvent & { requirementId: string })[],
+  events: (BusinessAuditEvent & {
+    requirementId: string;
+    projectId?: string;
+    projectName?: string;
+  })[],
+  crossProject = false,
 ) {
   const rows = [
     [
+      ...(crossProject ? ['项目标识', '项目名称'] : []),
       '需求标识',
       '事件标识',
       '发生时间',
@@ -50,6 +56,9 @@ export function downloadBusinessAudit(
       '需求版本',
     ],
     ...events.map((event) => [
+      ...(crossProject
+        ? [event.projectId ?? null, event.projectName ?? null]
+        : []),
       event.requirementId,
       event.id,
       event.createdAt,
@@ -61,7 +70,12 @@ export function downloadBusinessAudit(
       event.version,
     ]),
   ];
-  downloadAuditCsv(`business-audit-${scopeId}.csv`, rows);
+  downloadAuditCsv(
+    crossProject
+      ? 'cross-project-business-audit.csv'
+      : `business-audit-${scopeId}.csv`,
+    rows,
+  );
 }
 
 export function downloadAuditCsv(
@@ -226,6 +240,8 @@ export function BusinessAuditEvents({
   events: (BusinessAuditEvent & {
     requirementId?: string;
     requirementTitle?: string;
+    projectId?: string;
+    projectName?: string;
   })[];
 }) {
   return (
@@ -235,6 +251,7 @@ export function BusinessAuditEvents({
           <details>
             <summary>
               <strong>{businessAuditLabels[event.kind]}</strong> ·{' '}
+              {event.projectName && <>{event.projectName} · </>}
               {event.requirementTitle && <>{event.requirementTitle} · </>}
               {actorName(event)} ·{' '}
               <time dateTime={event.createdAt}>
@@ -246,6 +263,7 @@ export function BusinessAuditEvents({
                 来源 {sourceName(event)} · 需求版本 {event.version}
               </p>
               <p>事件标识 {event.id}</p>
+              {event.projectId && <p>项目标识 {event.projectId}</p>}
               {event.requirementId && <p>需求标识 {event.requirementId}</p>}
               <p>操作者标识 {event.actorId}</p>
               {event.taskId && <p>任务标识 {event.taskId}</p>}

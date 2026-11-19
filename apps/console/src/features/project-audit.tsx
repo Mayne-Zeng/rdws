@@ -4,6 +4,7 @@ import { Alert, Button, Loading } from 'tdesign-react';
 import {
   businessAuditLabels,
   type ProjectBusinessAuditPage,
+  type CrossProjectBusinessAuditPage,
 } from '@rdws/contracts';
 import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import { api } from '../lib/ui.tsx';
@@ -19,8 +20,9 @@ type Cursor = NonNullable<ProjectBusinessAuditPage['next']>;
 
 export function ProjectAudit({
   canReadAccessAudit,
+  crossProjectLoginId,
   ...scope
-}: Scope & { canReadAccessAudit: boolean }) {
+}: Scope & { canReadAccessAudit: boolean; crossProjectLoginId?: string }) {
   const [showAccess, setShowAccess] = useState(false);
   const access = canReadAccessAudit && showAccess;
   return (
@@ -30,7 +32,7 @@ export function ProjectAudit({
         <p className="muted">
           {access
             ? '查看当前项目的角色和管理员席位变更。'
-            : '检索当前项目内有权查看的需求业务事件。'}
+            : '检索有权查看的需求业务事件。'}
         </p>
       </div>
       {canReadAccessAudit && (
@@ -56,17 +58,25 @@ export function ProjectAudit({
       {access ? (
         <ProjectAccessAudit {...scope} />
       ) : (
-        <ProjectBusinessAudit {...scope} />
+        <ProjectBusinessAudit
+          {...scope}
+          crossProjectLoginId={crossProjectLoginId}
+        />
       )}
     </section>
   );
 }
 
-function ProjectBusinessAudit(scope: Scope) {
+function ProjectBusinessAudit({
+  crossProjectLoginId,
+  ...scope
+}: Scope & { crossProjectLoginId?: string }) {
   const [q, setQuery] = useState('');
   const [kind, setKind] = useState('');
   const [search, setSearch] = useState({ q: '', kind: '', revision: 0 });
   const [cursor, setCursor] = useState<Cursor>();
+  const [includeOtherProjects, setIncludeOtherProjects] = useState(false);
+  const crossLogin = includeOtherProjects ? crossProjectLoginId : undefined;
   return (
     <>
       <form
@@ -81,6 +91,22 @@ function ProjectBusinessAudit(scope: Scope) {
           }));
         }}
       >
+        {crossProjectLoginId && (
+          <div className="detail-edit-field">
+            <label htmlFor="project-audit-range">业务事件范围</label>
+            <select
+              id="project-audit-range"
+              value={crossLogin ? 'accessible' : 'current'}
+              onChange={(event) => {
+                setCursor(undefined);
+                setIncludeOtherProjects(event.target.value === 'accessible');
+              }}
+            >
+              <option value="current">当前项目</option>
+              <option value="accessible">全部有权项目</option>
+            </select>
+          </div>
+        )}
         <div className="detail-edit-field">
           <label htmlFor="project-audit-query">搜索需求或操作者</label>
           <input
@@ -111,7 +137,8 @@ function ProjectBusinessAudit(scope: Scope) {
         </Button>
       </form>
       <AuditResults
-        key={JSON.stringify([search, cursor])}
+        key={JSON.stringify([crossLogin, search, cursor])}
+        crossLogin={crossLogin}
         scope={scope}
         filters={search}
         cursor={cursor}
@@ -123,16 +150,19 @@ function ProjectBusinessAudit(scope: Scope) {
 
 function AuditResults({
   scope,
+  crossLogin,
   filters,
   cursor,
   onNavigate,
 }: {
   scope: Scope;
+  crossLogin?: string;
   filters: Filters;
   cursor?: Cursor;
   onNavigate: (next?: Cursor) => void;
 }) {
   const { projectId, userId, loginId } = scope;
+  const crossProject = crossLogin !== undefined;
   const parameters = new URLSearchParams();
   if (filters.q) parameters.set('q', filters.q);
   if (filters.kind) parameters.set('kind', filters.kind);
@@ -142,13 +172,23 @@ function AuditResults({
   }
   const query = parameters.toString();
   const audit = useQuery({
-    queryKey: ['project-audit', projectId, userId, loginId, query],
+    queryKey: ['project-audit', projectId, userId, loginId, crossLogin, query],
     queryFn: async ({ signal }) => {
-      const page = await api<ProjectBusinessAuditPage>(
-        `/api/projects/${encodeURIComponent(projectId)}/business-audit${query ? '?' + query : ''}`,
-        { signal, headers: { [OBSERVED_LOGIN_HEADER]: loginId } },
-      );
-      if (page.projectId !== projectId) throw new Error('审计范围已变化');
+      const path = crossProject
+        ? '/api/audit/business'
+        : `/api/projects/${encodeURIComponent(projectId)}/business-audit`;
+      const page = await api<
+        ProjectBusinessAuditPage | CrossProjectBusinessAuditPage
+      >(`${path}${query ? '?' + query : ''}`, {
+        signal,
+        headers: { [OBSERVED_LOGIN_HEADER]: crossLogin ?? loginId },
+      });
+      if (
+        crossProject
+          ? !('scope' in page) || page.scope !== 'accessible-projects'
+          : !('projectId' in page) || page.projectId !== projectId
+      )
+        throw new Error('审计范围已变化');
       return page;
     },
     refetchOnMount: 'always',
@@ -156,14 +196,21 @@ function AuditResults({
   if (audit.isError)
     return (
       <div className="inline-feedback">
-        <Alert theme="error" message="读取项目审计失败，请重试。" />
+        <Alert
+          theme="error"
+          message={
+            crossProject
+              ? '读取跨项目审计失败，请重试。'
+              : '读取项目审计失败，请重试。'
+          }
+        />
         <Button
           tag="button"
           variant="outline"
           loading={audit.isFetching}
           onClick={() => void audit.refetch()}
         >
-          重试读取项目审计
+          {crossProject ? '重试读取跨项目审计' : '重试读取项目审计'}
         </Button>
         {cursor && (
           <Button tag="button" variant="text" onClick={() => onNavigate()}>
@@ -172,7 +219,10 @@ function AuditResults({
         )}
       </div>
     );
-  const page = audit.isFetchedAfterMount ? audit.data : undefined;
+  const page =
+    audit.isFetchedAfterMount && (!crossProject || !audit.isFetching)
+      ? audit.data
+      : undefined;
   if (!page) return <Loading text="正在读取项目审计" />;
   const next = page.next;
   return (
@@ -188,7 +238,9 @@ function AuditResults({
             <Button
               tag="button"
               variant="outline"
-              onClick={() => downloadBusinessAudit(projectId, page.events)}
+              onClick={() =>
+                downloadBusinessAudit(projectId, page.events, crossProject)
+              }
             >
               导出当前页 CSV
             </Button>

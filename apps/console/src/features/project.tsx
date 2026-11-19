@@ -635,6 +635,12 @@ export function ProjectWorkspace({
                 userId={userId}
                 loginId={sessionId}
                 canReadAccessAudit={project.roles.includes('project_admin')}
+                crossProjectLoginId={
+                  nativeTab.login.userId === userId &&
+                  nativeTab.login.sessionId === sessionId
+                    ? nativeTab.login.sessionId
+                    : undefined
+                }
               />
             ) : importing ? (
               requirements.isPending ? (

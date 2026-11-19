@@ -1447,6 +1447,20 @@
   <p><code>pnpm test:e2e tests/e2e/project-administration.spec.ts</code> 通过 2 项。首轮定位把已有全局历史的同名状态一起选入，按本轮事件行限定后通过。覆盖实际变更详情、CSV 首字符防护与真实同账号换登录，旧页使用原观察登录收到 401，当前浏览器确认新登录后隐藏旧入口，刷新后按新登录正常读回。读取失败隐藏旧历史和导出，重试恢复。实查 390px 明暗截图。</p>
   <p>Node 24.20.0、Apple Git 2.54.0 与本机隔离 PostgreSQL 下，<code>pnpm test</code> 通过 48 文件、287 项，1 项既有平台条件跳过。<code>pnpm test:e2e --shard=1/2</code> 通过 24 项，<code>pnpm test:e2e --shard=2/2</code> 通过 23 项。类型、lint、格式、构建、基线和补丁完整性检查均通过。构建仍提示既有的主包体积。</p>
 
+  <h4 id="t17-cross-project-business-audit-plan-20261120">11.22.4 T17 跨项目业务检索</h4>
+  <p>Change / R3，基线 <code>cea0a49</code>。依据 T17、I2-AUTH、D7 及设计基线 audit 视图，审计中心在业务检索内增加「全部有权项目」范围，默认仍为当前项目。汇总调用者已分别获准的需求业务事件，展示原项目归属，可按现有条件搜索、分页、查看详情和导出。一次本地提交可回退，沿用原事件表，无迁移。</p>
+  <ol>
+    <li>浏览器以固定原观察登录调用 <code>GET /api/audit/business</code>。BFF 要求当前有效 Cookie 与原观察 ID 一致，采用 no-store，关闭自动 HEAD。范围从 PostgreSQL 当前权限和需求归属计算。按每条需求的真实项目做局部授权，当前项目管理员可读取本项目需求，其余人员必须同时具有相交的项目和需求参与角色。平台管理员标记不授予项目业务权限。没有符合范围的记录可返回空页，仅含授权结果。</li>
+    <li>共用项目业务审计的逐需求谓词、字面搜索、事件类型、最小投影及分页逻辑。跨项目读取附加本次查询快照中的需求项目 ID 和显示名，沿原需求投影。事件表只持久保存需求 ID。查询不接受项目、需求、身份或角色参数；搜索仅匹配获准需求标题和操作者名称。先过滤授权再取 25 条及同权限的预读一条，按 <code>(createdAt,id)</code> 全局降序，使用 PG 完整微秒 UTC 与最后可见事件 ID。保证跨项目候选 ID 与请求游标格式一致。</li>
+    <li>每次出站检查原账号、账号代次与原登录期限。对所有决定输出的 26 条事件按原 <code>(projectId,requirementId)</code> 去重，以同一 SQL 检查确切归属与当前逐需求读取权限。复用现有人员命令终态回执恢复，限本轮涉及的需求及当前账号。发送前同步核对期限、关停和原 epoch，并逐对应用项目和需求的撤权栅栏。任一失效拒绝整页。凭据、原业务载荷和被排除项目或事件数不进入响应。</li>
+    <li>项目驻留的审计中心实际使用原观察登录与当前会话同时匹配来呈现跨项目范围，保留现有项目权限视图。切项目、切范围或重登录重建结果。未完成新读取或失败时隐藏旧数据、详情和下载。跨项目结果与 CSV 显示项目名和项目 ID，复用现有事件详情及 CSV 公式防护。错误项目深链由既有项目授权错误接住。</li>
+    <li>验证包含两项目同需求名、角色交集与跨项目角色不合并、纯平台角色和未参与者、私有载荷、字面匹配、同微秒不同 ID、页界坏 ID、出站时仅预读项撤权、预读需求移到同样有权的项目、错观察登录、匿名与无权限空页。浏览器覆盖真实两项目、同名项目的来源 ID、CSV、同账号换登录、往返项目范围与迟到响应。运行聚焦 PG 与浏览器、整仓、E2E 两分片、静态构建和基线。</li>
+  </ol>
+
+  <p id="t17-cross-project-business-audit-evidence-20261120">R3 双面方案复审与独立交付复审均 APPROVE。方案复审明确项目归属取自本次查询快照，出站复核包含决定下一页的预读记录。<code>pnpm test tests/integration/requirement-details.test.ts -t 'searches authorized business events across projects'</code> 在接线路径前返回 404 而失败，接线后通过。<code>pnpm test tests/integration/requirement-details.test.ts</code> 通过 7 项，包含同名需求、跨项目角色按真实归属判定、原登录、微秒游标、换归属及仅预读项撤权。</p>
+  <p><code>pnpm test:e2e tests/e2e/project-audit.spec.ts tests/e2e/requirement-details.spec.ts</code> 通过 3 项。历史数据及同项目多事件曾造成聚焦定位匹配多行，按本轮数据和指定事件行收窄后通过。覆盖同名项目的来源 ID、CSV 公式防护、切回当前项目后丢弃迟到响应和同账号换登录时拒绝旧读。实查 390px 明暗布局。项目权限及单需求业务审计保留各自入口和范围。</p>
+  <p>Node 24.20.0、Apple Git 2.54.0 与本机隔离 PostgreSQL 下，<code>pnpm test</code> 通过 48 文件、288 项，1 项既有平台条件跳过。<code>pnpm test:e2e --shard=1/2</code> 通过 24 项，<code>pnpm test:e2e --shard=2/2</code> 通过 23 项。类型、lint、格式、构建、基线和补丁完整性检查均通过。</p>
+
   <h2 id="s0"><span class="num">0</span>评审结论</h2>
   <div class="verdict">
     <div class="vtitle">总体判定</div>

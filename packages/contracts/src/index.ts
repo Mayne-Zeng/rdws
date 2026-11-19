@@ -420,6 +420,14 @@ export interface ProjectBusinessAuditPage {
     requirementTitle: string;
   })[];
 }
+export interface CrossProjectBusinessAuditPage {
+  scope: 'accessible-projects';
+  next: ProjectBusinessAuditPage['next'];
+  events: (ProjectBusinessAuditPage['events'][number] & {
+    projectId: string;
+    projectName: string;
+  })[];
+}
 
 export const projectAccessAuditLabels = {
   'project.roles': '项目角色变更',

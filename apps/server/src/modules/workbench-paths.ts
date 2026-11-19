@@ -9,6 +9,7 @@ export const sessionTemplatePath =
 export const businessAuditPath = '/api/requirements/:id/business-audit';
 export const projectBusinessAuditPath =
   '/api/projects/:projectId/business-audit';
+export const crossProjectBusinessAuditPath = '/api/audit/business';
 export const projectAccessAuditPath = '/api/projects/:projectId/access-audit';
 export const platformAccountAuditPath =
   '/api/management/platform/account-audit';
@@ -38,6 +39,9 @@ export const isPassiveRequirementRead = (request: FastifyRequest) =>
 export const isProjectAuditRead = (request: FastifyRequest) =>
   request.method === 'GET' &&
   request.routeOptions.url === projectBusinessAuditPath;
+export const isCrossProjectAuditRead = (request: FastifyRequest) =>
+  request.method === 'GET' &&
+  request.routeOptions.url === crossProjectBusinessAuditPath;
 export const isProjectAccessAuditRead = (request: FastifyRequest) =>
   request.method === 'GET' &&
   request.routeOptions.url === projectAccessAuditPath;

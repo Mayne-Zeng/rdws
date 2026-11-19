@@ -8,6 +8,7 @@ import {
   type BusinessAuditEvent,
   type BusinessAuditPage,
   type ProjectBusinessAuditPage,
+  type CrossProjectBusinessAuditPage,
   type ProjectAccessAuditPage,
   type ProjectAccessAuditEvent,
   type PlatformAccountAuditPage,
@@ -18,6 +19,7 @@ import { and, desc, eq, inArray, lt, lte, or, sql } from 'drizzle-orm';
 import {
   businessAuditPath,
   projectBusinessAuditPath,
+  crossProjectBusinessAuditPath,
   projectAccessAuditPath,
   platformAccountAuditPath,
 } from './workbench-paths.ts';
@@ -101,6 +103,7 @@ export function registerRequirementAudit(
 ) {
   const { access, confirmAccess, db, verifyEditLogin } = workbench;
   registerProjectAudit(app, workbench);
+  registerCrossProjectAudit(app, workbench);
   registerProjectAccessAudit(app, workbench);
   registerPlatformAccountAudit(app, workbench);
   app.get<{ Params: { id: string } }>(
@@ -410,11 +413,11 @@ function registerPlatformAccountAudit(
   );
 }
 
-function readableRequirement(projectId: string, userId: string) {
+function readableRequirement(userId: string) {
   const { requirement, projectMember, requirementParticipant } = schema;
   return sql<boolean>`exists (
     select 1 from ${projectMember}
-    where ${projectMember.projectId} = ${projectId}
+    where ${projectMember.projectId} = ${requirement.projectId}
       and ${projectMember.userId} = ${userId}
       and (${projectMember.role} = 'project_admin' or exists (
         select 1 from ${requirementParticipant}
@@ -437,8 +440,7 @@ function registerProjectAudit(
   { assertResponse, db, projectRoles, requestDemandScope }: WorkbenchRuntime,
 ) {
   const outbound = new WeakMap<FastifyRequest, string[]>();
-  const { requirement, projectMember, session, user, requirementEvent } =
-    schema;
+  const { requirement, projectMember, session, user } = schema;
   app.get<{ Params: { projectId: string } }>(
     projectBusinessAuditPath,
     {
@@ -452,7 +454,7 @@ function registerProjectAudit(
           ? sql<number>`(select count(*)::integer from ${requirement}
               where ${requirement.projectId} = ${projectId}
                 and ${inArray(requirement.id, ids)}
-                and ${readableRequirement(projectId, userId)})`
+                and ${readableRequirement(userId)})`
           : sql<number>`0`;
         const [current] = await db
           .select({
@@ -490,62 +492,12 @@ function registerProjectAudit(
         !(await projectRoles(scope.userId, projectId)).length
       )
         fail(403, '无权访问项目审计');
-      const query = request.query;
-      if (
-        !isRecord(query) ||
-        !onlyKeys(query, ['q', 'kind', 'beforeAt', 'beforeId'])
-      )
-        fail(400, '项目审计参数不正确');
-      const { q, kind, beforeAt, beforeId } = query;
-      if (
-        q !== undefined &&
-        (typeof q !== 'string' || q.length > 80 || q.includes('\0'))
-      )
-        fail(400, '审计搜索文字不正确');
-      if (kind !== undefined && !isKnownValue(businessAuditLabels, kind))
-        fail(400, '审计事件类型不正确');
-      let position;
-      if (beforeAt !== undefined || beforeId !== undefined) {
-        if (
-          !isMicrosecondTimestamp(beforeAt) ||
-          typeof beforeId !== 'string' ||
-          !auditId.test(beforeId)
-        )
-          fail(400, '审计分页位置不正确');
-        position = sql`(${requirementEvent.createdAt}, ${requirementEvent.id}) <
-          (cast(${beforeAt} as timestamptz), ${beforeId})`;
-      }
-      const keyword = typeof q === 'string' ? q.trim() : '';
-      const rows = await db
-        .select({
-          event: requirementEvent,
-          actorName: user.name,
-          requirementTitle: requirement.title,
-          at: sql<string>`to_char(${requirementEvent.createdAt} at time zone 'UTC',
-            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
-        })
-        .from(requirementEvent)
-        .innerJoin(
-          requirement,
-          eq(requirement.id, requirementEvent.requirementId),
-        )
-        .leftJoin(user, eq(user.id, requirementEvent.actorId))
-        .where(
-          and(
-            eq(requirement.projectId, projectId),
-            readableRequirement(projectId, scope.userId),
-            inArray(requirementEvent.kind, kinds),
-            inArray(requirementEvent.source, ['web', 'migration']),
-            kind === undefined ? undefined : eq(requirementEvent.kind, kind),
-            keyword
-              ? sql`(strpos(lower(${requirement.title}), lower(${keyword})) > 0
-            or strpos(lower(${user.name}), lower(${keyword})) > 0)`
-              : undefined,
-            position,
-          ),
-        )
-        .orderBy(desc(requirementEvent.createdAt), desc(requirementEvent.id))
-        .limit(pageSize + 1);
+      const rows = await readBusinessEvents(
+        db,
+        scope.userId,
+        request.query,
+        projectId,
+      );
       const visible = rows.slice(0, pageSize);
       const tail = visible.at(-1);
       outbound.set(request, [
@@ -565,4 +517,165 @@ function registerProjectAudit(
       };
     },
   );
+}
+
+function registerCrossProjectAudit(
+  app: FastifyInstance,
+  workbench: WorkbenchRuntime,
+) {
+  const { db, actor, verifyEditLogin, assertResponse, recoverPersonnelFences } =
+    workbench;
+  const { requirement, session, user } = schema;
+  const outbound = new WeakMap<
+    FastifyRequest,
+    {
+      userId: string;
+      authSessionId: string;
+      epoch: number;
+      demands: { requirementId: string; projectId: string }[];
+    }
+  >();
+  app.get(
+    crossProjectBusinessAuditPath,
+    {
+      exposeHeadRoute: false,
+      onSend: async (request, reply, payload) => {
+        const scope = outbound.get(request);
+        if (reply.statusCode >= 400 || !scope) return payload;
+        for (const demand of scope.demands)
+          await recoverPersonnelFences(
+            scope.userId,
+            demand.projectId,
+            demand.requirementId,
+          );
+        const pairs = scope.demands.map(({ projectId, requirementId }) =>
+          and(
+            eq(requirement.projectId, projectId),
+            eq(requirement.id, requirementId),
+          ),
+        );
+        const visible = pairs.length
+          ? sql<number>`(select count(*)::integer from ${requirement}
+            where (${or(...pairs)}) and ${readableRequirement(scope.userId)})`
+          : sql<number>`0`;
+        const [current] = await db
+          .select({ expiresAt: session.expiresAt, visible })
+          .from(session)
+          .innerJoin(user, eq(user.id, session.userId))
+          .where(
+            and(
+              eq(session.id, scope.authSessionId),
+              eq(user.id, scope.userId),
+              eq(user.active, true),
+              eq(user.authEpoch, session.authEpoch),
+            ),
+          );
+        if (!current || current.expiresAt.getTime() <= Date.now())
+          fail(401, '登录已失效，请重新登录');
+        if (current.visible !== scope.demands.length)
+          fail(403, '当前审计范围已变化，请重新读取');
+        assertResponse(scope);
+        for (const demand of scope.demands)
+          assertResponse({ ...scope, ...demand });
+        return payload;
+      },
+    },
+    async (request): Promise<CrossProjectBusinessAuditPage> => {
+      const epoch = workbench.authorizationEpoch;
+      const who = await actor(request.headers);
+      verifyEditLogin(request, who.authSessionId, true);
+      const scope = { ...who, epoch };
+      assertResponse(scope);
+      const rows = await readBusinessEvents(db, who.userId, request.query);
+      const visible = rows.slice(0, pageSize);
+      const tail = visible.at(-1);
+      const demands = new Map(
+        rows.map(({ event, projectId }) => [
+          event.requirementId,
+          { projectId, requirementId: event.requirementId },
+        ]),
+      );
+      outbound.set(request, { ...scope, demands: [...demands.values()] });
+      return {
+        scope: 'accessible-projects',
+        next:
+          rows.length > pageSize && tail
+            ? { at: tail.at, id: tail.event.id }
+            : null,
+        events: visible.map((row) => ({
+          ...auditEvent(row),
+          requirementId: row.event.requirementId,
+          requirementTitle: row.requirementTitle,
+          projectId: row.projectId,
+          projectName: row.projectName,
+        })),
+      };
+    },
+  );
+}
+
+async function readBusinessEvents(
+  db: WorkbenchRuntime['db'],
+  userId: string,
+  query: unknown,
+  projectId?: string,
+) {
+  const { project, requirement, requirementEvent, user } = schema;
+  if (
+    !isRecord(query) ||
+    !onlyKeys(query, ['q', 'kind', 'beforeAt', 'beforeId'])
+  )
+    fail(400, '项目审计参数不正确');
+  const { q, kind, beforeAt, beforeId } = query;
+  if (
+    q !== undefined &&
+    (typeof q !== 'string' || q.length > 80 || q.includes('\0'))
+  )
+    fail(400, '审计搜索文字不正确');
+  if (kind !== undefined && !isKnownValue(businessAuditLabels, kind))
+    fail(400, '审计事件类型不正确');
+  let position;
+  if (beforeAt !== undefined || beforeId !== undefined) {
+    if (
+      !isMicrosecondTimestamp(beforeAt) ||
+      typeof beforeId !== 'string' ||
+      !auditId.test(beforeId)
+    )
+      fail(400, '审计分页位置不正确');
+    position = sql`(${requirementEvent.createdAt}, ${requirementEvent.id}) <
+      (cast(${beforeAt} as timestamptz), ${beforeId})`;
+  }
+  const keyword = typeof q === 'string' ? q.trim() : '';
+  return db
+    .select({
+      event: requirementEvent,
+      actorName: user.name,
+      requirementTitle: requirement.title,
+      projectId: requirement.projectId,
+      projectName: project.name,
+      at: sql<string>`to_char(${requirementEvent.createdAt} at time zone 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+    })
+    .from(requirementEvent)
+    .innerJoin(requirement, eq(requirement.id, requirementEvent.requirementId))
+    .innerJoin(project, eq(project.id, requirement.projectId))
+    .leftJoin(user, eq(user.id, requirementEvent.actorId))
+    .where(
+      and(
+        projectId === undefined
+          ? sql`${requirementEvent.id} ~ ${auditId.source}`
+          : eq(requirement.projectId, projectId),
+        readableRequirement(userId),
+        inArray(requirementEvent.kind, kinds),
+        inArray(requirementEvent.source, ['web', 'migration']),
+        kind === undefined ? undefined : eq(requirementEvent.kind, kind),
+        keyword
+          ? sql`(strpos(lower(${requirement.title}), lower(${keyword})) > 0
+        or strpos(lower(${user.name}), lower(${keyword})) > 0)`
+          : undefined,
+        position,
+      ),
+    )
+    .orderBy(desc(requirementEvent.createdAt), desc(requirementEvent.id))
+    .limit(pageSize + 1);
 }

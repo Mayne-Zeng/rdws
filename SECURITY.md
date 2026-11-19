@@ -62,6 +62,8 @@ Native 浏览器传输随页面打开时的登录固定。BFF 在准备工作区
 
 T17 的应用角色仅获准执行指定的只读函数，按有效登录、真实项目、需求和会话关联读取已提交的锚点摘要。函数仅返回不透明标识、物理截止、SHA-256 和记录时间。原项目及会话是持久记录标识，需求权限以当前会话绑定为准。独立校验仍由专用身份读取可信原件完成。[T17 工程方案](docs/02-directory-and-engineering-design.html#t17-session-anchor-projection-plan-20261120)
 
+浏览器按原观察登录读取会话锚点。BFF 根据实际 Cookie 绑定身份，出站前再次校验有效期、项目和需求读权、会话归属及撤权代次。工作台的锚点模式读取已提交摘要，当前原件的核验与文件访问归独立校验流程。[锚点联查权限](docs/02-directory-and-engineering-design.html#t17-session-anchor-readback-plan-20261120)
+
 自动截止只处理独立运维方提供的停稳原件或可信不可变快照。它在同一只读文件描述符上核对 Native 文件头、物理边界、摘要和可观察的文件变化。格式损坏、读失败或超出处理预算时停止记录。恢复核对保留原快照和原字节截止。 [T16 自动截止方案](docs/02-directory-and-engineering-design.html#t16-automatic-cutoff-plan-20261119)
 
 ## 需求模板绑定

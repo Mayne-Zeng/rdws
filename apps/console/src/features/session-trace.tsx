@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Link, useSearchParams } from 'react-router';
 import { Alert, Button, Loading } from 'tdesign-react';
 import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import { api } from '../lib/ui.tsx';
 import { SessionHistory } from './session-history.tsx';
+import { SessionAnchors } from './session-anchors.tsx';
 import { WORKBENCH_POLL_INTERVAL_MS } from '../lib/query.ts';
 
 export function SessionTrace({
@@ -21,6 +23,14 @@ export function SessionTrace({
 }) {
   const [selected, setSelected] = useState('');
   const [accessLost, setAccessLost] = useState(false);
+  const [route] = useSearchParams();
+  const anchorsOnly = route.get('panel') === 'anchors';
+  const alternate = new URLSearchParams({
+    project: projectId,
+    requirement: requirementId,
+    view: 'trace',
+  });
+  if (!anchorsOnly) alternate.set('panel', 'anchors');
   const loginChanged =
     userId !== observedLogin.userId || sessionId !== observedLogin.sessionId;
   const directory = useQuery({
@@ -47,10 +57,19 @@ export function SessionTrace({
     const refreshed = await directory.refetch();
     if (refreshed.isSuccess) setAccessLost(false);
   }
+  function loseAccess() {
+    setSelected('');
+    setAccessLost(true);
+  }
   return (
     <section className="session-trace" aria-labelledby="trace-heading">
       <div className="page-heading core-page-heading">
         <h1 id="trace-heading">会话轨迹</h1>
+        {!loginChanged && (
+          <Link to={`/?${alternate}`}>
+            {anchorsOnly ? '打开逻辑轨迹' : '查看物理锚点'}
+          </Link>
+        )}
       </div>
       {loginChanged ? (
         <div className="inline-feedback" role="alert">
@@ -99,19 +118,27 @@ export function SessionTrace({
               ))}
             </select>
           </div>
-          {session && (
-            <SessionHistory
-              key={session.id}
-              id={session.id}
-              requirementId={requirementId}
-              observedLoginId={observedLogin.sessionId}
-              mode="trace"
-              onAccessLost={() => {
-                setSelected('');
-                setAccessLost(true);
-              }}
-            />
-          )}
+          {session &&
+            (anchorsOnly ? (
+              <SessionAnchors
+                key={session.id}
+                projectId={projectId}
+                requirementId={requirementId}
+                sessionId={session.id}
+                userId={userId}
+                loginId={observedLogin.sessionId}
+                onAccessLost={loseAccess}
+              />
+            ) : (
+              <SessionHistory
+                key={session.id}
+                id={session.id}
+                requirementId={requirementId}
+                observedLoginId={observedLogin.sessionId}
+                mode="trace"
+                onAccessLost={loseAccess}
+              />
+            ))}
         </>
       ) : (
         <p className="muted">当前需求暂无会话。</p>

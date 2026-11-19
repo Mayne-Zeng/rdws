@@ -1694,6 +1694,7 @@ export function createBusiness(db: Database) {
     projectId: string,
     required: RequirementAuthority,
     reader: Database | Transaction = db,
+    nativeSessionId?: string,
   ) {
     const {
       session,
@@ -1701,11 +1702,18 @@ export function createBusiness(db: Database) {
       requirement,
       projectMember,
       requirementParticipant,
+      nativeSession,
     } = schema;
     const [current] = await reader
       .select({
         demand: requirement.id,
         expiresAt: session.expiresAt,
+        sessionMatches:
+          nativeSessionId === undefined
+            ? sql<boolean>`true`
+            : sql<boolean>`exists (select 1 from ${nativeSession}
+            where ${nativeSession.id} = ${nativeSessionId}
+              and ${nativeSession.requirementId} = ${requirement.id})`,
         admin: sql<boolean>`exists (select 1 from ${projectMember}
           where ${projectMember.projectId} = ${projectId}
             and ${projectMember.userId} = ${who.userId}
@@ -1736,6 +1744,7 @@ export function createBusiness(db: Database) {
       businessError(401, '登录已失效，请重新登录');
     if (
       !current.demand ||
+      !current.sessionMatches ||
       (!current.admin && (required === 'project-admin' || !current.participant))
     )
       businessError(403, '无权执行当前需求操作');

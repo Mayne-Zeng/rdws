@@ -1475,6 +1475,19 @@
   <p><code>RDWS_TEST_ANCHOR_READONLY=1 pnpm test tests/integration/trace-anchor.test.ts</code> 通过 3 项。锁定 Native 停稳原件由独立 Linux 非 root 只读挂载校验，应用读到相同真实字节截止、SHA-256 和原微秒时间。覆盖未提交行、项目／需求／会话与登录错配、账号代次、停用与过期、参与权与项目管理员、跨项目重绑和相同微秒与截止的 28 条分页。重复迁移及留卷重启保留只读投影、历史坐标和独立写者的已有边界。此批交付数据库能力，工作台入口继续按上方方案推进。</p>
   <p>Node 24.20.0 和 Apple Git 2.54.0 下，<code>pnpm test</code> 通过 48 文件、288 项，1 项既有平台条件跳过。类型、lint、格式、构建、基线及补丁完整性检查均通过。迁移在本批夹具的独立容器验收。</p>
 
+  <h4 id="t17-session-anchor-readback-plan-20261120">11.22.6 T17 物理锚点工作台联查</h4>
+  <p>Change / R3，基线 <code>192c811</code>。实施 §11.22.5 后续 BFF 和浏览器步骤。通过需求及会话的原读权展示已经独立提交的锚点。回退本批工作台和服务端接线即可关闭入口，数据库投影与既存记录继续按 T16 管理。</p>
+  <ol>
+    <li>新增 <code>GET /api/requirements/:id/sessions/:sessionId/anchors</code>。沿用被动路由的 no-store 及人员命令恢复，强制原观察登录，关闭自动 HEAD。由原请求 Cookie 派生账号和登录并冻结 epoch。将指定 Native 会话与确切需求、项目绑定在既有需求授权的一次 PostgreSQL 查询中，执行前和出站各复核一次。出站再同步验证原登录期限、原 epoch 和撤权。现有调用保持原授权条件。</li>
+    <li>BFF 调用 0013 只读函数，参数取已验证的真实项目、需求、会话、原账号和原登录。容量固定为每页 25 条，使用第 26 条判断续页，以 PG 完整微秒和稳定不透明 ID 组成游标。仅返回确切范围及已提交摘要字段。未迁移或功能授权尚不可用时返回不可用，普通权限失败沿用原错误。锚点路径无需准备 Native 工作区或访问原始文件。</li>
+    <li>业务审计事件详情按事件的实际项目及需求导航至 <code>view=trace&amp;panel=anchors</code>，事件无会话关联时由用户从当前有权会话选择。普通逻辑轨迹默认路径延续，用户可在两个模式间切换。锚点模式复用只读会话目录，不请求历史。摘要明示已记录，显示物理截止、SHA-256、记录时间和标识，支持分页及当前页导出。选会话、换需求、换登录和续页按原范围重置，侧栏换需求时保留锚点模式。旧请求可取消，加载及失败隐藏旧结果和导出。失权沿现有会话目录重验。</li>
+    <li>保留 0013 的真实 Native 与独立 PostgreSQL 证据。在已迁移的本机共享测试库验收确切读权、匿名／错登录、平台管理员无新业务权、无锚点、分页、出站权限与会话归属竞态、零 Native 启动。浏览器验收从跨项目和需求审计真实链接进入、选择会话、范围切换、迟到响应、原登录更替、CSV 与 390px 明暗换行。跑定点、整仓、两组浏览器及静态构建和基线。正式环境验收仍独立进行。</li>
+  </ol>
+
+  <p id="t17-session-anchor-readback-evidence-20261120">R3 双面方案复审与独立交付复审均 APPROVE。方案明确出站 SQL 后同步核对原登录有效期、本地撤权代次和请求 scope，侧栏切换需求延续锚点模式。<code>RDWS_MODE=test pnpm db:migrate</code> 在本机 <code>rdws_test</code> 应用已交付的 0013。<code>pnpm test tests/integration/session-anchors.test.ts</code> 在新路径接入前返回 404，接入后通过。聚焦 <code>pnpm test tests/integration/session-anchors.test.ts tests/integration/requirement-details.test.ts</code> 通过 8 项，覆盖同微秒分页、空页、错头、错会话、平台角色、先于出站的过期、撤权及重绑，以及 Native Host 启动调用数为零。</p>
+  <p><code>pnpm test:e2e tests/e2e/session-trace.spec.ts tests/e2e/project-audit.spec.ts tests/e2e/requirement-details.spec.ts</code> 通过 5 项。首轮合成资料事件缺少 T11 契约的变更对象，造成档案加载失败，补齐夹具后通过。工作台从跨项目和需求业务审计走真实路由，读取本机隔离测试库里的合成摘要记录，换会话、换需求、旧登录、读取失败及 CSV 均有反例或对照。明暗 390px 截图验证哈希换行。浏览器锚点路线的逻辑历史、Native API 与 Native WebSocket 请求均为零。§11.22.5 保留真实 Native 原件与独立校验证据，正式环境核验另行记录。</p>
+  <p>Node 24.20.0 和 Apple Git 2.54.0 下，<code>pnpm test</code> 通过 49 文件、289 项，1 项既有平台条件跳过。<code>pnpm test:e2e --shard=1/2</code> 与 <code>pnpm test:e2e --shard=2/2</code> 各通过 24 项。类型、lint、格式、构建、基线与补丁完整性检查均通过。</p>
+
   <h2 id="s0"><span class="num">0</span>评审结论</h2>
   <div class="verdict">
     <div class="vtitle">总体判定</div>

@@ -47,6 +47,17 @@ export interface SessionHistoryPage {
     outcome?: string;
   }[];
 }
+export interface SessionAnchorCursor {
+  id: string;
+  recordedAt: string;
+}
+export interface SessionAnchorPage {
+  projectId: string;
+  requirementId: string;
+  sessionId: string;
+  items: (SessionAnchorCursor & { throughByte: number; sha256: string })[];
+  next: SessionAnchorCursor | null;
+}
 export interface RequirementWorktree {
   repositoryId: string;
   baseCommit: string;

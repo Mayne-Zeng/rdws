@@ -4,6 +4,8 @@ export const personnelPath = '/api/requirements/:id/personnel';
 export const sessionsPath = '/api/requirements/:id/sessions';
 export const sessionHistoryPath =
   '/api/requirements/:id/sessions/:sessionId/history';
+export const sessionAnchorsPath =
+  '/api/requirements/:id/sessions/:sessionId/anchors';
 export const sessionTemplatePath =
   '/api/requirements/:id/sessions/:sessionId/capability-template';
 export const businessAuditPath = '/api/requirements/:id/business-audit';
@@ -34,6 +36,7 @@ export const isPassiveRequirementRead = (request: FastifyRequest) =>
   request.method === 'GET' &&
   (request.routeOptions.url === sessionsPath ||
     request.routeOptions.url === sessionHistoryPath ||
+    request.routeOptions.url === sessionAnchorsPath ||
     request.routeOptions.url === sessionTemplatePath ||
     request.routeOptions.url === businessAuditPath);
 export const isProjectAuditRead = (request: FastifyRequest) =>

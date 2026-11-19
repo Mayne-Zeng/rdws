@@ -156,6 +156,9 @@ export function ProjectWorkspace({
       project: project.id,
       view: next,
       ...(id ? { requirement: id } : {}),
+      ...(next === 'trace' &&
+        view === 'trace' &&
+        search.get('panel') === 'anchors' && { panel: 'anchors' }),
     });
     setMobile(false);
   }

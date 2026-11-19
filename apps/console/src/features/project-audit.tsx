@@ -229,7 +229,10 @@ function AuditResults({
     <div className="document-section info-panel context-tasks">
       <div className="context-empty">
         {page.events.length ? (
-          <BusinessAuditEvents events={page.events} />
+          <BusinessAuditEvents
+            events={page.events}
+            traceScope={{ projectId }}
+          />
         ) : (
           <p className="muted">没有匹配的业务事件。</p>
         )}

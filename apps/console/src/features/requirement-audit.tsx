@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router';
 import { Alert, Button, Loading } from 'tdesign-react';
 import {
   businessAuditLabels,
@@ -191,7 +192,10 @@ function AuditPage({
   return (
     <>
       {page.events.length ? (
-        <BusinessAuditEvents events={page.events} />
+        <BusinessAuditEvents
+          events={page.events}
+          traceScope={{ projectId, requirementId: id }}
+        />
       ) : (
         <p className="muted">此页没有业务审计事件。</p>
       )}
@@ -236,6 +240,7 @@ function AuditPage({
 
 export function BusinessAuditEvents({
   events,
+  traceScope,
 }: {
   events: (BusinessAuditEvent & {
     requirementId?: string;
@@ -243,57 +248,71 @@ export function BusinessAuditEvents({
     projectId?: string;
     projectName?: string;
   })[];
+  traceScope: { projectId: string; requirementId?: string };
 }) {
   return (
     <ol className="history-events" aria-label="业务审计事件">
-      {events.map((event) => (
-        <li className="history-event" key={event.id}>
-          <details>
-            <summary>
-              <strong>{businessAuditLabels[event.kind]}</strong> ·{' '}
-              {event.projectName && <>{event.projectName} · </>}
-              {event.requirementTitle && <>{event.requirementTitle} · </>}
-              {actorName(event)} ·{' '}
-              <time dateTime={event.createdAt}>
-                {new Date(event.createdAt).toLocaleString('zh-CN')}
-              </time>
-            </summary>
-            <div className="trace-event-detail">
-              <p>
-                来源 {sourceName(event)} · 需求版本 {event.version}
-              </p>
-              <p>事件标识 {event.id}</p>
-              {event.projectId && <p>项目标识 {event.projectId}</p>}
-              {event.requirementId && <p>需求标识 {event.requirementId}</p>}
-              <p>操作者标识 {event.actorId}</p>
-              {event.taskId && <p>任务标识 {event.taskId}</p>}
-              {event.stage && (
+      {events.map((event) => {
+        const project = event.projectId ?? traceScope.projectId;
+        const requirement = event.requirementId ?? traceScope.requirementId;
+        return (
+          <li className="history-event" key={event.id}>
+            <details>
+              <summary>
+                <strong>{businessAuditLabels[event.kind]}</strong> ·{' '}
+                {event.projectName && <>{event.projectName} · </>}
+                {event.requirementTitle && <>{event.requirementTitle} · </>}
+                {actorName(event)} ·{' '}
+                <time dateTime={event.createdAt}>
+                  {new Date(event.createdAt).toLocaleString('zh-CN')}
+                </time>
+              </summary>
+              <div className="trace-event-detail">
                 <p>
-                  阶段 {stageLabels[event.stage.before]} →{' '}
-                  {stageLabels[event.stage.after]}
+                  来源 {sourceName(event)} · 需求版本 {event.version}
                 </p>
-              )}
-              {event.taskStatus && (
-                <p>
-                  任务状态{' '}
-                  {event.taskStatus.before
-                    ? taskStatusLabels[event.taskStatus.before] + ' → '
-                    : ''}
-                  {taskStatusLabels[event.taskStatus.after]}
-                </p>
-              )}
-              {!!event.changedFields?.length && (
-                <p>
-                  变更字段{' '}
-                  {event.changedFields
-                    .map((field) => detailFieldLabels[field])
-                    .join('、')}
-                </p>
-              )}
-            </div>
-          </details>
-        </li>
-      ))}
+                <p>事件标识 {event.id}</p>
+                {event.projectId && <p>项目标识 {event.projectId}</p>}
+                {event.requirementId && <p>需求标识 {event.requirementId}</p>}
+                <p>操作者标识 {event.actorId}</p>
+                {event.taskId && <p>任务标识 {event.taskId}</p>}
+                {event.stage && (
+                  <p>
+                    阶段 {stageLabels[event.stage.before]} →{' '}
+                    {stageLabels[event.stage.after]}
+                  </p>
+                )}
+                {event.taskStatus && (
+                  <p>
+                    任务状态{' '}
+                    {event.taskStatus.before
+                      ? taskStatusLabels[event.taskStatus.before] + ' → '
+                      : ''}
+                    {taskStatusLabels[event.taskStatus.after]}
+                  </p>
+                )}
+                {!!event.changedFields?.length && (
+                  <p>
+                    变更字段{' '}
+                    {event.changedFields
+                      .map((field) => detailFieldLabels[field])
+                      .join('、')}
+                  </p>
+                )}
+                {requirement && (
+                  <p>
+                    <Link
+                      to={`/?${new URLSearchParams({ project, requirement, view: 'trace', panel: 'anchors' })}`}
+                    >
+                      查看物理锚点
+                    </Link>
+                  </p>
+                )}
+              </div>
+            </details>
+          </li>
+        );
+      })}
     </ol>
   );
 }

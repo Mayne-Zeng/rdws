@@ -4,10 +4,11 @@ import { join } from 'node:path';
 import {
   SessionCreate,
   SessionFork,
+  type SessionAnchorPage,
   type SessionTemplateStatus,
 } from '@rdws/contracts';
 import { schema } from '@rdws/db';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { sessionPage } from '@rdws/dsh/sessions';
 import { isDemandPreset } from '@rdws/dsh/web';
 import { isRecord, onlyKeys } from '@rdws/dsh/access';
@@ -16,8 +17,13 @@ import {
   sessionHistoryPath,
   sessionForkPath,
   sessionTemplatePath,
+  sessionAnchorsPath,
 } from './workbench-paths.ts';
 import { fail, type WorkbenchRuntime } from './workbench-runtime.ts';
+import { isMicrosecondTimestamp } from './workbench-audit.ts';
+
+const anchorPageSize = 25;
+const anchorId = /^[a-f0-9]{64}$/;
 
 export function registerSessions(
   app: FastifyInstance,
@@ -34,6 +40,7 @@ export function registerSessions(
     prepared,
     projects,
     ready,
+    requestDemandScope,
     revoke,
     stale,
     worktreeReady,
@@ -54,6 +61,71 @@ export function registerSessions(
       })),
     };
   });
+
+  app.get<{ Params: { id: string; sessionId: string } }>(
+    sessionAnchorsPath,
+    { exposeHeadRoute: false },
+    async (request): Promise<SessionAnchorPage> => {
+      const scope = requestDemandScope(request);
+      const { id, sessionId } = request.params;
+      if (scope.requirementId !== id) fail(404, '需求不存在');
+      await business.authorizeRequirement(
+        scope,
+        id,
+        scope.projectId,
+        'reader',
+        undefined,
+        sessionId,
+      );
+      const query = request.query;
+      if (!isRecord(query) || !onlyKeys(query, ['beforeAt', 'beforeId']))
+        fail(400, '锚点读取参数不正确');
+      const { beforeAt, beforeId } = query;
+      if (
+        (beforeAt !== undefined || beforeId !== undefined) &&
+        (!isMicrosecondTimestamp(beforeAt) ||
+          typeof beforeId !== 'string' ||
+          !anchorId.test(beforeId))
+      )
+        fail(400, '锚点分页位置不正确');
+      const page = await db
+        .execute<{
+          anchor_id: string;
+          recorded_at: string;
+          through_byte: string;
+          sha256: string;
+        }>(
+          sql`select anchor_id, recorded_at, through_byte, sha256
+        from public.read_session_log_anchors(${scope.projectId}, ${id}, ${sessionId},
+          ${scope.userId}, ${scope.authSessionId}, ${beforeAt ?? null}::timestamptz, ${beforeId ?? null})
+        order by recorded_at collate "C" desc, anchor_id collate "C" desc`,
+        )
+        .catch((error: unknown) => {
+          const failure = error as { code?: string; cause?: { code?: string } };
+          const code = failure.cause?.code ?? failure.code;
+          if (code === '42883' || code === '42501')
+            fail(503, '锚点读取暂不可用');
+          throw error;
+        });
+      const items = page.rows.slice(0, anchorPageSize).map((row) => ({
+        id: row.anchor_id,
+        recordedAt: row.recorded_at,
+        throughByte: Number(row.through_byte),
+        sha256: row.sha256,
+      }));
+      const tail = items.at(-1);
+      return {
+        projectId: scope.projectId,
+        requirementId: id,
+        sessionId,
+        items,
+        next:
+          tail && page.rows.length > anchorPageSize
+            ? { id: tail.id, recordedAt: tail.recordedAt }
+            : null,
+      };
+    },
+  );
 
   app.get<{ Params: { id: string; sessionId: string } }>(
     sessionTemplatePath,

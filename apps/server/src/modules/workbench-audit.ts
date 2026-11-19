@@ -428,7 +428,7 @@ function readableRequirement(userId: string) {
   )`;
 }
 
-function isMicrosecondTimestamp(value: unknown): value is string {
+export function isMicrosecondTimestamp(value: unknown): value is string {
   if (typeof value !== 'string' || !microsecondUtc.test(value)) return false;
   const millis = value.slice(0, 23) + 'Z';
   const date = new Date(millis);

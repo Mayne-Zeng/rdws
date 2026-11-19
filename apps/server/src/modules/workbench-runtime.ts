@@ -28,6 +28,7 @@ import {
   isImportRequest,
   isTemplateBindingRequest,
   isPassiveRequirementRead,
+  sessionAnchorsPath,
   isProjectAuditRead,
   isCrossProjectAuditRead,
   isProjectAccessAuditRead,
@@ -657,6 +658,7 @@ export function createWorkbenchRuntime(
         requirementId: string;
         projectId: string;
         authority: RequirementAuthority;
+        nativeSessionId?: string;
       };
     }
   >();
@@ -707,14 +709,16 @@ export function createWorkbenchRuntime(
     if (path !== '/api/projects' && !project && !demand) return;
     const templateBinding = isTemplateBindingRequest(request);
     const passiveRead = isPassiveRequirementRead(request);
+    const anchorRead =
+      passiveRead && request.routeOptions.url === sessionAnchorsPath;
     const projectAudit = isProjectAuditRead(request);
     const accessAudit = isProjectAccessAuditRead(request);
     const epoch = authorizationEpoch;
     const who = await actor(request.headers);
     if (templateBinding) verifyEditLogin(request, who.authSessionId);
-    if (projectAudit || accessAudit)
+    if (projectAudit || accessAudit || anchorRead)
       verifyEditLogin(request, who.authSessionId, true);
-    if (passiveRead || isSessionWrite(request))
+    if ((passiveRead && !anchorRead) || isSessionWrite(request))
       verifyEditLogin(request, who.authSessionId, false);
     if (personnel) verifyEditLogin(request, who.authSessionId, true);
     const requirementId = demand ? decodeURIComponent(demand[1]!) : undefined;
@@ -753,7 +757,15 @@ export function createWorkbenchRuntime(
       passiveRead && projectId && requirementId
         ? {
             ...scope,
-            demandAccess: { projectId, requirementId, authority: 'reader' },
+            demandAccess: {
+              projectId,
+              requirementId,
+              authority: 'reader',
+              ...(anchorRead && {
+                nativeSessionId: (request.params as { sessionId: string })
+                  .sessionId,
+              }),
+            },
           }
         : scope,
     );
@@ -774,13 +786,23 @@ export function createWorkbenchRuntime(
           scope.importReply,
         );
       if (scope.demandAccess) {
-        const { requirementId, projectId, authority } = scope.demandAccess;
-        await business.authorizeRequirement(
+        const { requirementId, projectId, authority, nativeSessionId } =
+          scope.demandAccess;
+        const current = await business.authorizeRequirement(
           scope,
           requirementId,
           projectId,
           authority,
+          undefined,
+          nativeSessionId,
         );
+        if (
+          nativeSessionId !== undefined &&
+          (current.expiresAt.getTime() <= Date.now() ||
+            epochFor(scope.authSessionId, requirementId, projectId) >
+              scope.epoch)
+        )
+          fail(401, '授权已变化');
       }
       if (scope.platformOnly) {
         const current = await currentAccount(

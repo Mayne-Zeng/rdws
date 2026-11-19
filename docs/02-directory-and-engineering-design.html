@@ -336,7 +336,8 @@
     <tr><td>日常实例与视觉</td><td>5173 / 3001 本轮启动；真实新建、回复、本人派生、目录回放通过。1440 / 1024 / 820 / 390px 明暗截图与日常桌面 / 390px 复核无页面横向溢出；新增禁用按钮保持 button 语义，键盘可打开回放。最终 Demo 一致性仍待用户确认。</td></tr>
   </table>
   <p>最终真实报告为运行根 <code>state/exports/session-lifecycle-web.json</code>、<code>session-lifecycle-cold.json</code>、<code>daily-session-lifecycle.json</code>，均 mode 600；原生轨迹、合成验收需求与截图保留。源码中的测试及 <code>tests/helpers/auth-session.ts</code> 可在 clean checkout 取得，后者仅通过既有认证服务为测试准备真人登录会话，不改变生产登录限流。第一次全量 live 因旧测试把预检 HTTP 403 当 JSON 而失败，worker 重启的重复登录又触发限流；测试现区分 HTTP / RPC 拒绝，并让新增 setup 复用认证 fixture，最终全量已通过，未降低权限断言。</p>
-  <p>工具检查的偏差：Impeccable 机器缓存不纳入 Prettier，共享配置仍受格式检查；两份历史 HTML 的 CSS 与 HEAD 一致，页眉 / 结论 / 警示边框按文件记录 side-tab 例外，未关闭其他规则。最终检测返回空数组。历史文档 390px 宽度 630px 的既有布局限制保留；产品页面窄屏验证通过。既有依赖审计条目未关闭，本轮未重新审计；生产安全、代码写执行 / 单写交接、sources、GitLab 与 Linux 验收均未纳入本切片。<a href="05-development-backlog.md">T02</a> 待用户侧验收；内部验收结束时尚未提交或推送，后续本地交付及修订见 T02 记录和 Git 功能提交。</p>
+  <p>工具检查的偏差：Impeccable 机器缓存不纳入 Prettier，共享配置仍受格式检查；两份历史 HTML 的 CSS 与 HEAD 一致，页眉 / 结论 / 警示边框按文件记录 side-tab 例外，未关闭其他规则。最终检测返回空数组。历史文档 390px 宽度 630px 的既有布局限制保留；产品页面窄屏验证通过。既有依赖审计条目未关闭，本轮未重新审计；生产安全、代码写执行 / 单写交接、sources、GitLab 与 Linux 验收均未纳入本切片。内部验收结束时尚未提交，后续本地交付及修订见<a href="05-development-backlog.md">T02 记录</a>。</p>
+  <p>2026-11-20 用户确认多会话走查通过，T02 已满足用户侧验收，见<a href="00-decision-ledger.html#t02-user-acceptance-20261120">决策台账</a>。T07 依赖的 T02 验收与 T06 macOS 隔离验证均已满足。</p>
   <p>最终读回：两份 HTML 的 17 / 20 个 ID 均唯一，各 20 个链接的本地目标与锚点有效。31 个改动 / 构建文件对照 27 个本机已知私有值，匹配 0；扫描正反样本通过，apiKeyEnv 仅作为公开引用名处理。三份脱敏报告 mode 600，日常 5173 / 3001 health 均为 200。此为有限核对，不代表完整安全审计。</p>
 
   <h4 id="t02-replay-read-guard-20261119">11.10.8 会话回放的权限失效与固定切点</h4>
@@ -450,7 +451,7 @@
   </table>
   <h4>11.11.2 16 视图与当前实现</h4>
   <p>唯一视图任务映射在 <a href="05-development-backlog.md#16-视图覆盖">清单 16 视图表</a>，本轮补齐功能主责与现状。源码 <code>apps/console/src/features/project.tsx</code> 的 View 只有 requirements / create / overview / chat / context，前两项共同对应 Demo 的 demands，因此当前只覆盖 4 类目标视图的部分能力。对话中的五会话、派生／被动回放不代表 fleet／trace 独立页已完成；其余 12 页不以占位按钮充数。</p>
-  <p>T02 的当前身份、原生流、五会话和 P/C/B 子能力可按 §11.10.7 引用；T02 保留用户侧待验收。新增需求／人员维护、可编辑上下文、完整统计、写锁与轨迹锚点仍由各自任务闭环。T00 不重新打开已批准切片，也不将旧 Demo 的 PASS 当成当前真实页面验收。</p>
+  <p>T02 的当前身份、原生流、五会话和 P/C/B 子能力可按 §11.10.7 引用，用户侧验收见<a href="00-decision-ledger.html#t02-user-acceptance-20261120">台账确认</a>。新增需求／人员维护、可编辑上下文、完整统计、写锁与轨迹锚点仍由各自任务闭环。</p>
   <h4>11.11.3 共享接口、数据与迁移归属</h4>
   <p>当前实际 13 表：auth_user/session/account/verification、project、project_member、requirement、requirement_participant、task、requirement_event、command_receipt、native_session、session_operation；版本化增量迁移到 0004。逻辑 RuntimeConfiguration／DSHInstance／WriteLease／DeliverySnapshot／MergeRequestMapping／AuditEvent／SessionIndex／LogAnchor 尚未以完整模型实现；映射字段和既有业务事件只是子集。</p>
   <p>每个接口由主责任务提出变更，协调者统一审阅公共 DTO、schema 和迁移序号，再分配当期单一写入者。packages/contracts 与 packages/db 共同变更串行准入；先 schema、再 db:generate、新增迁移并 db:migrate，不改已应用迁移。orchestrator、syncer 仍是明确职责的目标包，本轮不预建空包或替下游选定新公共签名。</p>
@@ -496,7 +497,7 @@
     <tr data-gap="T00-G8" data-owner="T11"><td>T00-G8 / 导入与人员规则</td><td><a href="05-development-backlog.md#主计划任务">T11</a></td><td><a href="#t11-maintenance-acceptance-20261119">已确认同页预览修正与整批提交，以及未完成任务的显式承接</a>。</td><td>已关闭。已验证 <a href="#t11-import-delivery-20261119">CSV／XLSX 入库</a>和<a href="#t11-personnel-delivery-20261119">人员授权与分派历史</a>。</td><td>T11 完成，T12 还需 T14。</td></tr>
     <tr data-gap="T00-G10" data-owner="T15"><td>T00-G10 / 计量与配额规则</td><td><a href="05-development-backlog.md#主计划任务">T15</a></td><td>维度、阈值、计量来源及超限行为尚未细化。</td><td>T15 在实现前取得规格及用户所属取舍；不从帧数伪造 token、成本。</td><td>T15 配额与统计完整验收。</td></tr>
     <tr data-gap="T00-G11" data-owner="T18"><td>T00-G11 / 归档与保留策略</td><td><a href="05-development-backlog.md#主计划任务">T18</a></td><td>保留周期、归档导出、备份和可清理目标尚未确认。</td><td>T18 先确认保留和删除规则；任何破坏性执行继续受单独授权约束。</td><td>T18 归档／清理执行；现有数据继续保留。</td></tr>
-    <tr data-gap="T00-G9" data-owner="T01"><td>T00-G9 / 用户侧验收</td><td><a href="05-development-backlog.md#主计划任务">T01</a></td><td>T02 开发和内部证据在 4ecf870，用户 Demo 一致性尚未确认。</td><td>保持 T02 待验收；T01/T22 按各自用户验收门槛闭环，后续仅引用来源中已明确验证的子能力。</td><td>不以 T00 完成冒称 T02/T01/T22 已验收或 T07 写入口已满足全部前置。</td></tr>
+    <tr data-gap="T00-G9" data-owner="T01"><td>T00-G9 / 用户侧验收</td><td><a href="05-development-backlog.md#主计划任务">T01</a></td><td>T02 开发和内部证据在 4ecf870，用户于 2026-11-20 确认多会话体验通过。</td><td>T01 已交付，T22 按完整产品用户验收门槛闭环。</td><td>T07 已满足 T02 和 T06 macOS 前置，写入口按 T07 自身条件验收。</td></tr>
   </table>
   <p>GitLab 官方 <a href="https://docs.gitlab.com/api/protected_branches/">保护分支 API</a>可查询匹配规则及 push/merge/force 配置，<a href="https://docs.gitlab.com/api/branches/">分支 API</a>提供当前主体的 can_push，<a href="https://docs.gitlab.com/api/merge_requests/">MR API</a>提供合入／squash SHA。<a href="https://docs.gitlab.com/user/permissions/">官方角色权限</a>表列出部分写角色对非保护分支可 force push，故“非保护 rdws/* 且服务账号禁 force”必须核验目标部署策略。文档能力不证明公司目标版本／配置可用；本轮未向未知实例发送凭据、未调用项目 API，也未新授推送／MR 权限。</p>
   <h4>11.11.6 验收与证据</h4>

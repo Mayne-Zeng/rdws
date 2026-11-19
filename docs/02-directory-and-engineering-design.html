@@ -1019,6 +1019,11 @@
   <p>新增真实 BFF 定点改前返回 1：目录同时列出同供应商的另一模型及另一供应商的同名模型。改后受管目录只公布允许的 Provider／Model 组合。原生默认不一致时按冻结策略过滤，原生默认值保留。允许模型缺失时目录和可路由列表为空，失败列表沿用原生信息。受管 paused 回退仍读取同一 Profile 的多模型、多供应商目录。<code>caffeinate -i pnpm test tests/integration/bff-main-model-egress.test.ts tests/integration/session-lifecycle.test.ts tests/integration/native-egress-mode.test.ts</code> 返回 0（3 文件、29 项通过、1 项既有条件跳过）。</p>
   <p>交付首审要求覆盖策略模型仍在目录但供应商原生不可路由，以及不同供应商的诊断并存。补验确认目录和可路由集合为空，只保留策略供应商的通用失败提示。独立复审 APPROVE。最终 <code>caffeinate -i pnpm test</code> 返回 0（43 文件、268 项通过、1 项既有条件跳过）。两个 <code>pnpm test:e2e</code> 分片各通过 22 项，<code>pnpm test:web-live tests/web-live/model-egress-pause.spec.ts</code> 以真实 Native 与回环合成供应商通过 1 项。类型、lint、主工作树格式、构建与基线校验均返回 0。代码与文档随 <code>feat: scope the mediated model catalog to its policy</code> 本地提交。</p>
 
+  <h4 id="t13-title-origin-evidence-20261120">11.16.31 Native 首消息标题的来源核对</h4>
+  <p>依据 §11.16.17，两位独立专家分别核对锁定版 Native 的标题调用和 BFF 撤权定序。原生标题请求的 <code>purpose</code> 只区分用途。Native <code>session/title-llm-request</code> 记录精确源消息序列，事件数据为快照。技术裁决选定在锁定首消息标题插件的 Cordis 子作用域包装原生 <code>llm.prepareCall</code>。包装只观察实际 <code>prepared.stream(options)</code>，用进程内对象身份关联真实调用和原生标题记录；Native 继续调度、生成回退标题和提交结果。另一候选按会话最新事件或内容摘要关联，缺少对实际调用来源的独立证明。直接重建标题编排会重复 Native 的状态权威。</p>
+  <p>安装版 DSH 0.2.2-rc.3、Node 24.20.0 下运行 <code>node --input-type=module -</code>，从锁包加载 Cordis、SessionStore、AgentRegistry、SessionTitleService、LlmRuntime 及原生首消息标题插件，用内存适配器返回合成标题。发布一个合成用户事件及其请求头，真实 <code>llm/stream</code> 收到一次带记号的原始对象。标题准备事件和最终原生标题的 <code>messageSeqs</code> 均指向同一个原消息，快照与真实消息对象不同但消息 ID 一致，根作用域继续使用原生 LlmRuntime。命令退出 0。此验证覆盖已安装服务的对象身份与事件顺序，登录、刷盘、正式 Host 和物理外发仍需端到端验收。</p>
+  <p>正式设计下一步核对真实 <code>user/message</code> 从本代原运行取得原始登录，标题时序独立于正常主轮结束，原登录撤权、显式取消、代次退出或到期关闭绑定。标题和主轮的物理连接应分别观察，复用真实 BFF 跨撤权的最终授权与 TLS 首写。首个纵向验收可限定同代同模型和同一 HTTPS 地址。锁定版 PiAi 关闭 SDK 重试，Native 的 LLM 退避挂在 Agent 请求错误上，标题 429 的目标证据是一次到达和原生回退。正式方案和实现仍按 §11.16.17 双面复审。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

@@ -211,6 +211,7 @@
   - 已补验：[同一步跨登录](02-directory-and-engineering-design.html#t13-main-bff-login-batch-evidence)。真实 Native 第二步同时领取两个登录的输入。较早登录撤权后，第二步零应用写入及零 HTTP 到达，有权对照含两条正文并完成。独立复审及 28 项聚焦测试通过。动态选模方向和待核对行为见[交叉评审记录](02-directory-and-engineering-design.html#t13-dynamic-model-technical-review-20261120)。
   - 实现前补验：[Native 模型投影与实际外发](02-directory-and-engineering-design.html#t13-native-last-used-evidence-20261120)。在真实首写前撤权后，读取原生 `lastUsed` 可见模型，供应商仍零到达。派生验收以实际首写证据判断既有选择是否已经外发。
   - 已交付子项：[受管项目模型目录](02-directory-and-engineering-design.html#t13-mediated-model-catalog-20261120)。公开入口按当前项目的冻结策略和 Native 可路由记录公布精确模型。实例默认保留原生配置，受管 paused 沿用原生目录。方案和交付独立复审、整仓 268 项、浏览器 44 项、真实 Native 本机模式切换及基线校验通过。
+  - 实现前核对：[Native 首消息标题的来源](02-directory-and-engineering-design.html#t13-title-origin-evidence-20261120)。独立技术裁决及安装包内存探针确认标题插件作用域内的实际调用可与原始消息序列关联。正式登录、冷代、撤权与首写验收待交付。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。

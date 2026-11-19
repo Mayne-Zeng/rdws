@@ -40,6 +40,8 @@ pnpm build
 
 `test` 使用独立测试库验证认证、分派 / 状态事务、并发、防重、上下文绑定与数据库权限；E2E 自动启动测试配置服务，验证业务按钮、断网 / 损坏响应重试，以及明暗主题下的登录、刷新、退出与窄屏。浏览器测试使用 5317 / 3303，避开日常开发端口。`build` 做全工程类型检查并生成 Web 构建产物；当前 API 通过 `tsx` 在本地运行，尚未提供生产部署包。
 
+完整浏览器验收可顺序运行 `pnpm test:e2e --shard=1/2` 和 `pnpm test:e2e --shard=2/2`。每组单独启动测试 BFF，避免一轮所有浏览器会话读取累积在同一限流窗口。
+
 模型已选 `GLM-5.3-Flash`，协议为 OpenAI Chat Completions。供应商参数、模型目录和凭据使用 **DSH 原生 Profile / Credentials**，RDWS 只管理授权作用域与引用。当前 `pnpm dsh:model:import` 可将已有运行根 `secrets/model.env` 一次性转换为 `runtime/dsh/project-poc` 下的原生配置；它不覆盖已有原生设置，后续从 DSH 设置机制维护。此命令只初始化文件，不安装或启动 DSH，也不验证真实模型调用。临时输入与原生凭据都不进 Git。
 
 ## Web 需求与会话
@@ -71,7 +73,9 @@ pnpm test:web-live
 
 macOS 的正式 Web Host 支持启动时暂停。先停止旧 BFF、它启动的 Native 进程及独立 SDK 探针，然后使用原 `RDWS_HOME` 启动 `RDWS_NATIVE_MODEL_EGRESS=paused pnpm dev`。每个 Native Host 按需启动并通过签名就绪检查。暂停实例由 Seatbelt 拒绝主动联网，保留原生本机入站与上下文 IPC。配置无效、平台不支持或沙箱启动失败时，启动会失败。确认生效后，用户可按权限读取或跟随历史、取消及操作其他业务入口。提示词提交在入箱前返回 503，旧请求键在暂停期间也应等到恢复后再核对。已打开页面保留输入，由用户手动重试。维护窗口内保持独立 SDK 停止。
 
-恢复前停稳暂停的 BFF 与 Native，再在已授权的环境显式用 `RDWS_NATIVE_MODEL_EGRESS=direct` 重启。未设置变量的本地开发沿用 direct。回退时保留支持暂停的配套版本和显式设置。回到旧版本时，先保持 BFF 与 Native 关闭，或先验收独立的部署层外发阻断。`pnpm test:web-live tests/web-live/model-egress-pause.spec.ts` 使用合成供应商验证本机切换。[实施与验收](docs/02-directory-and-engineering-design.html#t13-native-model-egress-pause-20261119)
+迁移 0011 为 PostgreSQL 增加同库所有者，默认未受管。切换由获准的 DBA 在离线窗口进行。先确认旧 BFF、Native、独立探针和模型出口停止，并阻断旧版重新启动或直连。DBA 在 `rdws_authority.owner` 空位设置 `managed` 并预登记一次性启动凭据的 SHA-256 摘要 `ticket_digest`，再使用 `RDWS_NATIVE_MODEL_EGRESS=paused` 与 `RDWS_AUTHORITY_TICKET_FILE` 启动一个受管 BFF。文件须是当前运行用户的私有普通文件，含 64 个小写十六进制字符及可选的一个换行。PG 参数日志上限 `log_parameter_max_length` 和 `log_parameter_max_length_on_error` 都须为 0，`debug_print_plan` 和 `auto_explain` 执行计划日志须关闭。受管数据库拒绝其他 BFF 启动和非所有者写入授权表。确认完整关停后会释放代次，新进程需要新的启动凭据。故障或结果未知时，由获准维护者先核对旧进程和出口停稳，然后按确切代次恢复空位。实际供应商外发与部署拓扑仍按 T13 验收。 [所有者设计与验证](docs/02-directory-and-engineering-design.html#t13-database-authority-owner-20261119)
+
+未受管数据库恢复 direct 前，先停稳暂停的 BFF 与 Native，再在已授权的环境显式用 `RDWS_NATIVE_MODEL_EGRESS=direct` 重启。未设置变量的本地开发沿用 direct。回退时保留支持暂停的配套版本和显式设置。回到旧版本时，先保持 BFF 与 Native 关闭，或先验收独立的部署层外发阻断。`pnpm test:web-live tests/web-live/model-egress-pause.spec.ts` 使用合成供应商验证本机切换。 [实施与验收](docs/02-directory-and-engineering-design.html#t13-native-model-egress-pause-20261119)
 
 ### 需求维护（T11）
 

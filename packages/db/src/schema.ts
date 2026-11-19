@@ -13,6 +13,7 @@ import {
   uniqueIndex,
   integer,
   jsonb,
+  uuid,
 } from 'drizzle-orm/pg-core';
 const timestamps = {
   createdAt: timestamp('created_at', { withTimezone: true })
@@ -179,6 +180,34 @@ export const nativeSession = pgTable('native_session', {
   ...timestamps,
 });
 export const audit = pgSchema('audit');
+export const authority = pgSchema('rdws_authority');
+export const authorityOwner = authority.table(
+  'owner',
+  {
+    singleton: boolean('singleton').primaryKey().default(true),
+    managed: boolean('managed').notNull().default(false),
+    ticketDigest: text('ticket_digest'),
+    proofDigest: text('proof_digest'),
+    generation: uuid('generation'),
+  },
+  (table) => [
+    check('authority_owner_singleton', sql`${table.singleton}`),
+    check(
+      'authority_owner_state',
+      sql`(${table.generation} IS NULL) = (${table.proofDigest} IS NULL)
+        AND (${table.generation} IS NULL OR ${table.ticketDigest} IS NULL)
+        AND (${table.managed} OR (${table.generation} IS NULL AND ${table.ticketDigest} IS NULL))`,
+    ),
+    check(
+      'authority_owner_ticket_digest',
+      sql`${table.ticketDigest} COLLATE "C" ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'authority_owner_proof_digest',
+      sql`${table.proofDigest} COLLATE "C" ~ '^[0-9a-f]{64}$'`,
+    ),
+  ],
+);
 export const sessionLogAnchor = audit.table(
   'session_log_anchor',
   {

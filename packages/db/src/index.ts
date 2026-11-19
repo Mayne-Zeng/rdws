@@ -1,12 +1,22 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import * as schema from './schema.ts';
-export function connectDatabase(connectionString: string) {
+import { bindAuthorityProof } from './authority.ts';
+export { acquireAuthority, releaseAuthority } from './authority.ts';
+
+export function connectDatabase(
+  connectionString: string,
+  authorityProof?: string,
+) {
   const pool = new Pool({
     connectionString,
     max: 5,
-    connectionTimeoutMillis: 5000,
+    connectionTimeoutMillis: authorityProof ? 1_500 : 5_000,
+    onConnect: authorityProof
+      ? (client) => bindAuthorityProof(client, authorityProof)
+      : undefined,
   });
+  if (authorityProof) pool.on('error', () => {});
   return { pool, db: drizzle(pool, { schema }) };
 }
 export * as schema from './schema.ts';

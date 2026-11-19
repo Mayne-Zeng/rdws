@@ -48,6 +48,23 @@ export async function grantApplication(
         `grant update (template_id, revision) on requirement_capability_binding to ${application}`,
       );
     }
+    const authority = await client.query(
+      "select exists(select 1 from pg_catalog.pg_namespace where nspname='rdws_authority') as present",
+    );
+    if (authority.rows[0]?.present) {
+      await client.query(
+        `grant usage on schema rdws_authority to ${application}`,
+      );
+      await client.query(
+        `grant execute on function rdws_authority.admit_owner(boolean, text), rdws_authority.release_owner(uuid) to ${application}`,
+      );
+      const { rows } = await client.query<{ safe: boolean }>(
+        'select rdws_authority.acl_is_safe($1) as safe',
+        [application],
+      );
+      if (rows[0]?.safe !== true)
+        throw new Error('Unexpected runtime authority permissions');
+    }
     await client.query('commit');
   } catch (error) {
     await client.query('rollback');

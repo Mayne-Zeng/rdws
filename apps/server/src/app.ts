@@ -1,7 +1,8 @@
+import { randomBytes } from 'node:crypto';
 import Fastify, { type FastifyError } from 'fastify';
 import { fromNodeHeaders } from 'better-auth/node';
 import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
-import { connectDatabase } from '@rdws/db';
+import { acquireAuthority, connectDatabase, releaseAuthority } from '@rdws/db';
 import { Health } from '@rdws/contracts';
 import { resolveNativeModelEgress } from '@rdws/dsh/web';
 import { registerWorkbench } from './modules/workbench.ts';
@@ -18,6 +19,7 @@ export function buildApp(options: {
   repositoryHome?: string;
   nativeRuntimeRoot?: string;
   nativeProfiles?: ReadonlyMap<string, string>;
+  authorityTicket?: string;
 }) {
   const modelEgress = resolveNativeModelEgress(
     process.env.RDWS_NATIVE_MODEL_EGRESS,
@@ -26,16 +28,34 @@ export function buildApp(options: {
     throw new Error(
       'Native Host model egress does not match BFF configuration',
     );
-  const database = connectDatabase(options.databaseUrl);
+  const ticket = options.authorityTicket;
+  if (
+    ticket !== undefined &&
+    (modelEgress !== 'paused' || !/^[0-9a-f]{64}$/.test(ticket))
+  )
+    throw new Error('Invalid database authority startup ticket');
+  const proof =
+    ticket === undefined ? undefined : randomBytes(32).toString('hex');
+  const database = connectDatabase(options.databaseUrl, proof);
   let workbench: Awaited<ReturnType<typeof registerWorkbench>> | undefined;
   const auth = createAuth(database.db, {
-    ...options,
+    secret: options.secret,
+    origin: options.origin,
     onLogout: async (id) => workbench?.closeLogin(id) ?? false,
   });
   const app = Fastify({
     bodyLimit: 64 * 1024,
     logger: false,
   }).withTypeProvider<TypeBoxTypeProvider>();
+  let authority: string | null = null;
+  let stopping: Promise<undefined> | undefined;
+  app.addHook('onReady', async () => {
+    authority = await acquireAuthority(
+      database.pool,
+      modelEgress === 'paused',
+      ticket,
+    );
+  });
   app.addHook('onClose', () => database.pool.end());
   app.addHook('onRequest', async (request, reply) => {
     if (request.method === 'POST' && request.headers.origin !== options.origin)
@@ -126,5 +146,35 @@ export function buildApp(options: {
             : '服务暂时不可用，请稍后重试',
     });
   });
-  return app;
+  const closeFastify = app.close.bind(app);
+  function stopRuntime() {
+    return (stopping ??= (async () => {
+      await closeFastify();
+      if (!authority || !proof) return undefined;
+      if (app.server.listening)
+        throw new Error('HTTP shutdown was not confirmed');
+      const control = connectDatabase(options.databaseUrl, proof);
+      try {
+        await releaseAuthority(control.pool, authority);
+      } finally {
+        await control.pool.end();
+      }
+      return undefined;
+    })());
+  }
+  if (ticket !== undefined) {
+    function closeRuntime(): Promise<undefined>;
+    function closeRuntime(listener: () => void): undefined;
+    function closeRuntime(listener?: (error?: unknown) => void) {
+      const result = stopRuntime();
+      if (!listener) return result;
+      void result.then(
+        () => listener(),
+        (error: unknown) => listener(error),
+      );
+      return undefined;
+    }
+    app.close = closeRuntime;
+  }
+  return Object.assign(app, { stopRuntime });
 }

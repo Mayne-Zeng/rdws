@@ -219,6 +219,7 @@
   - 实现前核对：[Native 首消息标题的来源](02-directory-and-engineering-design.html#t13-title-origin-evidence-20261120)。独立技术裁决及安装包内存探针确认标题插件作用域内的实际调用可与原始消息序列关联。
   - 实现前核对：[完整领取后的原生选模时点](02-directory-and-engineering-design.html#t13-selection-boundary-evidence-20261120)。锁定 Native 在同一轮的下一步按完整同修订批次命中目标模型。不同修订同批终态为阻止，即使模型相同，供应商第二次 HTTP 仍为零。独立复审、反例和 5 项原生邻域通过。该探针为保存、发送授权和派生提供实现依据。
   - 实现前核对：[原提示词接纳的原生只读证据](02-directory-and-engineering-design.html#t13-prompt-observation-evidence-20261120)。活动会话显式刷盘后核对物理序号，冷启查证无 Agent 创建、零日志变动、供应商零新增，并排除继承的输入和换 Peer。两项故障反例和原生邻域 5 项通过。
+  - 已复审方案：[保存本人会话选模并在发送时生效](02-directory-and-engineering-design.html#t13-saved-session-model-plan-20261120)。第三轮 A/B 均通过，明确持久原票据、只读原键查证、当步新增和同轮累计原登录，以及试点派生和回退。共享 PG 池完成独立复审与同库整仓后启动实施。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。

@@ -200,6 +200,7 @@
   - 已交付修复：[退出登录的持久撤权确认](02-directory-and-engineering-design.html#t13-confirmed-logout-20261119)。以原会话行消失确认退出，数据库删除或核对失败时返回 503 并保留 Cookie。工作台必须核对原观察登录，旧标签页无法退出换入的另一登录。实测独立与冷启 BFF、Native 并发通知及浏览器重试。独立复审、定点 24 项、整仓 239 项、浏览器 44 项及基线通过。实际外发统一定序继续按 §11.16.17 交付。
   - 已交付子项：[同库授权所有者与持久栅栏](02-directory-and-engineering-design.html#t13-database-authority-owner-20261119)。隔离库实测同一启动凭据的两个 BFF 只准一个启动，其他普通连接不能写授权来源。数据库断开或 BFF 强制终止保持原代次，完整关停才可释放。独立复审、定点 26 项、整仓 246 项、浏览器两分片合计 44 项和基线通过。迁移 0011 已在一次性测试库验证。部署启用与实际供应商写入继续按 §11.16.17 验收。
   - 已交付子项：[TLS 1.3 主推理转发与首次写入](02-directory-and-engineering-design.html#t13-tls13-first-write-20261119)。真实 Native、PostgreSQL 与回环供应商串联验收。先撤权时零写入，先写入时本连接可完成，完整验证的 429 才开放下一次物理写入。诊断泄露、截断 429 和 TCP 首段计数复审通过。定点 37 项、整仓 260 项、浏览器两分片合计 44 项和基线通过。正式供应商和具名部署接线继续按 §11.16.17 验收。
+  - 接线前置：[实施范围与路由拆分](02-directory-and-engineering-design.html#t13-egress-integration-plan)。协调检出 `main` 由既有协调者串行处理 BFF 工作台、Native 适配、相关测试和验收文档。R-01 已通过独立复审和整仓回归。
   - 评审续办：[Q1 合成供应商取证](06-implementation-review-report.html#s10-delivery)覆盖 `session/state`、`session/events` 与锁定版未注册的 `session/summary` 错误响应。其余读取与事件投影、冷恢复 Q2 随 §11.16.17 继续验证。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）

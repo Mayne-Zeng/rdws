@@ -289,7 +289,7 @@
   <h3>10.4 剩余发现处置表（续办指引）</h3>
   <table>
     <tr><th>发现</th><th>处置</th><th>建议时机与验收要点</th></tr>
-    <tr><td>R-01 workbench 巨石</td><td><span class="pill p-amber">随任务线</span></td><td>下一个整文件改写 workbench.ts 的任务（T07 接线 / T13 统一出口）先拆分路由模块再实施；验收=会话/传输/导入/仓库/管理各归域文件，内存状态收敛为显式 runtime 对象</td></tr>
+    <tr><td>R-01 workbench 巨石</td><td><span class="pill p-green">路由已拆分</span></td><td>会话、传输、导入、仓库、管理和需求各归域文件，使用同一运行时对象。35 项注册对照和浏览器验收见 <a href="02-directory-and-engineering-design.html#t13-egress-integration-plan">工程设计 §11.16.28</a>。</td></tr>
     <tr><td>R-04 包化</td><td><span class="pill p-green">包化完成</span></td><td>同步器、编排和运行配置使用私有 workspace 包。T19 继续验收可运行交付包及干净环境安装。</td></tr>
     <tr><td>R-05 脱敏旁路</td><td><span class="pill p-amber">Q1 已实测</span></td><td>锁定版的 <code>session/state</code> 与 <code>session/summary</code> 结果见 §10.5。随 §11.16.17 继续核对全部 reads 与 emit 事件。</td></tr>
     <tr><td>R-06 可选头过渡</td><td><span class="pill p-green">文档完成</span></td><td>README 固化更新和回退的「先 BFF 后浏览器制品并重载」顺序。</td></tr>

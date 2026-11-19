@@ -955,6 +955,17 @@
   <p>独立 TCP 观察在供应商侧握手后开始计数，授权前及先撤权并关闭后均为零。余段仍挂起时首段恰为 16 KiB，放行后 TLS 1.3 同一连接实收完整的 1 MiB 合成请求及流式响应。当前 macOS 上同一非阻塞写入适配器实测正短写和后续零写。真实 Native 经 FD4、PostgreSQL 和回环 HTTPS 验证完整 429 的新尝试、先撤权零请求、先实际写入后撤权仍可完成，以及载体关闭时拒绝外发。<code>pnpm typecheck</code>、<code>pnpm lint</code> 与 HTTPS relay、尝试授权、Native 尝试授权、载体协议和 Native 载体等定点集成通过（5 文件、37 项）。</p>
   <p>整仓类型、lint、格式和构建通过。<code>pnpm check</code> 初次因 Prettier 扫描了仓库下另一个 Git 工作树而失败。随后分别执行同一组检查，格式检查使用 <code>pnpm format:check '!**/.agents/worktrees/**'</code>。<code>pnpm test</code> 通过 41 文件、260 项，1 项按平台跳过。构建保留既有主包体积提示。两次 <code>pnpm test:e2e</code> 分片各通过 22 项，共 44 项。<code>pnpm validate:baseline</code> 通过（29 任务、62 追溯点、16 视图）。本地修订为 <code>feat: relay Native model attempts over TLS 1.3</code>。</p>
 
+  <h4 id="t13-egress-integration-plan">11.16.28 正式模型出口的接线范围与验收</h4>
+  <p>本地实施以 <code>1466676</code> 为基线，按 §11.16.17 和 <a href="06-implementation-review-report.html#s10">评审报告 §10.4</a> 办理。正式接线属 R3，先将路由拆分作为独立的 R2 交付。§11.16.27 证实主推理的物理写入和重试边界，公开 BFF 仍只支持 direct 与 paused。真实供应商调用、生产启用及部署方的数据处理确认各有独立验收，当前授权为本地研发及本地提交。</p>
+  <ol>
+    <li><strong>路由拆分（R-01）。</strong>按原顺序直接在 <code>app.ts</code> 的同一个 Fastify 子作用域注册管理、仓库、需求、独立的导入域、会话和 Native 传输。普通 HTTP 路由注册后仍等待 <code>@fastify/websocket</code>，再注册 mux，维持插件与工作台 <code>preClose</code>、连接池 <code>onClose</code> 及持久所有者释放的原先顺序和失败语义。管理、人员、载体与退出使用同一个 runtime 的 epoch、权限栅栏、响应范围、租约与连接状态，读取时取当前 epoch。路由、schema、HTTP／WS 状态、授权和错误文案沿用原契约。逐项对照路由注册（含自动 HEAD、schema、WS），执行 <code>revocation-races</code>、<code>authority-owner</code>、其他受影响集成、两个 E2E 分片和基线校验。可回退此提交，运行数据无需迁移。</li>
+    <li><strong>浏览器投影（R-05）。</strong>锁定版的 unary 包括 page、events、state、projections、list、modelCatalog，流包括 follow、observeEvent、observeState、observeProjections、control。projection、observeProjection、summary 的不可用语义保留。按已授权端点记住每个流 ID，拒绝活动 ID 二次打开，终态清理。核查常规消息正文、序列位置、投影（含当前选模）、重连以及可达的五个会话通知。仅放行各方法已知公开字段。用回环供应商的合成诊断、原生日志正对照以及受控未知字段，分别验收 HTTP、WebSocket 和重连。</li>
+    <li><strong>冷恢复（R-08）。</strong>对第一次活动读取之前已提交的运行取快照，只复查第一次名单缺失的候选。两个结构有效的名单均缺失且仍为本地候选时才退役。控制调用明确回复 <code>cancelled: true</code> 后才移除原有补偿条目。此确认对应 Native 授权绑定，不代表删除历史消息。回复畸形时保留未确认候选，取消异常交给原补偿队列重试。验证首查漏报、两次缺失、名单异常、取消未确认与重试、并发新提交和已受理键的幂等。</li>
+    <li><strong>正式受管入口。</strong>运行时与 PostgreSQL 持久所有者、受限 Native、继承 FD 和真实 TLS 转发串联。只接受由受信配置和可验证的原生步骤绑定确定的供应用途、路由及选模修订。逐次在实际同一连接写入前重验原登录、本人会话和归属。验收覆盖暂不可用、冷重启、撤权先于写入和写入先于撤权、重试与其他请求用途，以及派生首次发送。部署确认前沿用已确认的 paused 回退入口。</li>
+  </ol>
+  <p>本轮先独立评审 R-01 方案并验证行为等价。正式入口的权限定序、支持的供应商协议和用途、配置归属及派生规则在实施前以本节验收要求补齐具体方案与双面复审证据。</p>
+  <p>R-01 方案修订后复审及交付独立复审均 APPROVE。独立 TypeScript AST 对照确认 35 项 Fastify 路由、插件和钩子的注册顺序及内容一致，权限代次改为从共享运行时实时读取。<code>pnpm test</code> 返回 0（42 文件、263 项通过、1 项既有跳过），其中包含撤权与持久所有者用例。<code>pnpm test:e2e --shard=1/2</code> 和 <code>pnpm test:e2e --shard=2/2</code> 各通过 22 项，类型、lint、排除内嵌评审工作树后的格式检查、构建与基线校验通过。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

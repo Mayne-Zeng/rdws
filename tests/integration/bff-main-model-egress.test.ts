@@ -374,6 +374,14 @@ test.skipIf(process.platform !== 'darwin')(
         );
       const events = (login: Login, sessionId: string) =>
         rpc(login, 'events', { address: { kind: 'session', sessionId } });
+      async function nativeLastUsed(login: Login, sessionId: string) {
+        const response = await rpc(login, 'projections', { sessionId });
+        expect(response.statusCode).toBe(200);
+        const result = response.json().result;
+        expect(result.ok).toBe(true);
+        expect(result.value.kind).toBe('sequenced');
+        return result.value.values.modelSelection?.lastUsed ?? null;
+      }
       async function historyRecords(login: Login, sessionId: string) {
         const response = await events(login, sessionId);
         expect(response.statusCode).toBe(200);
@@ -405,6 +413,7 @@ test.skipIf(process.platform !== 'darwin')(
         after = await login(),
         observer = await login();
       const deniedSession = await create(before);
+      expect(await nativeLastUsed(observer, deniedSession)).toBeNull();
       const deniedGate = gates.arm('before-lock');
       releases.push(deniedGate.latch.release);
       expect(
@@ -417,6 +426,11 @@ test.skipIf(process.platform !== 'darwin')(
       await expect.poll(() => deniedGate.wire?.closed).toBe(true);
       expect(deniedGate.wire?.bytes).toBe(0);
       expect(arrivals).toHaveLength(0);
+      expect(supplierRequests).toBe(0);
+      expect(await nativeLastUsed(observer, deniedSession)).toMatchObject({
+        provider,
+        model,
+      });
       expect((await events(before, deniedSession)).statusCode).toBe(401);
 
       const sentSession = await create(after);

@@ -1006,6 +1006,8 @@
 
   <p id="t13-dynamic-model-technical-review-20261120"><strong>动态选模技术裁决（2026-11-20）。</strong>两位独立评审分别核对锁定 DSH 步骤和正式出口定序。提交前调用 Native <code>session/selectModel</code> 会更新实例默认，且与排队、防重和取消交叉。同步入箱领取完成后会立刻固定当步模型，<code>pre-step</code> 适合复验已固定模型。选定下一次隔离原型的方向是在 BFF 为原请求冻结选择修订，Native 同步识别全部新领取输入后应用一次，正式出口在首写事务中复验当步各原登录与持久允许项。冻结的精确 HTTPS 路由作为局部验收上界，已登记允许项的撤权修订与会话选择修订分别跟踪。直接联动三级动态供应商配置还需独立验证 Native 换代、凭据和分层管理边界。</p>
   <p>Native <code>request/header</code> 在真实外发前即可更新 <code>lastUsed</code>，同值选择也可能省略原生选择事件。按 §11.16.17，派生仍需将父会话切点内的选择修订与真实首写证据关联。实际首写结果不确定以及一个领取批次含多个不同选择修订时的用户处理保留待核对。技术裁决支持隔离原型，正式保存、选模生效、派生与授权策略继续按 §11.16.7、§11.16.17 和 §11.16.28 的批准规则及实施复审推进。</p>
+  <p id="t13-native-last-used-evidence-20261120"><strong>Native 投影与实际外发补验（2026-11-20）。</strong>从 <code>f33fc71</code> 出发，由协调者在 <code>main</code> 串行补验两个不同证据来源。正式 BFF 新建会话后，同账号另一有效登录读到 <code>session/projections</code> 的 <code>lastUsed</code> 为空。第一次真实锁定 Native 推理已准备 TLS 密文，在最终写入前撤销原登录；同一会话随后显示此模型为 <code>lastUsed</code>，回环连接门控后零字节、供应商 HTTP 入口和完整正文都为零。该投影可说明 Native 为本步记录了模型，实际外发仍取首写证据。用例沿用冻结的单模型正式 BFF 策略，动态保存和派生逻辑各自留在原验收项。<code>caffeinate -i pnpm test tests/integration/bff-main-model-egress.test.ts tests/integration/project-native-paths.test.ts</code> 返回 0（2 文件、3 项）。</p>
+  <p>独立证据复审 APPROVE。类型、lint、格式、构建及基线校验通过。本地交付修订 <code>test: distinguish native model state from egress</code>。</p>
 
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>

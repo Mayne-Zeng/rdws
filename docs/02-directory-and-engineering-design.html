@@ -1417,6 +1417,21 @@
   <p>改前 <code>pnpm test tests/integration/requirement-details.test.ts -t 'searches project business events'</code> 因路径 404 退出 1。改后真实 PG 同毫秒的多微秒及同一时间戳下不同 ID 均保持严格顺序。测试覆盖字面通配符、无隐含平台读取权限、错项目、未知搜索字段、原值最小投影、缺观察登录、HEAD 拒绝、仅预读第 26 条撤权和空页成员失效。<code>pnpm test tests/integration/requirement-details.test.ts</code> 通过 6 项。</p>
   <p><code>pnpm test:e2e tests/e2e/project-audit.spec.ts tests/e2e/requirement-details.spec.ts</code> 通过 2 项。首轮测试点击定位同时可能匹配类型选项与事件正文，轨迹查明停在详情点击，限定事件列表后通过。覆盖项目内多个真实需求、筛选、详情、当前页 CSV、旧项目迟到回包、权限失败恢复，以及 390px 明暗无横向溢出。单需求审计原有固定版本语义仍经邻域验证。Node 24.20.0 和 Apple Git 2.54.0 下，<code>pnpm test</code> 通过 48 文件、285 项，1 项既有条件跳过。<code>pnpm test:e2e --shard=1/2</code> 通过 23 项，<code>pnpm test:e2e --shard=2/2</code> 通过 22 项。类型、lint、格式、构建与基线校验通过。</p>
 
+  <h4 id="t17-project-access-audit-plan-20261120">11.22.2 T17 项目权限变更</h4>
+  <p>Change / R3，基线 <code>f5890e5</code>。审计中心新增当前项目的权限变更历史。来源为 T03 <code>project.roles</code> 和 <code>project.admin</code> 已提交的终态回执。角色写入与回执在同一事务提交，同键重放读原回执，因此每次实际变更显示一次。本切片沿用项目管理员对本项目成员角色的读取范围，不增加平台账号停用、其他项目、失败尝试或运行调用的读取权限。</p>
+  <ol>
+    <li>浏览器经观察登录 GET 读取。初始查当前项目角色，只有当前项目的项目管理员可读。PG 查询以确切项目 scope、两类允许操作、有效终态、目标账号、实际变化和 I2-AUTH 的本项目席位约束选出候选。查询时再次约束本项目管理员角色。操作回执来自既有业务事务，读侧不写表或生成第二份审计源。此处不声称通用回执表已经由数据库实现追加专用 ACL。</li>
+    <li>仅公开操作者、目标账号、原回执记录时间、发生变化的角色前后集合、来源操作类型和有界操作标识。前后仅限当前已知项目角色。目标和项目字段不正确、非终态、未变化或不合约历史记录均不投影。禁止序列化原回执、摘要、请求正文、权限来源之外的账号资料或登录数据。现有账号名仅为显示，原身份以持久 ID 为准。没有会话或需求关联的项目级操作保留项目范围。</li>
+    <li>沿用审计 GET 的 no-store、观察登录强制和关闭 HEAD 行为。出站以同一 PG 读检查原账号、会话和代次、当前根项目的管理员角色，再同步核对会话期限及原请求 epoch。查询、空结果、换登录、跨项目及直接数据库撤权均保持相同范围。平台管理员标记不替代当前项目管理员资格。</li>
+    <li>最近记录按 <code>(createdAt,actorId,operation,commandId)</code> 降序。scope 已固定。每页 25 条，取一条已符合相同项目管理员范围的预读项确定下一页。严格按 PG 微秒 UTC 和最后可见完整元组翻页，游标只限定范围，参数成组校验，不作授权或证明。页内显示类型、实际前后角色、操作者、目标账号、时间和操作标识，复用现有审计 CSV 转义，导出当前授权页。业务与权限视图按项目、账号和观察登录重挂载，只有具备管理员权的项目才呈现权限入口。读取失败隐藏旧结果，保留重试与返回最新。</li>
+    <li>隔离 PG 以真实 T03 路由生成并重放角色及席位变更，核对原记录时间、前后角色和贡献主体。相邻项目、纯平台管理员、普通成员、无观察登录、HEAD、出站撤权、未知／未变化回执和同微秒游标都有反例。浏览器验证入口、详情、CSV、项目切换、旧响应、失权及窄屏明暗。无 schema 变更。执行改前失败、聚焦与邻域、整仓、E2E 两分片、静态、构建、基线。回退单一功能提交。</li>
+  </ol>
+
+  <p id="t17-project-access-audit-evidence-20261120">R3 方案经正确性与安全性双面独立复审，均 APPROVE。交付首轮发现错误操作类型的历史回执可能混入分页。修订后，普通角色变更必须保留管理员席位，管理员席位变更必须保留全部普通角色。项目标识按 JSON 字符串精确匹配。此次过滤在预读与分页之前执行，独立复核 APPROVE。</p>
+  <p><code>pnpm test tests/integration/project-administration.test.ts -t 'reads committed project permission changes'</code> 在接线前返回 404 而失败，补入错误类型回执后再次因分页游标选中错误记录而失败。修复后 <code>pnpm test tests/integration/project-administration.test.ts</code> 通过 5 项。真实 T03 角色及席位变更、同键重放、未变化、原回执记录时间、跨项目、纯平台管理员、普通成员、观察登录、HEAD、出站撤权、畸形回执和同微秒整元组分页均有证据。</p>
+  <p><code>pnpm test:e2e tests/e2e/project-audit.spec.ts</code> 通过 2 项，覆盖真实角色变更详情与导出、项目管理员入口、切项目、迟到旧响应、读取失败和重试。人工检查 390px 明暗截图。权限页沿用项目管理授权，只读取当前项目已提交的角色及管理员席位变更。</p>
+  <p>Node 24.20.0、Apple Git 2.54.0 和本机隔离 PostgreSQL 下，<code>pnpm test</code> 通过 48 文件、286 项，1 项既有平台条件跳过。<code>pnpm test:e2e --shard=1/2</code> 和 <code>pnpm test:e2e --shard=2/2</code> 各通过 23 项。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code>、<code>pnpm validate:baseline</code> 和 <code>git diff --check</code> 均通过。</p>
+
   <h2 id="s0"><span class="num">0</span>评审结论</h2>
   <div class="verdict">
     <div class="vtitle">总体判定</div>

@@ -7,6 +7,7 @@ import {
 } from '@rdws/contracts';
 import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import { api } from '../lib/ui.tsx';
+import { ProjectAccessAudit } from './project-access-audit.tsx';
 import {
   BusinessAuditEvents,
   downloadBusinessAudit,
@@ -16,17 +17,58 @@ type Scope = { projectId: string; userId: string; loginId: string };
 type Filters = { q: string; kind: string };
 type Cursor = NonNullable<ProjectBusinessAuditPage['next']>;
 
-export function ProjectAudit(scope: Scope) {
+export function ProjectAudit({
+  canReadAccessAudit,
+  ...scope
+}: Scope & { canReadAccessAudit: boolean }) {
+  const [showAccess, setShowAccess] = useState(false);
+  const access = canReadAccessAudit && showAccess;
+  return (
+    <section aria-labelledby="project-audit-heading">
+      <div className="page-heading core-page-heading">
+        <h1 id="project-audit-heading">审计中心</h1>
+        <p className="muted">
+          {access
+            ? '查看当前项目的角色和管理员席位变更。'
+            : '检索当前项目内有权查看的需求业务事件。'}
+        </p>
+      </div>
+      {canReadAccessAudit && (
+        <div className="list-toolbar" role="group" aria-label="审计范围">
+          <Button
+            tag="button"
+            variant="outline"
+            aria-pressed={!access}
+            onClick={() => setShowAccess(false)}
+          >
+            业务事件
+          </Button>
+          <Button
+            tag="button"
+            variant="outline"
+            aria-pressed={access}
+            onClick={() => setShowAccess(true)}
+          >
+            权限事件
+          </Button>
+        </div>
+      )}
+      {access ? (
+        <ProjectAccessAudit {...scope} />
+      ) : (
+        <ProjectBusinessAudit {...scope} />
+      )}
+    </section>
+  );
+}
+
+function ProjectBusinessAudit(scope: Scope) {
   const [q, setQuery] = useState('');
   const [kind, setKind] = useState('');
   const [search, setSearch] = useState({ q: '', kind: '', revision: 0 });
   const [cursor, setCursor] = useState<Cursor>();
   return (
-    <section aria-labelledby="project-audit-heading">
-      <div className="page-heading core-page-heading">
-        <h1 id="project-audit-heading">审计中心</h1>
-        <p className="muted">检索当前项目内有权查看的需求业务事件。</p>
-      </div>
+    <>
       <form
         className="list-toolbar"
         onSubmit={(event) => {
@@ -75,7 +117,7 @@ export function ProjectAudit(scope: Scope) {
         cursor={cursor}
         onNavigate={setCursor}
       />
-    </section>
+    </>
   );
 }
 

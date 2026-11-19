@@ -3,9 +3,13 @@ import {
   businessAuditLabels,
   stageLabels,
   taskStatusLabels,
+  roles,
+  projectAccessAuditLabels,
   type BusinessAuditEvent,
   type BusinessAuditPage,
   type ProjectBusinessAuditPage,
+  type ProjectAccessAuditPage,
+  type ProjectAccessAuditEvent,
 } from '@rdws/contracts';
 import { schema } from '@rdws/db';
 import { isRecord, onlyKeys } from '@rdws/dsh/access';
@@ -13,6 +17,7 @@ import { and, desc, eq, inArray, lt, lte, or, sql } from 'drizzle-orm';
 import {
   businessAuditPath,
   projectBusinessAuditPath,
+  projectAccessAuditPath,
 } from './workbench-paths.ts';
 import { fail, type WorkbenchRuntime } from './workbench-runtime.ts';
 
@@ -94,6 +99,7 @@ export function registerRequirementAudit(
 ) {
   const { access, confirmAccess, db, verifyEditLogin } = workbench;
   registerProjectAudit(app, workbench);
+  registerProjectAccessAudit(app, workbench);
   app.get<{ Params: { id: string } }>(
     businessAuditPath,
     async (request): Promise<BusinessAuditPage> => {
@@ -161,6 +167,142 @@ export function registerRequirementAudit(
             ? { version: tail.version, id: tail.id }
             : null,
         events,
+      };
+    },
+  );
+}
+
+const accessAuditIds = '^[A-Za-z0-9_-]{1,128}$';
+const accessAuditId = new RegExp(accessAuditIds);
+const projectAccessKinds = Object.keys(projectAccessAuditLabels);
+const knownProjectRoles = JSON.stringify(roles);
+
+function registerProjectAccessAudit(
+  app: FastifyInstance,
+  { db, projectRoles, requestDemandScope }: WorkbenchRuntime,
+) {
+  const { commandReceipt: receipt, projectMember, user } = schema;
+  app.get<{ Params: { projectId: string } }>(
+    projectAccessAuditPath,
+    { exposeHeadRoute: false },
+    async (request): Promise<ProjectAccessAuditPage> => {
+      const { projectId } = request.params;
+      const scope = requestDemandScope(request);
+      if (
+        scope.projectId !== projectId ||
+        !(await projectRoles(scope.userId, projectId)).includes('project_admin')
+      )
+        fail(403, '无权读取项目权限事件');
+      const query = request.query;
+      if (
+        !isRecord(query) ||
+        !onlyKeys(query, [
+          'beforeAt',
+          'beforeActorId',
+          'beforeKind',
+          'beforeCommandId',
+        ])
+      )
+        fail(400, '权限审计分页参数不正确');
+      const { beforeAt, beforeActorId, beforeKind, beforeCommandId } = query;
+      let position;
+      if (Object.keys(query).length) {
+        if (
+          !isMicrosecondTimestamp(beforeAt) ||
+          typeof beforeActorId !== 'string' ||
+          !accessAuditId.test(beforeActorId) ||
+          !isKnownValue(projectAccessAuditLabels, beforeKind) ||
+          typeof beforeCommandId !== 'string' ||
+          !accessAuditId.test(beforeCommandId)
+        )
+          fail(400, '权限审计分页位置不正确');
+        position = sql`(${receipt.createdAt}, ${receipt.actorId}, ${receipt.operation}, ${receipt.commandId}) <
+          (cast(${beforeAt} as timestamptz), ${beforeActorId}, ${beforeKind}, ${beforeCommandId})`;
+      }
+      const targetId = sql<string>`${receipt.result}->>'targetId'`;
+      const beforeRoles = sql<
+        ProjectAccessAuditEvent['beforeRoles']
+      >`${receipt.result}->'before'`;
+      const afterRoles = sql<
+        ProjectAccessAuditEvent['afterRoles']
+      >`${receipt.result}->'after'`;
+      const adminSeat = sql`'["project_admin"]'::jsonb`;
+      const rows = await db
+        .select({
+          at: sql<string>`to_char(${receipt.createdAt} at time zone 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+          recordedAt: receipt.createdAt,
+          kind: receipt.operation,
+          commandId: receipt.commandId,
+          actorId: receipt.actorId,
+          actorName: user.name,
+          targetId,
+          targetName: sql<
+            string | null
+          >`(select ${user.name} from ${user} where ${user.id} = (${targetId}))`,
+          beforeRoles,
+          afterRoles,
+        })
+        .from(receipt)
+        .leftJoin(user, eq(user.id, receipt.actorId))
+        .where(
+          and(
+            eq(receipt.scope, 'project:' + projectId),
+            inArray(receipt.operation, projectAccessKinds),
+            sql`exists (
+            select 1 from ${projectMember}
+            where ${projectMember.projectId} = ${projectId}
+              and ${projectMember.userId} = ${scope.userId}
+              and ${projectMember.role} = 'project_admin'
+          )`,
+            sql`${receipt.result}->'changed' = 'true'::jsonb`,
+            sql`${receipt.result}->'projectId' = to_jsonb(${projectId}::text)`,
+            sql`jsonb_typeof(${receipt.result}->'targetId') = 'string'`,
+            sql`(${targetId}) ~ ${accessAuditIds}`,
+            sql`${receipt.actorId} ~ ${accessAuditIds} and ${receipt.commandId} ~ ${accessAuditIds}`,
+            sql`jsonb_typeof(${beforeRoles}) = 'array' and jsonb_typeof(${afterRoles}) = 'array'`,
+            sql`(${beforeRoles}) <@ ${knownProjectRoles}::jsonb and (${afterRoles}) <@ ${knownProjectRoles}::jsonb`,
+            sql`not ((${beforeRoles}) <@ (${afterRoles}) and (${afterRoles}) <@ (${beforeRoles}))`,
+            sql`case ${receipt.operation}
+              when 'project.roles' then ((${beforeRoles}) @> ${adminSeat}) = ((${afterRoles}) @> ${adminSeat})
+              when 'project.admin' then
+                (${beforeRoles}) <@ ((${afterRoles}) || ${adminSeat})
+                and (${afterRoles}) <@ ((${beforeRoles}) || ${adminSeat})
+              else false end`,
+            position,
+          ),
+        )
+        .orderBy(
+          desc(receipt.createdAt),
+          desc(receipt.actorId),
+          desc(receipt.operation),
+          desc(receipt.commandId),
+        )
+        .limit(pageSize + 1);
+      const visible = rows.slice(0, pageSize);
+      const tail = visible.at(-1);
+      return {
+        projectId,
+        next:
+          rows.length > pageSize && tail
+            ? {
+                at: tail.at,
+                actorId: tail.actorId,
+                kind: tail.kind as ProjectAccessAuditEvent['kind'],
+                commandId: tail.commandId,
+              }
+            : null,
+        events: visible.map((row) => ({
+          kind: row.kind as ProjectAccessAuditEvent['kind'],
+          recordedAt: row.recordedAt.toISOString(),
+          commandId: row.commandId,
+          actorId: row.actorId,
+          actorName: row.actorName,
+          targetId: row.targetId,
+          targetName: row.targetName,
+          beforeRoles: [...new Set(row.beforeRoles)],
+          afterRoles: [...new Set(row.afterRoles)],
+        })),
       };
     },
   );

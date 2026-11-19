@@ -61,6 +61,13 @@ export function downloadBusinessAudit(
       event.version,
     ]),
   ];
+  downloadAuditCsv(`business-audit-${scopeId}.csv`, rows);
+}
+
+export function downloadAuditCsv(
+  filename: string,
+  rows: (string | number | null)[][],
+) {
   const url = URL.createObjectURL(
     new Blob(
       [
@@ -74,7 +81,7 @@ export function downloadBusinessAudit(
   );
   const link = document.createElement('a');
   link.href = url;
-  link.download = `business-audit-${scopeId}.csv`;
+  link.download = filename;
   document.body.append(link);
   link.click();
   link.remove();

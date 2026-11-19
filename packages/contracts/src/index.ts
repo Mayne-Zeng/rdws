@@ -421,6 +421,33 @@ export interface ProjectBusinessAuditPage {
   })[];
 }
 
+export const projectAccessAuditLabels = {
+  'project.roles': '项目角色变更',
+  'project.admin': '管理员席位变更',
+} as const;
+export interface ProjectAccessAuditCursor {
+  at: string;
+  actorId: string;
+  kind: keyof typeof projectAccessAuditLabels;
+  commandId: string;
+}
+export interface ProjectAccessAuditEvent extends Omit<
+  ProjectAccessAuditCursor,
+  'at'
+> {
+  recordedAt: string;
+  actorName: string | null;
+  targetId: string;
+  targetName: string | null;
+  beforeRoles: (typeof roles)[number][];
+  afterRoles: (typeof roles)[number][];
+}
+export interface ProjectAccessAuditPage {
+  projectId: string;
+  next: ProjectAccessAuditCursor | null;
+  events: ProjectAccessAuditEvent[];
+}
+
 export const RepositorySyncInput = Type.Object(
   { commandId: Type.String({ format: 'uuid' }) },
   { additionalProperties: false },

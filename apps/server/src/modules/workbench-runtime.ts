@@ -29,6 +29,7 @@ import {
   isTemplateBindingRequest,
   isPassiveRequirementRead,
   isProjectAuditRead,
+  isProjectAccessAuditRead,
   isSessionWrite,
 } from './workbench-paths.ts';
 export type Database = ReturnType<typeof connectDatabase>['db'];
@@ -599,7 +600,8 @@ export function createWorkbenchRuntime(
   app.addHook('onRequest', async (request, reply) => {
     if (request.routeOptions.url === nativeMuxPath) return;
     const passiveRead = isPassiveRequirementRead(request);
-    const projectAudit = isProjectAuditRead(request);
+    const projectAudit =
+      isProjectAuditRead(request) || isProjectAccessAuditRead(request);
     const sessionWrite = isSessionWrite(request);
     if (passiveRead || projectAudit || sessionWrite)
       reply.header('cache-control', 'no-store');
@@ -644,6 +646,7 @@ export function createWorkbenchRuntime(
       demandList?: boolean;
       platformOnly?: boolean;
       memberOnly?: boolean;
+      projectAdminOnly?: boolean;
       importReply?: string[];
       demandAccess?: {
         requirementId: string;
@@ -700,10 +703,12 @@ export function createWorkbenchRuntime(
     const templateBinding = isTemplateBindingRequest(request);
     const passiveRead = isPassiveRequirementRead(request);
     const projectAudit = isProjectAuditRead(request);
+    const accessAudit = isProjectAccessAuditRead(request);
     const epoch = authorizationEpoch;
     const who = await actor(request.headers);
     if (templateBinding) verifyEditLogin(request, who.authSessionId);
-    if (projectAudit) verifyEditLogin(request, who.authSessionId, true);
+    if (projectAudit || accessAudit)
+      verifyEditLogin(request, who.authSessionId, true);
     if (passiveRead || isSessionWrite(request))
       verifyEditLogin(request, who.authSessionId, false);
     if (personnel) verifyEditLogin(request, who.authSessionId, true);
@@ -729,7 +734,14 @@ export function createWorkbenchRuntime(
         requirementId,
         demandList,
       );
-    const scope = { ...who, projectId, epoch, requirementId, demandList };
+    const scope = {
+      ...who,
+      projectId,
+      epoch,
+      requirementId,
+      demandList,
+      projectAdminOnly: accessAudit,
+    };
     assertResponse(scope);
     responseScopes.set(
       request,
@@ -775,7 +787,7 @@ export function createWorkbenchRuntime(
         if (!current.platformAdmin)
           businessError(403, '无权读取平台能力白名单');
       }
-      if (scope.memberOnly) {
+      if (scope.memberOnly || scope.projectAdminOnly) {
         const [current] = await db
           .select({
             expiresAt: schema.session.expiresAt,
@@ -788,6 +800,9 @@ export function createWorkbenchRuntime(
             and(
               eq(schema.projectMember.userId, schema.user.id),
               eq(schema.projectMember.projectId, scope.projectId!),
+              scope.projectAdminOnly
+                ? eq(schema.projectMember.role, 'project_admin')
+                : undefined,
             ),
           )
           .where(
@@ -801,7 +816,13 @@ export function createWorkbenchRuntime(
           .limit(1);
         if (!current || current.expiresAt <= new Date())
           fail(401, '账号或会话不可用');
-        if (!current.membership) businessError(403, '无权读取当前项目模板');
+        if (!current.membership)
+          businessError(
+            403,
+            scope.projectAdminOnly
+              ? '无权读取项目权限事件'
+              : '无权读取当前项目模板',
+          );
       }
       assertResponse(scope);
     }

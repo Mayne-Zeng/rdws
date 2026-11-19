@@ -15,6 +15,336 @@ import { createTestPool } from '../helpers/test-pool.ts';
 loadEnvironment('test');
 let loginClient = 0;
 
+test('reads committed project permission changes with exact cursors and current administrator authority', async () => {
+  const db = createTestPool('migration');
+  const origin = process.env.RDWS_ORIGIN!;
+  const app = buildApp({
+    databaseUrl: process.env.DATABASE_URL!,
+    secret: process.env.BETTER_AUTH_SECRET!,
+    origin,
+  });
+  const projectId = 'access-audit-' + randomUUID();
+  const other = 'access-audit-' + randomUUID();
+  const path = `/api/projects/${projectId}/access-audit`;
+  const marker = 'SYNTHETIC_PRIVATE_RECEIPT_' + randomUUID();
+  let isolated = false;
+  let beforeResponse: (() => Promise<void>) | undefined;
+  app.addHook('preSerialization', async (request, _reply, payload) => {
+    if (request.url.startsWith(path) && beforeResponse) {
+      const callback = beforeResponse;
+      beforeResponse = undefined;
+      await callback();
+    }
+    return payload;
+  });
+  try {
+    expect(
+      (await db.query('select current_database() db, session_user role'))
+        .rows[0],
+    ).toEqual({
+      db: 'rdws_test',
+      role: 'rdws_test_migrator',
+    });
+    isolated = true;
+    const accounts = await readTestAccounts();
+    async function login(username: string) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/auth/sign-in/username',
+        headers: { origin },
+        remoteAddress: '192.0.2.' + ++loginClient,
+        payload: accounts.find((row) => row.username === username),
+      });
+      expect(response.statusCode).toBe(200);
+      const cookie = response.cookies
+        .map(({ name, value }) => name + '=' + value)
+        .join('; ');
+      const state = await app.inject({
+        url: '/api/auth/get-session',
+        headers: { cookie },
+      });
+      expect(state.statusCode).toBe(200);
+      return {
+        cookie,
+        actorId: response.json().user.id as string,
+        loginId: state.json().session.id as string,
+      };
+    }
+    const platform = await login('admin');
+    const pm = await login('pm');
+    const target = await login('tester');
+    const command = (who: typeof pm, payload: ManagementCommand) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/management/commands',
+        headers: { origin, cookie: who.cookie },
+        payload,
+      });
+    for (const [tenant, username] of [
+      [projectId, 'pm'],
+      [other, 'manager'],
+    ]) {
+      expect(
+        (
+          await command(platform, {
+            kind: 'project.create',
+            projectId: tenant!,
+            username: username!,
+            name: 'Access audit fixture',
+            commandId: randomUUID(),
+          })
+        ).statusCode,
+      ).toBe(200);
+    }
+    const change: ManagementCommand = {
+      kind: 'project.roles',
+      projectId,
+      username: 'tester',
+      roles: ['developer'],
+      commandId: randomUUID(),
+    };
+    const seat = {
+      kind: 'project.admin',
+      projectId,
+      username: 'tester',
+      enabled: true,
+      commandId: randomUUID(),
+    } as const;
+    const read = (
+      who: typeof pm,
+      query = '',
+      tenant = projectId,
+      observedLogin = who.loginId,
+    ) =>
+      app.inject({
+        url: `/api/projects/${tenant}/access-audit${query}`,
+        headers: { cookie: who.cookie, 'x-rdws-edit-session': observedLogin },
+      });
+
+    expect((await command(pm, change)).statusCode).toBe(200);
+    expect((await read(target)).statusCode).toBe(403);
+    expect((await command(platform, seat)).statusCode).toBe(200);
+    expect((await command(pm, change)).json().replayed).toBe(true);
+    expect((await command(platform, seat)).json().replayed).toBe(true);
+    expect(
+      (await command(pm, { ...change, commandId: randomUUID() })).json()
+        .changed,
+    ).toBe(false);
+
+    const proof = await read(pm);
+    expect(proof.statusCode).toBe(200);
+    expect(proof.headers['cache-control']).toBe('no-store');
+    expect(proof.json().events).toHaveLength(2);
+    expect(proof.json().events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: change.kind,
+          commandId: change.commandId,
+          actorId: pm.actorId,
+          targetId: target.actorId,
+          beforeRoles: [],
+          afterRoles: ['developer'],
+        }),
+        expect.objectContaining({
+          kind: seat.kind,
+          commandId: seat.commandId,
+          actorId: platform.actorId,
+          targetId: target.actorId,
+          beforeRoles: ['developer'],
+          afterRoles: ['developer', 'project_admin'],
+        }),
+      ]),
+    );
+    const observed = proof
+      .json()
+      .events.find(
+        (entry: { commandId: string }) => entry.commandId === seat.commandId,
+      );
+    const stored = (
+      await db.query(
+        'select created_at from command_receipt where scope=$1 and command_id=$2',
+        ['project:' + projectId, seat.commandId],
+      )
+    ).rows[0].created_at as Date;
+    expect(observed.recordedAt).toBe(stored.toISOString());
+    expect((await read(platform)).statusCode).toBe(403);
+    expect((await read(pm, '', other)).statusCode).toBe(403);
+    expect((await read(pm, '', projectId, platform.loginId)).statusCode).toBe(
+      401,
+    );
+    const unobserved = { url: path, headers: { cookie: pm.cookie } };
+    expect((await app.inject(unobserved)).statusCode).toBe(401);
+    expect(
+      (await app.inject({ ...unobserved, method: 'HEAD' })).statusCode,
+    ).toBe(404);
+
+    const seedAt = '2026-02-10T01:02:03.314159Z';
+    const receipt = {
+      changed: true,
+      projectId,
+      targetId: target.actorId,
+      before: [],
+      after: ['tester'],
+    };
+    const seed = (
+      scope: string,
+      actor: string,
+      operation: string,
+      id: string,
+      result: object,
+      at = seedAt,
+    ) =>
+      db.query(
+        'insert into command_receipt(actor_id,scope,operation,command_id,digest,result,created_at) values($1,$2,$3,$4,$5,$6,$7::timestamptz)',
+        [
+          actor,
+          'project:' + scope,
+          operation,
+          id,
+          marker,
+          JSON.stringify(result),
+          at,
+        ],
+      );
+    const sameId = randomUUID();
+    await seed(projectId, pm.actorId, 'project.roles', sameId, receipt);
+    await seed(projectId, pm.actorId, 'project.admin', sameId, {
+      ...receipt,
+      after: ['project_admin'],
+    });
+    await seed(projectId, platform.actorId, 'project.admin', sameId, {
+      ...receipt,
+      after: ['project_admin'],
+    });
+    for (let i = 0; i < 22; i++)
+      await seed(
+        projectId,
+        pm.actorId,
+        'project.roles',
+        randomUUID(),
+        receipt,
+        '2026-02-10T01:02:03.314160Z',
+      );
+    await seed(
+      projectId,
+      pm.actorId,
+      'project.roles',
+      randomUUID(),
+      receipt,
+      '2026-02-10T01:02:03.314158Z',
+    );
+    const older = randomUUID();
+    await seed(
+      projectId,
+      pm.actorId,
+      'project.roles',
+      older,
+      receipt,
+      '2026-02-10T01:02:03.314157Z',
+    );
+    await seed(other, platform.actorId, 'project.admin', randomUUID(), {
+      ...receipt,
+      projectId: other,
+      after: ['project_admin'],
+    });
+    await seed(projectId, platform.actorId, 'project.admin', randomUUID(), {
+      ...receipt,
+      projectId: other,
+      after: ['project_admin'],
+    });
+    await seed(projectId, platform.actorId, 'project.admin', randomUUID(), {
+      ...receipt,
+      after: [marker],
+    });
+    await seed(projectId, pm.actorId, 'project.roles', randomUUID(), {
+      ...receipt,
+      after: ['project_admin'],
+    });
+    await seed(projectId, platform.actorId, 'project.admin', randomUUID(), {
+      ...receipt,
+      before: ['developer'],
+      after: ['tester', 'project_admin'],
+    });
+    await seed(projectId, platform.actorId, 'project.admin', randomUUID(), {
+      ...receipt,
+      before: 'developer',
+      after: ['project_admin'],
+    });
+
+    const firstPage = await read(pm);
+    expect(firstPage.statusCode).toBe(200);
+    const page = firstPage.json();
+    expect(page.events).toHaveLength(25);
+    expect(page.next.at).toBe(seedAt);
+    expect(page.next.commandId).toBe(sameId);
+    const next = await read(
+      pm,
+      '?' +
+        new URLSearchParams({
+          beforeAt: page.next.at,
+          beforeActorId: page.next.actorId,
+          beforeKind: page.next.kind,
+          beforeCommandId: page.next.commandId,
+        }),
+    );
+    expect(next.statusCode).toBe(200);
+    expect(next.json().next).toBeNull();
+    expect(
+      next
+        .json()
+        .events.slice(0, 2)
+        .map((event: { commandId: string }) => event.commandId),
+    ).toEqual([sameId, sameId]);
+    const events = [...page.events, ...next.json().events];
+    expect(events).toHaveLength(29);
+    expect(events.at(-1).commandId).toBe(older);
+    expect(
+      events.filter(
+        ({ commandId }: { commandId: string }) => commandId === sameId,
+      ),
+    ).toHaveLength(3);
+    expect(
+      new Set(
+        events.map(({ actorId, kind, commandId }) =>
+          [actorId, kind, commandId].join(':'),
+        ),
+      ).size,
+    ).toBe(29);
+    expect(firstPage.body + next.body).not.toContain(marker);
+    expect((await read(pm, '?beforeAt=' + seedAt)).statusCode).toBe(400);
+    expect((await read(pm, '?kind=account.active')).statusCode).toBe(400);
+
+    beforeResponse = async () => {
+      await db.query(
+        "delete from project_member where project_id=$1 and user_id=$2 and role='project_admin'",
+        [projectId, pm.actorId],
+      );
+    };
+    const denied = await read(pm);
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json()).not.toHaveProperty('events');
+  } finally {
+    try {
+      await app.close();
+      if (isolated) {
+        await db.query(
+          'delete from command_receipt where scope=any($1::text[])',
+          [[projectId, other].map((id) => 'project:' + id)],
+        );
+        await db.query(
+          'delete from project_member where project_id=any($1::text[])',
+          [[projectId, other]],
+        );
+        await db.query('delete from project where id=any($1::text[])', [
+          [projectId, other],
+        ]);
+      }
+    } finally {
+      await db.end();
+    }
+  }
+});
+
 test('administrators register projects, manage scoped roles and revoke existing logins without changing history', async () => {
   const pool = createTestPool('migration');
   const origin = process.env.RDWS_ORIGIN!;

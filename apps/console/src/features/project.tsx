@@ -625,10 +625,16 @@ export function ProjectWorkspace({
               <RepositoriesPage key={project.id} projectId={project.id} />
             ) : view === 'audit' ? (
               <ProjectAudit
-                key={JSON.stringify([project.id, userId, sessionId])}
+                key={JSON.stringify([
+                  project.id,
+                  userId,
+                  sessionId,
+                  project.roles.includes('project_admin'),
+                ])}
                 projectId={project.id}
                 userId={userId}
                 loginId={sessionId}
+                canReadAccessAudit={project.roles.includes('project_admin')}
               />
             ) : importing ? (
               requirements.isPending ? (

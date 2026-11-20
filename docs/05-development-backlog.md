@@ -240,7 +240,8 @@
   - 已交付子项：[需求模板绑定配置](02-directory-and-engineering-design.html#t14-demand-binding-delivery-20261119)。项目管理员可绑定确切版本、重放原命令并读取当前配置。隔离测试库迁移 0009、独立复审、整仓 137 项、浏览器 29 项和基线校验通过。
   - 已交付修复：[模板绑定登录隔离](02-directory-and-engineering-design.html#t14-binding-login-20261119)。旧页面跟随原登录，换账号后写入拒绝并保留原命令，原账号重新登录可同键核对。独立复审、整仓 142 项、浏览器 30 项和基线校验通过，无新增迁移。
   - 实现前探针：[原生冷恢复](02-directory-and-engineering-design.html#t14-native-preset-evidence-20261118)与[原生在线装载](02-directory-and-engineering-design.html#t14-native-preset-live-20261118)验证固定版 DSH 对精确 ID、同 ID 覆盖和装载失败的实际行为。
-  - 已交付子项：[Native 会话装载](02-directory-and-engineering-design.html#t14-preset-delivery-evidence-20261119)。新建冻结绑定与发布制品摘要，派生读取原生有效版本，已有会话按需恢复原定义。独立复审、整仓 166 项、浏览器 32 项及基线校验通过，无新增迁移。运营目录尚无经确认的实际制品，MCP 外部通信和执行仍受 T07 准入及环境授权约束。
+  - 已交付子项：[Native 会话装载](02-directory-and-engineering-design.html#t14-preset-delivery-evidence-20261119)。新建冻结绑定与发布制品摘要，派生读取原生有效版本，已有会话按需恢复原定义。独立复审、整仓 166 项、浏览器 32 项及基线校验通过，无新增迁移。
+  - 已确认[首批运营候选与隔离验收](02-directory-and-engineering-design.html#t14-first-operational-candidates-20261120)。在单一隔离项目的「需求验收准备」模板中验收插件「验收会话提示」、手动技能「需求验收清单」与 MCP「需求资料只读」。待平台审核制品来源、精确提交和 SHA-256。首轮 MCP 验证离线定义与会话内可见性，实际连接和调用等待 T07 准入与具名环境授权。
 
 - [ ] **T15 · 统计与配额**
   - 说明：先明确计量维度、配额规则与超限行为，再展示真实会话用量和项目配额。

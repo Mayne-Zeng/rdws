@@ -146,6 +146,7 @@
   - 接线前核对：[Native 声明与执行的独立边界](02-directory-and-engineering-design.html#t07-native-tool-boundary-evidence-20261120)。正式 Host 实际模型回包在已声明和无声明场景中都受现有根守卫，执行体零入口。锁包对照复验声明后撤权、无声明及许可执行一次。14 项邻域和故障反例通过。
   - 已交付子项：[共享 BFF 所有者与写资格撤销](02-directory-and-engineering-design.html#t07-shared-bff-delivery-20261120)。真实 PostgreSQL 借用终止、独立后端回查及断开客户端后的关停均通过，A/B 交付复审批准。整仓 308 项、静态、构建及基线通过。本地提交，待 Native 写工具与编队联合验收。
   - 已本地交付联测：[锁版 Native 工具与父 Broker](02-directory-and-engineering-design.html#t07-native-parent-broker-evidence-20261120)。实际工具经测试 IPC 调用受管 BFF Broker，验证一次写入、原键复核、旧代拒绝、释放在途拒新及停稳换代。双面复审、邻域 22 项、整仓 309 项和基线通过。
+  - 已本地交付联测：[正式 Native Host 单次工具授权](02-directory-and-engineering-design.html#t07-native-host-tool-permit-evidence-20261120)。经真实私有 IPC 验证原运行、当步、参数、时限与一次消费，拒绝错会话及取消后迟到许可，实际合成模型续步收到原关联结果。双面复审、整仓 320 项和基线通过。真实工作树写入与物理取消继续接线。
   - 来源：I2-AUTH、I3-WRITE、I3-CONTEXT。
 
 - [ ] **T08 · 变更查看与交付快照**

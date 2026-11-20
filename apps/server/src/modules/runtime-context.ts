@@ -141,6 +141,8 @@ type ModelStep = {
   turn: number;
   closed: boolean;
   selection?: EffectiveModel;
+  validBefore?: number;
+  fixtureToolUsed?: true;
   attempts: Set<string>;
   wireAttempt?: string;
 };
@@ -604,6 +606,7 @@ export class ContextRuns {
     input: unknown,
     token: unknown,
     reply?: (result: unknown, validBefore: number) => void,
+    fixtureToolRun?: RunBinding,
   ) {
     const cap = this.verify(token),
       now = Date.now();
@@ -619,6 +622,9 @@ export class ContextRuns {
         'model-title-origin',
         'model-title-prepare',
         'model-title-close',
+        ...(fixtureToolRun && process.env.RDWS_MODE === 'test'
+          ? ['fixture-tool-permit']
+          : []),
       ].includes(cap.operation ?? '') ||
       cap.hostGeneration !== this.generation ||
       !isRecord(input) ||
@@ -628,6 +634,15 @@ export class ContextRuns {
     )
       businessError(403, '上下文服务请求未获授权');
     this.nonces.set(cap.nonce, cap.expiresAt);
+    if (cap.operation === 'fixture-tool-permit' && fixtureToolRun) {
+      const result = await this.authorizeFixtureTool(
+        input,
+        cap,
+        fixtureToolRun,
+      );
+      reply?.(result, result.expiresAt);
+      return result;
+    }
     if (cap.operation?.startsWith('model-title-')) {
       const result = this.handleTitle(input, cap);
       reply?.(result, cap.expiresAt);
@@ -785,9 +800,67 @@ export class ContextRuns {
         ...selected,
         routes: Object.freeze({ ...selected.routes }),
       };
+      modelStep.validBefore = validBefore;
       result = { ...value, modelBindingId: modelStep.id };
     }
     reply?.(result, validBefore);
     return result;
+  }
+
+  private async authorizeFixtureTool(
+    input: Record<string, unknown>,
+    cap: Grant,
+    expected: RunBinding,
+  ) {
+    const run = this.runs.get(expected.runId);
+    const step = this.modelSteps.get(expected.sessionId);
+    const now = Date.now();
+    const { deadline } = input;
+    if (
+      !run ||
+      !step ||
+      step.batch.length !== 1 ||
+      step.batch[0] !== run ||
+      Object.entries(this.binding(run)).some(
+        ([key, value]) =>
+          expected[key as keyof RunBinding] !== value || input[key] !== value,
+      ) ||
+      input.authSessionId !== run.who.authSessionId ||
+      input.agentGeneration !== step.agentGeneration ||
+      input.turn !== step.turn ||
+      input.modelBindingId !== step.id ||
+      bodyHash(parseStepMarker(input.modelStep)) !== bodyHash(step.stamp) ||
+      input.toolName !== 'rdws_authority_probe' ||
+      !isRecord(input.arguments) ||
+      Object.keys(input.arguments).length !== 0 ||
+      typeof input.toolCallId !== 'string' ||
+      input.toolCallId.length < 1 ||
+      input.toolCallId.length > 128 ||
+      !Number.isSafeInteger(input.toolCallSeq) ||
+      Number(input.toolCallSeq) < 1 ||
+      typeof deadline !== 'number' ||
+      !Number.isSafeInteger(deadline) ||
+      deadline <= now ||
+      deadline > now + 2000
+    )
+      return invalidModel();
+    const current = () =>
+      this.modelSteps.get(run.sessionId) === step &&
+      !step.closed &&
+      !step.fixtureToolUsed &&
+      step.selection?.isCurrent() &&
+      this.current([run]);
+    if (!current()) return invalidModel();
+    const login = await this.read(run.who, run.requirementId, run.sessionId);
+    const expiresAt = Math.min(
+      cap.expiresAt,
+      login.validBefore,
+      step.validBefore ?? 0,
+      run.expiresAt,
+      deadline,
+    );
+    if (!current() || expiresAt <= Date.now()) return invalidModel();
+    step.fixtureToolUsed = true;
+    return { digest: cap.bodyHash, expiresAt };
   }
 }

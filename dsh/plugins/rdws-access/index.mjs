@@ -35,10 +35,17 @@ export const inject = [
 export function apply(ctx, config) {
   if (process.send)
     process.once('disconnect', () => process.kill(process.pid, 'SIGTERM'));
-  ctx.tools.guard(() => ({
-    reason: 'Tools are disabled in this RDWS stage',
-    info: RDWS_TOOL_GUARD_DENIAL,
-  }));
+  ctx.tools.guard((exec) => {
+    const gate = contextBinding.fixtureToolGate(exec);
+    if (gate === 'allow') return;
+    return {
+      reason:
+        gate === 'invalidated'
+          ? 'Fixture tool permit no longer current'
+          : 'Tools are disabled in this RDWS stage',
+      info: RDWS_TOOL_GUARD_DENIAL,
+    };
+  });
   ctx.on(
     'agent/created',
     ({ agent }) => {

@@ -1495,6 +1495,19 @@
   <p>锁定 Native 的工具处理器等待父端给出的实际 T06 终态，原生结果指向同一实时调用，下一步合成 Adapter 收到逐字相同的结果。固定文件标记追加一次；实际 Broker 原键在释放前后均返回同一持久回执。错事件序号在父端拒绝。声明后持有者真实释放，随后 Native 工具仍抵达父 Broker，旧代的新命令返回 409，数据库没有该命令回执，工作树没有新增标记。旧进程实际存活和释放在途两个时点均拒绝另一会话，确认旧 PID 与独立组退出、PG 旧代释放后，新会话实际取得新代并完成写入。</p>
   <p><code>pnpm test tests/integration/shared-write-authority.test.ts tests/integration/native-tool-authority-boundary.test.ts tests/integration/write-handoff.test.ts tests/integration/local-execution.test.ts</code> 退出 0，4 文件、22 项。整仓 <code>pnpm test</code> 退出 0，54 文件、309 项及 1 项条件跳过。类型、lint、当前 Git 文件 Prettier 检查、构建、基线通过。交付修订以本地 <code>test: connect a locked Native tool to the managed write broker</code> 为准。正式 Host 根授权、单次取消、模型出口和产品编队仍待联合验收。</p>
 
+  <h4 id="t07-native-host-tool-permit-20261120">11.20.8 T07 正式 Native Host 单次工具授权验证</h4>
+  <p>Change / R3，基线 <code>8b34740</code>。沿 I2-AUTH、I3-WRITE 和 §11.20.6–7 验证正式进程中的根守卫、短私有 IPC 和原生工具结果。下一步的工作树执行、持续取消与产品编队以此为授权前置证据。A 面建议先隔离验证正式 Host 的短核对和单次消费，B 面指出正式写入还须同时绑定写代、冻结版本和物理停止。先验可迁移的授权前置，以便区分根授权与 Broker 执行问题。验收动作是一个无参数、返回固定常量的测试工具。</p>
+  <ol>
+    <li>通过显式程序化装配在 macOS 测试态启用夹具。配置在正式 Host 启动时冻结，使用现有锁版 mediated Host 和 FD4 固定合成流。父端通过已签名的 <code>run</code> 控制只指定一个确切原运行，包含 Host、项目需求、本人会话、原登录、运行、对端 nonce 和请求 ID。浏览器、Profile 和交互输入均不提供夹具授权配置。正常 Host 的根守卫和产品入口维持现有准入。</li>
+    <li>Agent 仅在领取该原运行对应输入后声明夹具。原生同 Agent 的实时 <code>tool/call</code> 只登记调用事实。<code>tools/pre-execute</code> 传递已有的拒绝、取消、待批准及错误，仅在下游决定允许时，针对同一执行对象、当步、工具名、原生事件序号、调用 ID 和空参数，通过现有 FD3 签名服务请求父端核对。父端限隔离装配，复用 Host 代次、正文摘要、nonce 和运行存活检查，绑定该原运行和原登录、Agent、轮次、步骤及当前 mediated 绑定 ID。父端复查登录后同步核对当步存活并消耗唯一许可，回复正文携带绝对到期时间，取当前步、登录、原运行和 IPC 期限的最短值。</li>
+    <li>正式同步根守卫只接受同一夹具执行对象的有效见证，并固定名称、Agent、父执行关系、调用身份、参数和原生已解析工具集合的路由字段，保留 Native 的取消信号写入。核对锁版集合实际解析到注册的固定定义。其他根守卫继续参与，工具体入口再次核对本地当步、到期和运行存活，并单次消费。错会话、错正文、原票重放、新票同调用、换步和取消后的迟到许可均须零新增执行。实际结果关联原生 <code>tool/call</code> 序号与调用 ID，正常延续的推理实际收到对应结果。该短许可只支撑测试常量，业务写入继续由父 Broker 独立核对写代、版本、最终起跑与停稳。</li>
+    <li>先复现正式 Host 零接受，再跑真实 FD3/FD4 限域正反例，使用另一合法签名会话提交同一 <code>requestId</code>，核对零声明和执行。对照其他根守卫与守卫后路由变更。先让父端生成有效许可，暂缓实际回包，通过签名 <code>run.cancel</code> 从子端撤回原运行，放回回复并核对本地拒绝。独立核对重复 nonce、新票同调用、错正文及新请求携带旧绑定。随后运行相邻 Native 权限、类型、lint、格式、构建、整仓和基线。回退此单批提交并停止本轮隔离 Host，真实配置及数据库迁移沿原口径。</li>
+  </ol>
+
+  <p id="t07-native-host-tool-permit-evidence-20261120">双面方案及交付复审均 APPROVE。复审与回归确认资格以父端签名指定的原运行、登录及本人会话为准。声明只使用当前原生轮次的实际领取。父端核对 FD3 的正文摘要、原票 nonce、当步 mediated 绑定、登录和运行存活后单次发许可。子端同时核对原生日志的空参数与冻结参数，保留其他根守卫，锁固定工具定义的执行路由，并在工具体重新检查生效时限。</p>
+  <p>正式锁版 Host 的一次合成调用通过，结果关联真实原生序号与调用 ID，随后实际 FD4 请求收到同一结果。启用夹具尚未指定运行时，普通轮次正常完成。同 ID 旁会话、同 Agent 后续排队和混合领取均无错误声明。错正文、原票重放、新票并行重复同一调用及新票携带旧步骤分别被拒。先产生有效许可、经真实 <code>run.cancel</code> 移除子端原运行后回包，根守卫记录已收许可失效。工具体在根守卫通过后越过截止仍拒绝。现有未启用 Host 保持默认根拒绝。改前定点复现无授权入口、中间件重绑调用或改写空参数导致误执行，以及尚未指定运行时普通轮次异常，均在修订后关闭。</p>
+  <p>邻域 <code>pnpm test tests/integration/{native-tool-authority-boundary,native-model-attempt-authority,native-egress-confinement,context-sync,shared-write-authority}.test.ts</code> 退出 0，5 文件、33 项。独立新增的无指定运行定点反例由失败转为通过。最终 <code>caffeinate -i pnpm test</code> 退出 0，54 文件、320 项，1 项条件跳过。类型、lint、当前 Git 文件 Prettier 检查、构建及基线通过。交付修订以本地 <code>test: verify a single tool permit in the native host</code> 为准。真实工作树写入、单次物理取消和编队仍按 T07 联合验收。</p>
+
   <h3 id="t11-maintenance-acceptance-20261119">11.21 T11 已确认的导入与人员维护</h3>
   <p>2026-11-19 用户确认需求批量导入采用同页的上传、预览、修正与整批提交。上传后动态显示解析和校验进度，下方逐条呈现需求明细、状态与可定位的问题。用户可在同页修正并重新校验。预览和校验阶段不写业务数据。全部通过后由用户显式整批提交入库，提交结果继续在同页逐条呈现。</p>
   <p>参与者和开发负责人维护按当前项目角色授权。移除参与者或更换负责人时，相关未完成子任务须显式交给当前具备资格的接手人，并保留原分派记录。验收覆盖无资格接手、已有分派记录保留，以及原有阶段与任务按钮权限。</p>

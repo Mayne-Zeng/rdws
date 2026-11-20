@@ -2,6 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import { signGrant, bodyHash } from '../../bridge/access.ts';
 import { cancelTitleOrigins, rememberTitleOrigin } from './title-binding.mjs';
+import { installFixtureToolProbe } from './tool-probe.mjs';
 export function installContext(ctx, config, key, route, requestContext) {
   const authorized = new Map(),
     agents = new WeakMap(),
@@ -10,6 +11,21 @@ export function installContext(ctx, config, key, route, requestContext) {
     modelSteps = new Map();
   let modelSequence = 0;
   const lookup = (r) => r.sessionId + ':' + r.requestId + ':' + r.peerNonce;
+  const toolProbe =
+    config.fixtureToolProbe === true && config.modelRoutes
+      ? installFixtureToolProbe(
+          ctx,
+          (agent) => {
+            const record = modelSteps.get(String(agent.session.id));
+            return record?.agent === agent && currentModelStep(record)
+              ? record
+              : undefined;
+          },
+          (run) =>
+            authorized.get(lookup(run)) === run && run.expiresAt > Date.now(),
+          service,
+        )
+      : undefined;
   const inboxInputs = (agent) => [
     ...agent.inbox.nextStep,
     ...agent.inbox.nextTurn,
@@ -92,12 +108,14 @@ export function installContext(ctx, config, key, route, requestContext) {
       old = authorized.get(id);
     if (old && old.runId !== input.runId)
       throw new Error('Run binding conflict');
-    if (!old)
-      authorized.set(id, {
-        ...input,
-        admittedAt: Date.now(),
-        expiresAt: Date.now() + 30 * 60 * 1000,
-      });
+    const run = old ?? {
+      ...input,
+      admittedAt: Date.now(),
+      expiresAt: Date.now() + 30 * 60 * 1000,
+    };
+    if (input.fixtureTool === true && !toolProbe?.offer(run))
+      throw new Error('Invalid fixture tool run');
+    if (!old) authorized.set(id, run);
     return { authorized: true };
   });
   route('run.cancel', (input) => {
@@ -174,6 +192,12 @@ export function installContext(ctx, config, key, route, requestContext) {
         run.claimed = true;
         run.claimedTurn = turn;
       }
+      if (source?.kind === 'user' || source?.kind === 'retry')
+        toolProbe?.claim(
+          agent,
+          source.principal?.kind === 'rdws' ? run : undefined,
+          turn,
+        );
     },
     { global: true },
   );
@@ -609,6 +633,7 @@ export function installContext(ctx, config, key, route, requestContext) {
     { global: true },
   );
   return {
+    fixtureToolGate: (exec) => toolProbe?.gate(exec),
     revoke(authSessionId, requirementId, cutoff) {
       if (config.firstMessageTitle)
         cancelTitleOrigins(

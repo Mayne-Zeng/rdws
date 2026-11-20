@@ -15,8 +15,12 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { sessionRpc } from '@rdws/dsh/sessions';
 import { NativeWebHost } from '@rdws/dsh/web';
-import { expect, test } from 'vitest';
-import { ContextRuns } from '../../apps/server/src/modules/runtime-context.ts';
+import { bodyHash, isRecord, signGrant } from '@rdws/dsh/access';
+import { expect, test, vi } from 'vitest';
+import {
+  ContextRuns,
+  type RunBinding,
+} from '../../apps/server/src/modules/runtime-context.ts';
 
 const toolName = 'rdws_boundary_probe';
 const toolDefinition = String.raw`
@@ -344,6 +348,437 @@ test('the formal Host rejects actual model tool calls even when an Agent-scoped 
     }
   }
 }, 35_000);
+
+test
+  .skipIf(process.platform !== 'darwin')
+  .each([
+    'allow',
+    'cancel',
+    'other-guard',
+    'reroute',
+    'rebind',
+    'mutable-args',
+    'raw-args',
+    'expired',
+    'queued',
+    'mixed',
+    'no-offer',
+  ] as const)(
+  'the formal mediated Host enforces a fixture tool permit for %s',
+  async (mode) => {
+    const root = await mkdtemp(
+      join(await realpath(tmpdir()), 'rdws-host-permit-'),
+    );
+    const project = 'fixture-permit';
+    const config = join(root, 'config');
+    const profile = join(config, 'profiles/rdws');
+    const model = 'fixture-tool';
+    const provider = 'rdws-glm';
+    const fixtureName = 'rdws_authority_probe';
+    const callId = 'call-same-for-both-sessions';
+    const routes = { pi: 'https://fixture-tool.invalid/v1/chat/completions' };
+    const requestId = randomUUID();
+    const requirementId = randomUUID();
+    let firstPermitBody: Record<string, unknown> | undefined;
+    let checkedOldStep = false;
+    let additionalPrompt: (() => Promise<unknown>) | undefined;
+    const extraText = 'Synthetic subsequent input without tool authority';
+    async function fixtureToken(body: Record<string, unknown>) {
+      const key = await readFile(
+        join(root, 'secrets', 'dsh-bff-key-' + project),
+        'utf8',
+      );
+      return signGrant(key.trim(), {
+        aud: 'rdws:bff:' + host.contextGeneration,
+        purpose: 'service',
+        operation: 'fixture-tool-permit',
+        runId: String(body.runId),
+        hostGeneration: host.contextGeneration,
+        bodyHash: bodyHash(body),
+      });
+    }
+    const wire: {
+      sessionId?: string;
+      tools?: { function: { name: string } }[];
+      messages: { role: string; tool_call_id?: string; content?: unknown }[];
+    }[] = [];
+    const host: NativeWebHost = new NativeWebHost(
+      root,
+      config,
+      project,
+      undefined,
+      'mediated',
+      {
+        routes,
+        async handle(request): Promise<Response> {
+          const body = (await new Response(
+            request.body,
+          ).json()) as (typeof wire)[number];
+          wire.push({ ...body, sessionId: request.call.sessionId });
+          const continuation = body.messages.some(
+            ({ role }) => role === 'tool',
+          );
+          if (request.call.sessionId === probe?.sessionId && additionalPrompt) {
+            const enqueue = additionalPrompt;
+            additionalPrompt = undefined;
+            expect(await enqueue()).toEqual({ accepted: true });
+          }
+          if (
+            request.call.sessionId === probe?.sessionId &&
+            continuation &&
+            firstPermitBody
+          ) {
+            const old = { ...firstPermitBody, deadline: Date.now() + 1500 };
+            expect(request.call.bindingId).not.toBe(
+              firstPermitBody.modelBindingId,
+            );
+            await expect(
+              runs.handle(old, await fixtureToken(old), undefined, probe),
+            ).rejects.toMatchObject({ statusCode: 403 });
+            checkedOldStep = true;
+          }
+          const [delta, finish] = continuation
+            ? [{ role: 'assistant', content: 'Synthetic follow-up' }, 'stop']
+            : [
+                {
+                  role: 'assistant',
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: callId,
+                      type: 'function',
+                      function: {
+                        name: fixtureName,
+                        arguments:
+                          mode === 'raw-args' ? '{"extra":true}' : '{}',
+                      },
+                    },
+                  ],
+                },
+                'tool_calls',
+              ];
+          return runs.authorizeModelAttempt(
+            request,
+            () =>
+              new Response(
+                [
+                  { index: 0, delta, finish_reason: null },
+                  { index: 0, delta: {}, finish_reason: finish },
+                ]
+                  .map(
+                    (choice) =>
+                      'data: ' +
+                      JSON.stringify({
+                        id: 'fixture-tool',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model,
+                        choices: [choice],
+                      }) +
+                      '\n\n',
+                  )
+                  .join('') + 'data: [DONE]\n\n',
+                { headers: { 'content-type': 'text/event-stream' } },
+              ),
+          );
+        },
+      },
+    );
+    const runs: ContextRuns = new ContextRuns(
+      host.contextGeneration,
+      (token) => host.verifyContext(token),
+      async () => ({
+        value: {
+          snapshot: { requirementId, contextVersion: 1 },
+          digest: 'fixture',
+        },
+        validBefore: Date.now() + 10_000,
+      }),
+      () => false,
+      async () => ({
+        provider,
+        model,
+        revision: 'fixture',
+        routes,
+        isCurrent: () => true,
+      }),
+    );
+    let probe: RunBinding | undefined;
+    let approvals = 0;
+    let ipcResponseSentAfterCancel = false;
+    host.configureContext(async (body, token, reply) => {
+      if (host.verifyContext(token)?.operation !== 'fixture-tool-permit')
+        return runs.handle(body, token, reply);
+      expect(isRecord(body)).toBe(true);
+      const caller = body as Record<string, unknown>;
+      await expect(runs.handle(body, token)).rejects.toMatchObject({
+        statusCode: 403,
+      });
+      await expect(
+        runs.handle(
+          { ...caller, toolCallSeq: Number(caller.toolCallSeq) + 1 },
+          token,
+          undefined,
+          probe,
+        ),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      const fresh = await fixtureToken(caller);
+      const [original, repeated] = await Promise.allSettled([
+        runs.handle(body, token, undefined, probe),
+        runs.handle(body, fresh, undefined, probe),
+      ]);
+      expect(original.status).toBe('fulfilled');
+      expect(repeated).toMatchObject({
+        status: 'rejected',
+        reason: { statusCode: 403 },
+      });
+      if (original.status !== 'fulfilled') throw original.reason;
+      const permit = original.value as { expiresAt: number };
+      firstPermitBody = caller;
+      approvals++;
+      await expect(
+        runs.handle(body, token, undefined, probe),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      if (mode === 'cancel') {
+        expect(
+          await host.control('run.cancel', { runId: probe!.runId }),
+        ).toEqual({ cancelled: true });
+        ipcResponseSentAfterCancel = permit.expiresAt > Date.now();
+      }
+      reply(permit, permit.expiresAt);
+      return permit;
+    });
+    try {
+      vi.stubEnv('RDWS_MODE', 'development');
+      expect(() => host.enableFixtureToolProbe()).toThrow('mediated test Host');
+      vi.stubEnv('RDWS_MODE', 'test');
+      host.enableFixtureToolProbe();
+      await mkdir(profile, { recursive: true, mode: 0o700 });
+      const fixturePlugin = join(profile, 'tool-policy.mjs');
+      await writeFile(
+        fixturePlugin,
+        String.raw`
+export const inject = ['tools'];
+export function apply(ctx, { mode }) {
+  if (mode === 'other-guard')
+    ctx.tools.guard((exec) => exec.name === 'rdws_authority_probe' ? 'Independent fixture denial' : undefined);
+  if (mode === 'reroute') ctx.on('tools/execute', async (exec, next) => {
+    exec.name = 'fixture_wrong_target';
+    return next();
+  }, { global: true });
+  if (mode === 'rebind') ctx.on('tools/pre-execute', async (exec, next) => {
+    const outcome = await next();
+    if (exec.name === 'rdws_authority_probe') exec.callId = 'fixture_wrong_call';
+    return outcome;
+  }, { global: true, prepend: true });
+  if (mode === 'mutable-args') {
+    ctx.on('tools/pre-execute', (exec, next) => {
+      if (exec.name === 'rdws_authority_probe') exec.arguments = {};
+      return next();
+    }, { global: true, prepend: true });
+    ctx.on('tools/execute', (exec, next) => {
+      exec.arguments.unexpected = true;
+      return next();
+    }, { global: true });
+  }
+  if (mode === 'raw-args') ctx.on('tools/pre-execute', (exec, next) => {
+    if (exec.name === 'rdws_authority_probe') exec.arguments = Object.freeze({});
+    return next();
+  }, { global: true, prepend: true });
+  if (mode === 'expired') ctx.on('tools/execute', async (_exec, next) => {
+    await new Promise((resolve) => setTimeout(resolve, 2100));
+    return next();
+  }, { global: true });
+}
+`,
+        { mode: 0o600 },
+      );
+      await writeFile(
+        join(config, '.credentials.yaml'),
+        JSON.stringify({
+          version: 1,
+          refs: { FIXTURE_MODEL: 'synthetic-only' },
+        }),
+        { mode: 0o600 },
+      );
+      await writeFile(
+        join(profile, 'cordis.patch.yml'),
+        JSON.stringify([
+          { id: 'session-title-llm', disabled: true },
+          {
+            id: 'llm-pi-ai',
+            config: {
+              providers: {
+                [provider]: {
+                  api: 'openai-completions',
+                  baseURL: 'https://fixture-tool.invalid/v1',
+                  apiKeyEnv: 'FIXTURE_MODEL',
+                  models: [{ id: model }],
+                },
+              },
+            },
+          },
+          {
+            insert: [
+              {
+                id: 'tool-policy-fixture',
+                name: fixturePlugin,
+                config: { mode },
+              },
+            ],
+          },
+        ]),
+        { mode: 0o600 },
+      );
+      const workspace = await host.workspace(
+        requirementId,
+        'Synthetic tool permission',
+      );
+      const who = { userId: randomUUID(), authSessionId: randomUUID() };
+      const identity = { ...who, ...workspace, requirementId };
+      const sessions = [];
+      for (const offered of mode === 'no-offer' ? [false] : [true, false]) {
+        const { sessionId } = (await sessionRpc(
+          host,
+          { ...identity, purpose: 'create' },
+          'session/create',
+          { workspaceId: workspace.workspaceId },
+        )) as { sessionId: string };
+        const browser = {
+          ...identity,
+          purpose: 'browser' as const,
+          readSessionIds: [sessionId],
+          ownSessionIds: [sessionId],
+        };
+        const ticket = host.ticket(browser);
+        const run = runs.admit(
+          who,
+          requirementId,
+          sessionId,
+          requestId,
+          host.claims(ticket)!.nonce,
+        );
+        if (offered) probe = run;
+        await host.control('run', {
+          ...run,
+          authSessionId: who.authSessionId,
+          fixtureTool: offered,
+        });
+        sessions.unshift({ sessionId, ticket, browser, offered });
+      }
+      for (const { sessionId, ticket, browser, offered } of sessions) {
+        if (offered && (mode === 'queued' || mode === 'mixed')) {
+          additionalPrompt = async () => {
+            const extraRequest = randomUUID();
+            await host.control('run', {
+              ...runs.admit(
+                who,
+                requirementId,
+                sessionId,
+                extraRequest,
+                host.claims(ticket)!.nonce,
+              ),
+              authSessionId: who.authSessionId,
+            });
+            return sessionRpc(host, ticket, 'session/prompt', {
+              sessionId,
+              requestId: extraRequest,
+              mode: mode === 'queued' ? 'queue' : 'steer',
+              content: [{ type: 'text', text: extraText }],
+            });
+          };
+        }
+        expect(
+          await sessionRpc(host, ticket, 'session/prompt', {
+            sessionId,
+            requestId,
+            mode: 'queue',
+            content: [{ type: 'text', text: 'Synthetic tool request' }],
+          }),
+        ).toEqual({ accepted: true });
+        const events = async () =>
+          (
+            (await sessionRpc(host, browser, 'session/events', {
+              address: { kind: 'session', sessionId },
+            })) as { records: { event: ToolEvent }[] }
+          ).records.map(({ event }) => event);
+        await expect
+          .poll(
+            async () =>
+              (await events()).filter(({ type }) => type === 'turn/end').length,
+            { timeout: 10_000 },
+          )
+          .toBe(offered && mode === 'queued' ? 2 : 1);
+        const all = await events();
+        if (mode === 'no-offer')
+          expect(
+            all.find(({ type }) => type === 'turn/end')?.data.reason?.kind,
+          ).toBe('completed');
+        const call = all.find(({ type }) => type === 'tool/call');
+        const result = all.find(({ type }) => type === 'tool/result');
+        expect(call?.data.callId).toBe(callId);
+        const success = offered && ['allow', 'queued', 'mixed'].includes(mode);
+        expect(result).toMatchObject({
+          sourceEventSeqs: [call!.seq],
+          data: { message: { toolCallId: callId, isError: !success } },
+        });
+        expect(JSON.stringify(result)).toContain(
+          success ? 'RDWS fixture tool completed' : 'Error',
+        );
+        if (offered && mode === 'cancel')
+          expect(JSON.stringify(result)).toContain(
+            'Fixture tool permit no longer current',
+          );
+        if (offered && mode === 'other-guard')
+          expect(JSON.stringify(result)).toContain(
+            'Independent fixture denial',
+          );
+        if (offered && mode === 'reroute')
+          expect(JSON.stringify(result)).toContain('read only property');
+        if (offered && mode === 'rebind')
+          expect(JSON.stringify(result)).toContain(
+            'Fixture tool permit no longer current',
+          );
+        if (offered && mode === 'expired')
+          expect(JSON.stringify(result)).toContain(
+            'Fixture tool permit expired',
+          );
+        const requests = wire.filter((row) => row.sessionId === sessionId);
+        expect(
+          (requests[0]?.tools ?? []).map(({ function: spec }) => spec.name),
+        ).toEqual(offered ? [fixtureName] : []);
+        if (success)
+          expect(requests[1]?.messages).toContainEqual(
+            expect.objectContaining({
+              tool_call_id: callId,
+              content: 'RDWS fixture tool completed',
+            }),
+          );
+        if (!offered) expect(approvals).toBe(0);
+        if (offered && (mode === 'queued' || mode === 'mixed')) {
+          const following = requests.find((item) =>
+            item.messages.some(({ content }) => content === extraText),
+          );
+          expect(following).toBeDefined();
+          expect(following?.tools ?? []).toEqual([]);
+        }
+      }
+      expect(approvals).toBe(
+        ['mutable-args', 'raw-args', 'no-offer'].includes(mode) ? 0 : 1,
+      );
+      if (mode === 'allow') expect(checkedOldStep).toBe(true);
+      if (mode === 'cancel') expect(ipcResponseSentAfterCancel).toBe(true);
+    } finally {
+      try {
+        await host.close();
+      } finally {
+        vi.unstubAllEnvs();
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  },
+  30_000,
+);
 
 const independentProbe = String.raw`
 import { createRequire } from 'node:module';

@@ -161,6 +161,18 @@ export function resolveNativeModelEgress(value?: string): NativeModelEgress {
 
 export class NativeWebHost {
   readonly contextGeneration = randomUUID();
+  private fixtureToolProbe = false;
+  enableFixtureToolProbe() {
+    if (
+      process.env.RDWS_MODE !== 'test' ||
+      this.modelEgress !== 'mediated' ||
+      this.starting ||
+      this.process ||
+      this.closing
+    )
+      throw new Error('Fixture tools require a fresh mediated test Host');
+    this.fixtureToolProbe = true;
+  }
   private contextHandler?: ContextHandler;
   configureContext(handle: ContextHandler) {
     this.contextHandler = handle;
@@ -438,6 +450,7 @@ export class NativeWebHost {
                 projectId: this.projectId,
                 releasedCapabilities: this.releasedCapabilities,
                 contextGeneration: this.contextGeneration,
+                ...(this.fixtureToolProbe && { fixtureToolProbe: true }),
                 ...(this.modelTransport
                   ? {
                       modelRoutes: Object.fromEntries(

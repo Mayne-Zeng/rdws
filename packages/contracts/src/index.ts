@@ -241,6 +241,7 @@ export const RequirementDetailsInput = Type.Object(
         title: Type.Optional(RequirementInput.properties.title),
         description: Type.Optional(RequirementInput.properties.description),
         acceptance: Type.Optional(RequirementInput.properties.acceptance),
+        background: Type.Optional(RequirementInput.properties.description),
       },
       { additionalProperties: false, minProperties: 1 },
     ),
@@ -389,7 +390,7 @@ export interface TaskRecord {
 }
 export interface RequirementDetail {
   reachedStages: string[];
-  requirement: RequirementSummary;
+  requirement: RequirementSummary & { background: string };
   tasks: TaskRecord[];
   assignmentNames?: Record<string, string>;
   participants: {

@@ -1038,6 +1038,11 @@ textarea {
   background: var(--rail);
 }
 
+.context-background {
+  margin-bottom: 16px;
+}
+
+.context-background-copy,
 .context-tasks .context-task,
 .context-tasks .context-empty {
   padding: 12px 16px;

@@ -114,6 +114,7 @@ export const requirement = pgTable(
     title: text('title').notNull(),
     description: text('description').notNull(),
     acceptance: text('acceptance').notNull(),
+    background: text('background').notNull().default(''),
     leadId: text('lead_id')
       .notNull()
       .references(() => user.id),

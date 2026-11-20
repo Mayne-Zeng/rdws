@@ -419,6 +419,7 @@ test('project runtimes share four context reads while release can still complete
   }
 });
 test('summaries mark truncated fields, keep a complete-view link and enforce a byte budget', () => {
+  const background = '𠮷\u0001'.repeat(2800);
   const data = {
     requirement: {
       id: 'r',
@@ -426,6 +427,7 @@ test('summaries mark truncated fields, keep a complete-view link and enforce a b
       title: 'Synthetic',
       description: '字'.repeat(8000),
       acceptance: '验'.repeat(8000),
+      background,
       leadId: 'u',
       contextVersion: 1,
       stage: 'testing',
@@ -444,7 +446,16 @@ test('summaries mark truncated fields, keep a complete-view link and enforce a b
   expect(snapshot.truncated).toBe(true);
   expect(snapshot.summarizedFields.description).toBe(true);
   expect(snapshot.summarizedFields.acceptance).toBe(true);
-  expect(snapshot.fullView).toContain('requirement=r');
+  expect(snapshot.summarizedFields.background).toBe(true);
+  expect(snapshot.summarizedFields.tasks).toBe(true);
+  expect(snapshot.background.length).toBeGreaterThan(0);
+  expect(background.startsWith(snapshot.background)).toBe(true);
+  expect(snapshot.background).not.toMatch(/\p{Surrogate}/u);
+  expect(Array.from(snapshot.background).length).toBeLessThan(1500);
+  expect(snapshot.fullView).toBe('/?project=p&requirement=r&view=overview');
+  expect(snapshot.backgroundView).toBe(
+    '/?project=p&requirement=r&view=context',
+  );
   expect(Buffer.byteLength(JSON.stringify(snapshot))).toBeLessThanOrEqual(
     24000,
   );

@@ -27,7 +27,12 @@ import { fail, type WorkbenchRuntime } from './workbench-runtime.ts';
 
 const pageSize = 25;
 const kinds = Object.keys(businessAuditLabels);
-const detailFields = ['title', 'description', 'acceptance'] as const;
+const detailFields = [
+  'title',
+  'description',
+  'acceptance',
+  'background',
+] as const;
 const auditId = /^[a-zA-Z0-9-]{1,128}$/;
 const microsecondUtc = /^[1-9]\d{3}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
 

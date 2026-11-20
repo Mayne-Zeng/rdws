@@ -360,6 +360,70 @@ test('requirement details preserve the original edit across reload and discard s
     await expect(
       page.getByText('更新了需求资料 · 需求说明', { exact: false }),
     ).toHaveCount(2);
+
+    await login('lead');
+    const contextUrl = routeUrl.replace('view=overview', 'view=context');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.goto(contextUrl);
+    const editBackground = page.getByRole('button', {
+      name: '编辑需求背景',
+      exact: true,
+    });
+    const saveBackground = page.getByRole('button', {
+      name: '保存需求背景',
+      exact: true,
+    });
+    const background = page.getByLabel('需求背景', { exact: true });
+    await editBackground.press('Enter');
+    await expect(background).toHaveValue('');
+    await expect(saveBackground).toBeDisabled();
+    const marker = '上下文独立背景 🧪';
+    await background.fill(marker);
+    for (const colorScheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme });
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth),
+      ).toBeLessThanOrEqual(390);
+      await page
+        .locator('.info-panel')
+        .filter({ has: background })
+        .screenshot({
+          path: testInfo.outputPath(
+            `requirement-background-${colorScheme}-390.png`,
+          ),
+        });
+    }
+    fault = 'drop-before';
+    await saveBackground.click();
+    await expect(
+      page.getByText('原保存结果待确认。', { exact: false }),
+    ).toBeVisible();
+    const originalBackground = received.at(-1)!;
+    expect(originalBackground.patch).toEqual({ background: marker });
+    await page.goto(routeUrl);
+    await expect(edit).toBeVisible();
+    await expect(retry).toHaveCount(0);
+    await login('pm');
+    await page.goto(contextUrl);
+    await expect(
+      page.getByRole('heading', { name: '需求背景', exact: true }),
+    ).toBeVisible();
+    await expect(editBackground).toHaveCount(0);
+    await expect(retry).toHaveCount(0);
+    await login('lead');
+    await page.reload();
+    fault = 'readback';
+    await retry.click();
+    await expect(page.getByText('合成读取故障')).toBeVisible();
+    expect(received.at(-1)).toEqual(originalBackground);
+    await expect(
+      page.getByText('背景已保存，下一个新推理步骤将读取当前背景。'),
+    ).toBeVisible();
+    readUnavailable = false;
+    await page.getByRole('button', { name: '重试读取需求档案' }).click();
+    await expect(page.getByText(marker, { exact: true })).toBeVisible();
+    await expect(page.getByText('其他同键字段', { exact: true })).toBeVisible();
     expect(errors).toEqual([]);
   } finally {
     release();

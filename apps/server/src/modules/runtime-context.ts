@@ -14,9 +14,18 @@ import {
 type Detail = Awaited<ReturnType<ReturnType<typeof createBusiness>['read']>>;
 export function contextSnapshot(data: Detail) {
   const r = data.requirement;
+  const maxBytes = 24_000;
+  const requirementView =
+    '/?project=' +
+    encodeURIComponent(r.projectId) +
+    '&requirement=' +
+    encodeURIComponent(r.id);
+  const firstBackgroundCharacter =
+    r.background[Symbol.iterator]().next().value ?? '';
   const summarizedFields = {
     description: r.description.length > 1500,
     acceptance: r.acceptance.length > 1500,
+    background: false,
     tasks: false,
     participants: data.participants.some((p) => p.name.length > 40),
   };
@@ -25,6 +34,7 @@ export function contextSnapshot(data: Detail) {
     title: r.title,
     description: r.description.slice(0, 1500),
     acceptance: r.acceptance.slice(0, 1500),
+    background: firstBackgroundCharacter,
     stage: r.stage,
     leadId: r.leadId,
     contextVersion: r.contextVersion,
@@ -60,15 +70,11 @@ export function contextSnapshot(data: Detail) {
     summarizedFields,
     truncated: Object.values(summarizedFields).some(Boolean),
     totalTasks: data.tasks.length,
-    fullView:
-      '/?project=' +
-      encodeURIComponent(r.projectId) +
-      '&requirement=' +
-      encodeURIComponent(r.id) +
-      '&view=overview',
+    fullView: requirementView + '&view=overview',
+    ...(r.background && { backgroundView: requirementView + '&view=context' }),
   };
   while (
-    Buffer.byteLength(JSON.stringify(snapshot)) > 24000 &&
+    Buffer.byteLength(JSON.stringify(snapshot)) > maxBytes &&
     snapshot.tasks.length
   ) {
     snapshot.tasks.pop();
@@ -76,15 +82,25 @@ export function contextSnapshot(data: Detail) {
     snapshot.truncated = true;
   }
   while (
-    Buffer.byteLength(JSON.stringify(snapshot)) > 24000 &&
+    Buffer.byteLength(JSON.stringify(snapshot)) > maxBytes &&
     snapshot.participants.length > 2
   ) {
     snapshot.participants.pop();
     summarizedFields.participants = true;
     snapshot.truncated = true;
   }
-  if (Buffer.byteLength(JSON.stringify(snapshot)) > 24000)
-    businessError(503, '当前上下文过大，请精简需求说明后重试');
+  let available = maxBytes - Buffer.byteLength(JSON.stringify(snapshot));
+  if (available < 0) businessError(503, '当前上下文过大，请精简需求说明后重试');
+  let characters = Number(firstBackgroundCharacter !== '');
+  for (const character of r.background.slice(firstBackgroundCharacter.length)) {
+    const bytes = Buffer.byteLength(JSON.stringify(character)) - 2;
+    if (characters === 1500 || bytes > available) break;
+    snapshot.background += character;
+    available -= bytes;
+    characters++;
+  }
+  summarizedFields.background = snapshot.background !== r.background;
+  snapshot.truncated ||= summarizedFields.background;
   return { snapshot, digest: digestOf(snapshot) };
 }
 export interface RunBinding {

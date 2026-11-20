@@ -185,8 +185,13 @@ test.skipIf(process.platform !== 'darwin')(
         );
       }
       await lab.owner.query(
-        "insert into requirement (id,project_id,title,description,acceptance,lead_id,created_by) values ($1,$2,'Write fixture','','',$3,$3)",
-        [requirementId, projectId, lead.who.userId],
+        "insert into requirement (id,project_id,title,description,acceptance,lead_id,created_by,background) values ($1,$2,'Write fixture','','',$3,$3,$4)",
+        [
+          requirementId,
+          projectId,
+          lead.who.userId,
+          'Broker background fixture',
+        ],
       );
       for (const actor of [lead, worker, unassigned, tester, administrator]) {
         await lab.owner.query(
@@ -334,6 +339,7 @@ test.skipIf(process.platform !== 'darwin')(
       expect(winning.value.tasks).toMatchObject([
         { id: taskId, assigneeId: worker.who.userId },
       ]);
+      expect(winning.value.requirement).not.toHaveProperty('background');
       const currentRows = () =>
         database.pool.query(
           'select generation,phase,run_id from requirement_write_lease where requirement_id=$1',

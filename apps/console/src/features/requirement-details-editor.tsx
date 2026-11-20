@@ -3,7 +3,7 @@ import { Alert, Button } from 'tdesign-react';
 import type {
   RequirementDetailsInput,
   RequirementDetailsReceipt,
-  RequirementSummary,
+  RequirementDetail,
 } from '@rdws/contracts';
 import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import { api } from '../lib/ui.tsx';
@@ -12,17 +12,27 @@ export const detailFieldLabels = {
   title: '需求标题',
   description: '需求说明',
   acceptance: '验收标准',
+  background: '需求背景',
 } as const;
-type Fields = Pick<RequirementSummary, keyof typeof detailFieldLabels>;
+type Fields = Pick<
+  RequirementDetail['requirement'],
+  keyof typeof detailFieldLabels
+>;
+const detailsFields = ['title', 'description', 'acceptance'] as const;
+const backgroundFields = ['background'] as const;
 
-function savedCommand(key: string) {
+function savedCommand(key: string, fields: readonly string[]) {
   try {
     const stored = sessionStorage.getItem(key);
     if (!stored) return undefined;
     const value = JSON.parse(stored) as Partial<RequirementDetailsInput> | null;
     return typeof value?.commandId === 'string' &&
       value.patch &&
-      typeof value.patch === 'object'
+      typeof value.patch === 'object' &&
+      Object.keys(value.patch).length > 0 &&
+      Object.entries(value.patch).every(
+        ([name, text]) => fields.includes(name) && typeof text === 'string',
+      )
       ? stored
       : undefined;
   } catch {
@@ -52,17 +62,24 @@ export function RequirementDetailsEditor({
   canEdit,
   refresh,
   onReceipt,
+  backgroundOnly = false,
 }: {
-  requirement: RequirementSummary;
+  requirement: RequirementDetail['requirement'];
   userId: string;
   sessionId: string;
   canEdit: boolean;
   refresh: () => Promise<unknown>;
   onReceipt: (receipt?: RequirementDetailsReceipt) => void;
+  backgroundOnly?: boolean;
 }) {
+  const fields = backgroundOnly ? backgroundFields : detailsFields;
   const storageKey =
-    'rdws:requirement-details:' + JSON.stringify([userId, requirement.id]);
-  const [pending, setPending] = useState(() => savedCommand(storageKey));
+    (backgroundOnly
+      ? 'rdws:requirement-background:'
+      : 'rdws:requirement-details:') + JSON.stringify([userId, requirement.id]);
+  const [pending, setPending] = useState(() =>
+    savedCommand(storageKey, fields),
+  );
   const [draft, setDraft] = useState<{ initial: Fields; values: Fields }>();
   const [error, setError] = useState('');
   const [checking, setChecking] = useState(false);
@@ -90,7 +107,7 @@ export function RequirementDetailsEditor({
     try {
       if (sessionStorage.getItem(storageKey) === original)
         sessionStorage.removeItem(storageKey);
-      setPending(savedCommand(storageKey));
+      setPending(savedCommand(storageKey, fields));
       return true;
     } catch {
       setError('无法清除浏览器中的待重试记录。');
@@ -168,7 +185,7 @@ export function RequirementDetailsEditor({
 
   const patch: RequirementDetailsInput['patch'] = draft
     ? Object.fromEntries(
-        (Object.keys(detailFieldLabels) as (keyof Fields)[])
+        fields
           .filter((field) => draft.values[field] !== draft.initial[field])
           .map((field) => [field, draft.values[field]]),
       )
@@ -202,7 +219,7 @@ export function RequirementDetailsEditor({
         </div>
       ) : draft ? (
         <form className="form-section" onSubmit={submit}>
-          {(Object.keys(detailFieldLabels) as (keyof Fields)[]).map((field) => {
+          {fields.map((field) => {
             const input = {
               id: 'edit-detail-' + field,
               value: draft.values[field],
@@ -236,10 +253,11 @@ export function RequirementDetailsEditor({
               type="submit"
               loading={busy}
               disabled={
-                !draft.values.title.trim() || !Object.keys(patch).length
+                (!backgroundOnly && !draft.values.title.trim()) ||
+                !Object.keys(patch).length
               }
             >
-              保存需求资料
+              {backgroundOnly ? '保存需求背景' : '保存需求资料'}
             </Button>
             <Button
               tag="button"
@@ -259,14 +277,14 @@ export function RequirementDetailsEditor({
           tag="button"
           variant="outline"
           onClick={() => {
-            const { title, description, acceptance } = requirement;
-            const values = { title, description, acceptance };
+            const { title, description, acceptance, background } = requirement;
+            const values = { title, description, acceptance, background };
             setDraft({ initial: values, values });
             onReceipt();
             setError('');
           }}
         >
-          编辑需求资料
+          {backgroundOnly ? '编辑需求背景' : '编辑需求资料'}
         </Button>
       )}
     </div>

@@ -230,8 +230,14 @@ export function registerRequirements(
           !onlyKeys(raw, ['commandId', 'patch']) ||
           typeof raw.commandId !== 'string' ||
           !isRecord(raw.patch) ||
-          !onlyKeys(raw.patch, ['title', 'description', 'acceptance']) ||
+          !onlyKeys(raw.patch, [
+            'title',
+            'description',
+            'acceptance',
+            'background',
+          ]) ||
           !Object.keys(raw.patch).length ||
+          ('background' in raw.patch && Object.keys(raw.patch).length !== 1) ||
           Object.values(raw.patch).some(
             (value) =>
               typeof value !== 'string' || /[\0\p{Surrogate}]/u.test(value),

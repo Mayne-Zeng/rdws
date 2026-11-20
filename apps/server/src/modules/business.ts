@@ -1534,8 +1534,22 @@ export function createBusiness(db: Database) {
       businessError(403, '当前开发分派没有写入资格');
     if (!(session.expiresAt.getTime() > Date.now()))
       businessError(401, '登录已失效，请重新登录');
+    const { item } = state;
     return {
-      requirement: state.item,
+      requirement: {
+        id: item.id,
+        projectId: item.projectId,
+        title: item.title,
+        description: item.description,
+        acceptance: item.acceptance,
+        leadId: item.leadId,
+        createdBy: item.createdBy,
+        nativeWorkspaceId: item.nativeWorkspaceId,
+        stage: item.stage,
+        contextVersion: item.contextVersion,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      },
       tasks,
       validBefore: session.expiresAt.getTime(),
     };

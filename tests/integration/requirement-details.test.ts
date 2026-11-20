@@ -43,6 +43,7 @@ const demand = randomUUID(),
   crossProjectMismatch = randomUUID(),
   foreign = randomUUID(),
   unassigned = randomUUID(),
+  backgroundDemand = randomUUID(),
   nativeDemand = randomUUID();
 const demands = [
   demand,
@@ -57,6 +58,7 @@ const demands = [
   crossProjectMismatch,
   foreign,
   unassigned,
+  backgroundDemand,
   nativeDemand,
 ];
 const members = new Map<
@@ -717,6 +719,103 @@ afterAll(async () => {
   }
 });
 
+test('saves and reads independently scoped requirement background', async () => {
+  const id = backgroundDemand;
+  const initial = (await get('tester', id)).json().requirement;
+  const text = '背景资料 🧪\n限定范围';
+  const command = intent({ background: text });
+  const saved = await post('manager', id, command);
+  expect(saved.statusCode, saved.body).toBe(200);
+  expect(initial.background).toBe('');
+  expect(saved.json()).toEqual({
+    commandId: command.commandId,
+    contextVersion: 2,
+    changed: true,
+  });
+  expect(
+    (await post('pm', id, intent({ background: text }))).json(),
+  ).toMatchObject({
+    changed: false,
+    contextVersion: 2,
+  });
+  expect((await post('manager', id, command)).json()).toEqual(saved.json());
+  expect(
+    (await post('manager', id, { ...command, patch: { background: '异文' } }))
+      .statusCode,
+  ).toBe(409);
+  const denied = [
+    ...['admin', 'lead', 'tester'].map((user) => [user, id]),
+    ['manager', unassigned],
+    ['pm', foreign],
+  ] as const;
+  for (const [user, target] of denied)
+    expect(
+      (await post(user, target, intent({ background: '无权写入' }))).statusCode,
+    ).toBe(403);
+  expect(
+    (
+      await post(
+        'pm',
+        id,
+        intent({ background: text }),
+        members.get('manager')!.sessionId,
+      )
+    ).statusCode,
+  ).toBe(401);
+  for (const patch of [
+    { background: '混合', title: '被禁止' },
+    { background: '混合', description: '被禁止' },
+    { background: '混合', acceptance: '被禁止' },
+    { background: '字'.repeat(8001) },
+    { background: '\ud800' },
+  ]) {
+    const invalid = intent(patch);
+    const rejected = await post('pm', id, invalid);
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().code).toBe('invalid-details');
+    expect(
+      (
+        await pool.query('select 1 from command_receipt where command_id=$1', [
+          invalid.commandId,
+        ])
+      ).rowCount,
+    ).toBe(0);
+  }
+  const detail = (await get('tester', id)).json();
+  expect(detail.requirement).toEqual({
+    ...initial,
+    background: text,
+    contextVersion: 2,
+    updatedAt: expect.any(String),
+  });
+  expect(detail.events).toHaveLength(1);
+  expect(detail.events[0]).toMatchObject({
+    kind: 'requirement.details',
+    changedFields: ['background'],
+    before: null,
+    after: null,
+  });
+  const audit = await app.inject({
+    url: `/api/requirements/${id}/business-audit`,
+    headers: {
+      cookie: members.get('tester')!.cookie,
+      'x-rdws-edit-session': members.get('tester')!.sessionId,
+    },
+  });
+  expect(audit.statusCode, audit.body).toBe(200);
+  expect(audit.json().events).toMatchObject([
+    { changedFields: ['background'] },
+  ]);
+  expect(audit.body).not.toContain('背景资料');
+  expect(
+    (await post('pm', id, intent({ background: '' }))).json(),
+  ).toMatchObject({
+    changed: true,
+    contextVersion: 3,
+  });
+  expect((await get('lead', id)).json().requirement.background).toBe('');
+});
+
 test('only current demand editors can write valid details, and readers receive a redacted history', async () => {
   expect((await get('pm', demand)).json().permissions.canEditDetails).toBe(
     true,
@@ -991,7 +1090,7 @@ test('expiry after a real requirement lock rolls back, and out-of-date edit auth
       members.get('manager')!.sessionId,
     ])
   ).rows[0].expires_at as Date;
-  const expired = intent({ title: 'Expired fixture' });
+  const expired = intent({ background: 'Expired fixture' });
   let waiting: Promise<unknown> | undefined;
   try {
     await client.query('begin');
@@ -1024,12 +1123,12 @@ test('expiry after a real requirement lock rolls back, and out-of-date edit auth
       false,
     );
     await managerRole(true);
-    const committed = intent({ description: 'Saved before downgrade' });
+    const committed = intent({ background: 'Saved before downgrade' });
     beforeResponse = remove;
     const interrupted = await post('manager', late, committed);
     expect(interrupted.statusCode).toBe(403);
     expect(interrupted.json()).not.toHaveProperty('commandId');
-    expect((await get('lead', late)).json().requirement.description).toBe(
+    expect((await get('lead', late)).json().requirement.background).toBe(
       'Saved before downgrade',
     );
     expect((await post('manager', late, committed)).statusCode).toBe(403);
@@ -1061,7 +1160,18 @@ test('an actual frozen Native request keeps old details and the next pre-step se
     join(await realpath(tmpdir()), 'rdws-details-native-'),
   );
   const configuration = join(root, 'config', 'projects', project, 'dsh');
-  const host = new NativeWebHost(root, configuration, project);
+  let denyContext = false;
+  class BackgroundHost extends NativeWebHost {
+    override configureContext(
+      handler: Parameters<NativeWebHost['configureContext']>[0],
+    ) {
+      super.configureContext(async (...args) => {
+        if (denyContext) throw new Error('Synthetic background read failure');
+        await handler(...args);
+      });
+    }
+  }
+  const host = new BackgroundHost(root, configuration, project);
   const server = buildApp({
     ...options,
     nativeHost: host,
@@ -1170,13 +1280,13 @@ test('an actual frozen Native request keeps old details and the next pre-step se
       expect(result.ok).toBe(true);
       return result.value;
     };
-    const send = () =>
+    const send = (text = 'Synthetic context check') =>
       rpc('session/prompt', {
         request: {
           sessionId,
           requestId: randomUUID(),
           mode: 'queue',
-          content: [{ type: 'text', text: 'Synthetic context check' }],
+          content: [{ type: 'text', text }],
         },
       });
     const journal = () =>
@@ -1200,6 +1310,16 @@ test('an actual frozen Native request keeps old details and the next pre-step se
             (block: { text?: string }) => block.text === assistantMarker,
           ),
       );
+    const originalBackground = '原需求背景 🧪';
+    const savedBackground = await post(
+      'pm',
+      nativeDemand,
+      intent({ background: originalBackground }),
+    );
+    expect(savedBackground.json()).toMatchObject({
+      changed: true,
+      contextVersion: 2,
+    });
     expect(await send()).toMatchObject({ accepted: true });
     await expect.poll(() => calls.length, { timeout: 5000 }).toBe(1);
     const longDescription = '新验收资料'.repeat(400);
@@ -1212,7 +1332,13 @@ test('an actual frozen Native request keeps old details and the next pre-step se
         acceptance: 'New acceptance',
       }),
     );
-    expect(edit.json()).toMatchObject({ changed: true, contextVersion: 2 });
+    expect(edit.json()).toMatchObject({ changed: true, contextVersion: 3 });
+    const longBackground = '当前背景 🧪\u0001'.repeat(420);
+    expect(
+      (
+        await post('pm', nativeDemand, intent({ background: longBackground }))
+      ).json(),
+    ).toMatchObject({ changed: true, contextVersion: 4 });
     expect(calls[0]).toContain('Original description');
     expect(calls[0]).not.toContain('Updated Native title');
     unblock();
@@ -1221,18 +1347,22 @@ test('an actual frozen Native request keeps old details and the next pre-step se
       .toBeGreaterThan(0);
     expect(await send()).toMatchObject({ accepted: true });
     await expect.poll(() => calls.length, { timeout: 5000 }).toBe(2);
-    const evidence = (
-      await readFile(
-        join(root, 'runtime', `context-evidence-${project}.jsonl`),
-        'utf8',
+    const evidence = async () =>
+      (
+        await readFile(
+          join(root, 'runtime', `context-evidence-${project}.jsonl`),
+          'utf8',
+        )
       )
-    )
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line))
-      .filter((row) => row.phase === 'request' && row.sessionId === sessionId);
-    expect(evidence.map((row) => row.contextVersion)).toEqual([1, 2]);
-    for (const [index, row] of evidence.entries()) {
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+        .filter((row) => row.sessionId === sessionId);
+    const attempts = (await evidence()).filter(
+      (row) => row.phase === 'request',
+    );
+    expect(attempts.map((row) => row.contextVersion)).toEqual([2, 4]);
+    for (const [index, row] of attempts.entries()) {
       const messages = await journal();
       const note = objects(messages).find(
         (item) =>
@@ -1249,20 +1379,28 @@ test('an actual frozen Native request keeps old details and the next pre-step se
         index === 0
           ? {
               requirementId: nativeDemand,
-              contextVersion: 1,
+              contextVersion: 2,
               title: 'Original title',
               description: 'Original description',
               acceptance: 'Original acceptance',
+              background: originalBackground,
+              summarizedFields: { background: false },
             }
           : {
               requirementId: nativeDemand,
-              contextVersion: 2,
+              contextVersion: 4,
               title: 'Updated Native title',
               description: longDescription.slice(0, 1500),
               acceptance: 'New acceptance',
-              summarizedFields: { description: true },
+              background: Array.from(longBackground).slice(0, 1500).join(''),
+              summarizedFields: { description: true, background: true },
             },
       );
+      expect(snapshot.fullView).toContain('&view=overview');
+      expect(snapshot.backgroundView).toContain('&view=context');
+      expect(
+        Buffer.byteLength(JSON.stringify(snapshot), 'utf8'),
+      ).toBeLessThanOrEqual(24_000);
       expect(snapshot.permissions).not.toHaveProperty('canEditDetails');
       expect(snapshot.permissions.codeWrite).toBe(false);
       expect(
@@ -1273,6 +1411,27 @@ test('an actual frozen Native request keeps old details and the next pre-step se
       ).toBe(true);
       expect(calls[index]).toContain(JSON.stringify(text).slice(1, -1));
     }
+    await expect
+      .poll(async () => mentions(await journal()).length, { timeout: 6000 })
+      .toBe(2);
+    denyContext = true;
+    const retryText = 'Synthetic text supplied after a background read failure';
+    expect(await send(retryText)).toMatchObject({ accepted: true });
+    await expect
+      .poll(async () =>
+        (await evidence()).some((row) => row.phase === 'rejected'),
+      )
+      .toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(
+      (await evidence()).filter((row) => row.phase === 'request'),
+    ).toHaveLength(2);
+    const persisted = objects(await journal()).filter(
+      (message) => message.role === 'user' && Array.isArray(message.content),
+    );
+    expect(
+      persisted.some((message) => JSON.stringify(message).includes(retryText)),
+    ).toBe(true);
   } finally {
     unblock();
     await server.close();

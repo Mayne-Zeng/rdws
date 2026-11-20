@@ -61,6 +61,10 @@ export function RequirementPage({
     scope: string;
     changed: boolean;
   }>();
+  const [backgroundReceipt, setBackgroundReceipt] = useState<{
+    scope: string;
+    changed: boolean;
+  }>();
   const [personnelReceipt, setPersonnelReceipt] = useState<{
     scope: string;
     text: string;
@@ -80,6 +84,8 @@ export function RequirementPage({
       setDetailsReceipt(undefined);
       setPersonnelReceipt(undefined);
     }
+    if (editAuthorityLost || view !== 'context')
+      setBackgroundReceipt(undefined);
   }, [editAuthorityLost, view]);
   const receiptNotice = view === 'overview' &&
     !editAuthorityLost &&
@@ -88,6 +94,15 @@ export function RequirementPage({
         {detailsReceipt.changed
           ? '原保存已确认。'
           : '原保存已确认，资料未发生变化。'}
+      </p>
+    );
+  const backgroundNotice = view === 'context' &&
+    !editAuthorityLost &&
+    backgroundReceipt?.scope === detailsScope && (
+      <p className="save-notice" role="status">
+        {backgroundReceipt.changed
+          ? '背景已保存，下一个新推理步骤将读取当前背景。'
+          : '原保存已确认，背景未发生变化。'}
       </p>
     );
   const personnelNotice = view === 'overview' &&
@@ -158,6 +173,7 @@ export function RequirementPage({
     return (
       <>
         {receiptNotice}
+        {backgroundNotice}
         {personnelNotice}
         <div className="inline-feedback" role="alert">
           <Alert theme="error" message={detail.error.message} />
@@ -179,10 +195,9 @@ export function RequirementPage({
       ...data.participants.map((p): [string, string] => [p.id, p.name]),
     ]),
     next = stages[stages.indexOf(r.stage) + 1];
-  const canEdit =
-    detail.isFetchedAfterMount &&
-    data.permissions.userId === userId &&
-    data.permissions.canEditDetails;
+  const currentDetail =
+    detail.isFetchedAfterMount && data.permissions.userId === userId;
+  const canEdit = currentDetail && data.permissions.canEditDetails;
   function taskActivity(before: unknown, after: unknown) {
     const previous = assignmentOf(before),
       current = assignmentOf(after);
@@ -340,6 +355,37 @@ export function RequirementPage({
           <p className="muted context-explanation">
             每个新推理步骤读取当前业务信息；已开始的回复沿用原上下文。
           </p>
+          <section className="info-panel context-background">
+            <div className="panel-heading">
+              <h2>需求背景</h2>
+            </div>
+            <div className="context-background-copy">
+              {currentDetail ? (
+                <div className={r.background ? 'prose-text' : 'muted'}>
+                  {r.background || '尚未填写'}
+                </div>
+              ) : (
+                <Loading text="正在核对需求背景权限" />
+              )}
+              {backgroundNotice}
+            </div>
+            <RequirementDetailsEditor
+              key={'background:' + detailsScope}
+              backgroundOnly
+              requirement={r}
+              userId={userId}
+              sessionId={sessionId}
+              canEdit={canEdit}
+              refresh={refreshDetails}
+              onReceipt={(receipt) =>
+                setBackgroundReceipt(
+                  receipt
+                    ? { scope: detailsScope, changed: receipt.changed }
+                    : undefined,
+                )
+              }
+            />
+          </section>
           <div className="context-grid">
             <section className="info-panel">
               <div className="panel-heading">

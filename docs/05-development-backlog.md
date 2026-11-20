@@ -47,7 +47,7 @@
 | 唯一协调者   | `codex-t00-2c7273ae`（既有主会话，并行包只向此协调登记）                                                                                                                                         |
 | 协调检出     | 本仓库 Git 主工作树 `main`，T06 实现起点 `a2dda16`                                                                                                                                               |
 | 已有占用     | T02 与 T03 已结项。本地 5173／3001 与 poc Native 启动状态按领取时点复核                                                                                                                          |
-| 新工作包占用 | T07 已交付隔离单写与停止交接，待 Native 和编队联合接线。T11 已交付，T14 待运营制品及用户侧验收，T16 持久锚点与自动截止已交付，待正式部署与用户侧验收                                             |
+| 新工作包占用 | T07 已补验受管浏览器交接及本人派生写权，待恢复及正式工具验收。T11 已交付，T14 待运营制品及用户侧验收，T16 持久锚点与自动截止已交付，待正式部署与用户侧验收                                       |
 | 运行资源     | 运行根为用户主目录 .rdws（仓库外绝对路径，指纹见 T00 私有证据）；rdws_dev/rdws_app 与 rdws_test/rdws_test_app；PG 55432、Compose rdws-local；测试 5317／3303 未监听但仍须排队；实例锁详 T00 证据 |
 
 当前 Playwright 配置固定使用 5317／3303，真实套件继承该配置；数据库脚本固定 Compose project 为 rdws-local。独立工作树或单改 RDWS_HOME 不足以证明这些资源已隔离。仅在配置和命令已验证支持独立资源、且无现有占用时并行运行对应检查；其余测试或服务启动由协调者排队串行执行。未经协调，不初始化、迁移、重建或抢占共享数据库、容器、端口或原生实例。
@@ -135,7 +135,7 @@
   - 交付证据：[macOS 隔离执行](02-directory-and-engineering-design.html#t06-execution-delivery-20261118)。真实 Seatbelt 文件、进程、网络及 Git 验收和独立复审通过。聚焦 12 项通过，最新整仓 129 项通过、2 项超时，超时用例分组复跑通过，类型、lint、格式、构建和基线校验通过。T07 的 macOS 前置已满足。产品执行工具按 T07 联合验收启用。
   - 已补验：[macOS 系统 Git 启动器](02-directory-and-engineering-design.html#t06-apple-git-launcher-20261120)。查到当前系统工具链的实际 Git 后，继续通过原有 Seatbelt 只读查询和最终启动授权。Apple Git 两套聚焦 17 项及 Homebrew Git 执行套件 12 项通过。
 
-- [ ] **T07 · 单写与安全交接**（进行中：受管浏览器与锁版 Native 已联合验证，待异常恢复和正式工具验收）
+- [ ] **T07 · 单写与安全交接**（进行中：受管浏览器交接与本人派生已验证，待恢复、独立异常退出、正式工具及用户验收）
   - 说明：落实当前开发分派、本人会话和独占写资格，协调数据库授权、实际执行进程、停止确认及异常恢复。
   - 可验收目标：同需求同时只有一个实际写会话；旧任务及子进程确认停稳后才交接；租约过期不冒称已停止；不能确认时保持只读；恢复／派生重新鉴权，取得写权前刷新上下文；测试人员会话代码只读。macOS 产品写入口只在本任务的当前身份、分派、独占写权及进程停止检查全部通过后启用；其他平台逐平台验证，不随 macOS 通过自动开启。
   - 前置：T02、T06 的 macOS 隔离执行边界验收；无需等待 T21。
@@ -154,7 +154,8 @@
   - 已本地交付子项：[受管写权状态](02-directory-and-engineering-design.html#t07-write-status-evidence-20261120)。隔离 BFF 使用真实 PostgreSQL 与 Broker 确认投影持有、停止中、空闲和待确认，按原观察登录限制详情，出站重新采样。双面终审、整仓 324 项、浏览器 51 项及基线通过。
   - 已本地交付子项：[写权命令准入与原回执核对](02-directory-and-engineering-design.html#t07-write-command-admission-evidence-20261120)。释放在合格预检后仅封闭本需求原代，原回执独立只读核对，旧键回放及无权请求期间实测合法写代继续运行。真实提交失答、回滚、到期、兄弟需求实写及回环 TLS 零首写通过。
   - 已本地交付子项：[受管编队申请、核对与释放](02-directory-and-engineering-design.html#t07-fleet-write-commands-evidence-20261120)。真实浏览器双登录使用同一受管 BFF，覆盖丢答、原键、新登录、停稳前拒绝、换代实写及关停。实际文件执行沿隔离 Broker 夹具。
-  - 已本地交付联测：[浏览器换代与锁版 Native 写入](02-directory-and-engineering-design.html#t07-browser-native-handoff-evidence-20261120)。新写会话通过真实浏览器 Prompt、Native、FD3、Broker 和实际回环 TLS 后写入固定工作树，回执与持久原生日志对应，镜像指纹保持。恢复、本人派生复验、独立进程异常退出及正式工具范围继续按 T07 验收。
+  - 已本地交付联测：[浏览器换代与锁版 Native 写入](02-directory-and-engineering-design.html#t07-browser-native-handoff-evidence-20261120)。新写会话通过真实浏览器 Prompt、Native、FD3、Broker 和实际回环 TLS 后写入固定工作树，回执与持久原生日志对应，镜像指纹保持。
+  - 已本地交付联测：[本人派生和新写代](02-directory-and-engineering-design.html#t07-fork-write-reauthorization-evidence-20261120)。在受管 Chromium、隔离 PostgreSQL 和工作树中证实子会话无法复用源写代，实际分派失效时拒绝申请，恢复分派后以最新版本取得新代并写入，随后确认进程组停稳。整仓 340 项、浏览器 51 项、受管 Chromium 1 项及基线通过。
   - 来源：I2-AUTH、I3-WRITE、I3-CONTEXT。
 
 - [ ] **T08 · 变更查看与交付快照**

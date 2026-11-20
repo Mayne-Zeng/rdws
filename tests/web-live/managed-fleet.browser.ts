@@ -91,9 +91,9 @@ async function fingerprint(root: string) {
   return digest.digest('hex');
 }
 
-test('two real fleet logins hand over after physical stop and write through Native chat', async ({
+test('real fleet logins hand over and a fork must earn a new grant', async ({
   browser,
-}) => {
+}, testInfo) => {
   process.env.RDWS_MODE = 'test';
   process.env.RDWS_NATIVE_MODEL_EGRESS = 'mediated';
   const lab = await authorityDatabase();
@@ -112,6 +112,7 @@ test('two real fleet logins hand over after physical stop and write through Nati
   const owner = randomUUID();
   const successor = randomUUID();
   const viewer = randomUUID();
+  const handoffTask = randomUUID();
   const ticket = randomBytes(32).toString('hex');
   const password = randomBytes(18).toString('hex');
   const provider = 'rdws-glm';
@@ -326,7 +327,7 @@ test('two real fleet logins hand over after physical stop and write through Nati
     );
     await lab.owner.query(
       "insert into task(id,requirement_id,title,assignee_id,created_by) values($1,$2,'Handover task',$3,$4)",
-      [randomUUID(), demand, successor, owner],
+      [handoffTask, demand, successor, owner],
     );
     await lab.owner.query(
       'insert into requirement_worktree_plan(requirement_id,repositories) values($1,$2::jsonb)',
@@ -451,6 +452,12 @@ test('two real fleet logins hand over after physical stop and write through Nati
           )
         ).rows,
       ).toEqual([{ requirement_id: demand, owner_id: user.id }]);
+      await expect(
+        page.getByRole('button', { name: /^会话 \d+ · 本人$/ }),
+      ).toHaveAttribute('aria-current', 'true');
+      await expect(
+        page.getByRole('button', { name: '派生当前会话', exact: true }),
+      ).toBeEnabled();
       await page.getByRole('tab', { name: '编队', exact: true }).click();
       await expect(
         page.getByRole('heading', { name: '编队', exact: true }),
@@ -657,7 +664,7 @@ test('two real fleet logins hand over after physical stop and write through Nati
         data: {
           type: 'task.create',
           commandId: randomUUID(),
-          task: { title: 'Change context', assigneeId: successor },
+          task: { title: 'Change context', assigneeId: owner },
         },
       },
     );
@@ -858,6 +865,126 @@ test('two real fleet logins hand over after physical stop and write through Nati
       },
     ]);
     expect(await readFile(sample, 'utf8')).toBe('baseline|workbench-tool');
+
+    const forkPath = `/api/requirements/${demand}/sessions/${encodeURIComponent(bSession)}/fork`;
+    await expect
+      .poll(async () => {
+        const log = await journal(root, bSession).catch(() => undefined);
+        return log?.events.some(
+          ({ type, data }) =>
+            type === 'turn/end' && data.reason.kind === 'completed',
+        );
+      })
+      .toBe(true);
+    const foreignFork = randomUUID();
+    const deniedFork = await a.ctx.request.post(forkPath, {
+      headers: { origin, 'x-rdws-edit-session': a.loginId },
+      data: { commandId: foreignFork },
+    });
+    expect(deniedFork.status()).toBe(403);
+    expect(await deniedFork.json()).toEqual({
+      error: '只能派生本人在当前需求中的会话',
+    });
+    expect(
+      (
+        await lab.owner.query(
+          'select id from session_operation where command_id=$1',
+          [foreignFork],
+        )
+      ).rowCount,
+    ).toBe(0);
+
+    const forkAction = b.page.getByRole('button', {
+      name: '派生当前会话',
+      exact: true,
+    });
+    await expect(forkAction).toBeEnabled();
+    const [forkResponse] = await Promise.all([
+      b.page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === forkPath,
+      ),
+      forkAction.click(),
+    ]);
+    expect(forkResponse.status()).toBe(200);
+    const { sessionId: forkSession } = (await forkResponse.json()) as {
+      sessionId: string;
+    };
+    expect(forkSession).toEqual(expect.any(String));
+    expect(forkSession).not.toBe(bSession);
+    await expect(
+      b.page.getByRole('button', { name: /^会话 \d+ · 本人 · 派生$/ }),
+    ).toHaveAttribute('aria-current', 'true');
+    const {
+      rows: [forkMapping],
+    } = await lab.owner.query(
+      'select requirement_id, owner_id, source_session_id, source_through_seq from native_session where id=$1',
+      [forkSession],
+    );
+    expect(forkMapping).toMatchObject({
+      requirement_id: demand,
+      owner_id: successor,
+      source_session_id: bSession,
+      source_through_seq: expect.any(Number),
+    });
+    const cut = forkMapping.source_through_seq;
+    const sourcePrefix = (await journal(root, bSession)).events.filter(
+      ({ seq }) => seq <= cut,
+    );
+    expect(sourcePrefix.at(-1)?.seq).toBe(cut);
+    expect(sourcePrefix).toContainEqual(
+      expect.objectContaining({
+        type: 'turn/end',
+        data: expect.objectContaining({ reason: { kind: 'completed' } }),
+      }),
+    );
+    await expect
+      .poll(async () =>
+        (
+          await journal(root, forkSession).catch(() => undefined)
+        )?.events.filter(({ seq }) => seq <= cut),
+      )
+      .toEqual(sourcePrefix);
+
+    const forkScope = { ...bScope, sessionId: forkSession };
+    const sourceHeld = await originalStatus();
+    expect(sourceHeld).toMatchObject({
+      generation: next.generation,
+      phase: 'held',
+      native_session_id: bSession,
+      run_id: null,
+    });
+    const oldExecution = randomUUID();
+    await expect(
+      broker.execute(forkScope, {
+        generation: next.generation,
+        commandId: oldExecution,
+        repositoryId: 'app',
+        request: {
+          tool: 'shell',
+          script: "printf '|workbench-tool' >> sample.txt",
+        },
+      }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(
+      (
+        await lab.owner.query(
+          'select command_id from command_receipt where command_id=$1',
+          [oldExecution],
+        )
+      ).rowCount,
+    ).toBe(0);
+    expect(await readFile(sample, 'utf8')).toBe('baseline|workbench-tool');
+    const forkReceipts = await receiptCount();
+    const conflictingFork = await b.ctx.request.post(commandPath(forkSession), {
+      headers: { origin, 'x-rdws-edit-session': b.loginId },
+      data: { type: 'acquire', commandId: randomUUID() },
+    });
+    expect(conflictingFork.status()).toBe(409);
+    expect(await receiptCount()).toBe(forkReceipts);
+    expect(await originalStatus()).toEqual(sourceHeld);
+
     await b.page.getByRole('tab', { name: '编队', exact: true }).click();
     const replay = await a.ctx.request.post(commandPath(aSession), {
       headers: { origin, 'x-rdws-edit-session': a.loginId },
@@ -874,6 +1001,8 @@ test('two real fleet logins hand over after physical stop and write through Nati
 
     await b.page.getByRole('button', { name: '释放写锁' }).click();
     await expect(message(b)).toHaveText('原写代已释放。');
+    const applicant = b.page.getByRole('combobox', { name: '申请写权的会话' });
+    await applicant.selectOption(bSession);
     let expiredAcquire: { generation: string } | undefined;
     await b.page.route(
       '**' + commandPath(bSession),
@@ -894,10 +1023,151 @@ test('two real fleet logins hand over after physical stop and write through Nati
     await pendingButton(b).click();
     await expect(message(b)).toContainText('原申请已记录，写代已结束');
     await expect(pendingButton(b)).toHaveCount(0);
+
+    const releasedSource = await originalStatus();
+    expect(releasedSource).toMatchObject({
+      generation: expiredAcquire!.generation,
+      phase: 'released',
+      native_session_id: bSession,
+      run_id: null,
+    });
+    async function reassign(assigneeId: string) {
+      const response = await a.ctx.request.post(
+        `/api/requirements/${demand}/commands`,
+        {
+          headers: { origin },
+          data: {
+            type: 'task.update',
+            commandId: randomUUID(),
+            taskId: handoffTask,
+            patch: { assigneeId },
+          },
+        },
+      );
+      expect(response.status()).toBe(200);
+      const result = await response.json();
+      expect(result).toMatchObject({
+        taskId: handoffTask,
+        changed: true,
+        contextVersion: expect.any(Number),
+      });
+      return result.contextVersion as number;
+    }
+    const withoutAssignment = await reassign(owner);
+    const readOnly = await b.ctx.request.get(statusPath, {
+      headers: { 'x-rdws-edit-session': b.loginId },
+    });
+    expect(readOnly.status()).toBe(200);
+    expect(await readOnly.json()).toEqual({
+      state: 'idle',
+      actionsEnabled: true,
+    });
+    const receiptsBeforeDenial = await receiptCount();
+    const deniedGrant = await b.ctx.request.post(commandPath(forkSession), {
+      headers: { origin, 'x-rdws-edit-session': b.loginId },
+      data: { type: 'acquire', commandId: randomUUID() },
+    });
+    expect(deniedGrant.status()).toBe(403);
+    expect(await deniedGrant.json()).toEqual({
+      error: '当前开发分派没有写入资格',
+    });
+    expect(await receiptCount()).toBe(receiptsBeforeDenial);
+    expect(await originalStatus()).toEqual(releasedSource);
+    await b.page.reload();
+    await expect(status(b)).toHaveText('暂无写会话');
+    await expect(applicant).toHaveCount(0);
+
+    const refreshed = await reassign(successor);
+    expect(refreshed).toBeGreaterThan(withoutAssignment);
+    expect(refreshed).toBeGreaterThan(next.context_version);
+    expect(
+      (
+        await lab.owner.query(
+          'select context_version from requirement where id=$1',
+          [demand],
+        )
+      ).rows,
+    ).toEqual([{ context_version: refreshed }]);
+    await b.page.reload();
+    await expect(applicant).toBeVisible();
+    await applicant.selectOption(forkSession);
+    await expect(applicant).toHaveValue(forkSession);
+    for (const [width, colorScheme] of [
+      [1440, 'dark'],
+      [390, 'light'],
+    ] as const) {
+      await b.page.setViewportSize({ width, height: 900 });
+      await b.page.emulateMedia({ colorScheme });
+      await expect(b.page.locator('html')).toHaveAttribute(
+        'theme-mode',
+        colorScheme,
+      );
+      await applicant.focus();
+      await expect(applicant).toBeFocused();
+      expect(
+        await b.page.evaluate(() => document.documentElement.scrollWidth),
+      ).toBeLessThanOrEqual(width);
+      await b.page.locator('.workspace-main').screenshot({
+        path: testInfo.outputPath(`fork-${colorScheme}-${width}.png`),
+        animations: 'disabled',
+      });
+    }
+    const granted = b.page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname === commandPath(forkSession),
+    );
     await b.page.getByRole('button', { name: '设为写会话' }).click();
+    const grantResponse = await granted;
+    expect(grantResponse.status()).toBe(200);
+    const { generation: forkGeneration } = await grantResponse.json();
+    expect(forkGeneration).not.toBe(next.generation);
+    expect(forkGeneration).not.toBe(releasedSource.generation);
     await expect(status(b)).toContainText('本人会话');
     const finalGrant = await originalStatus();
-    const finalLoop = startLoop(bScope, finalGrant.generation);
+    expect(finalGrant).toMatchObject({
+      generation: forkGeneration,
+      owner_id: successor,
+      auth_session_id: b.loginId,
+      native_session_id: forkSession,
+      context_version: refreshed,
+      phase: 'held',
+      run_id: null,
+    });
+    const newExecution = randomUUID();
+    expect(
+      await broker.execute(forkScope, {
+        generation: forkGeneration,
+        commandId: newExecution,
+        repositoryId: 'app',
+        request: {
+          tool: 'shell',
+          script: "printf '|fork-write' >> sample.txt",
+        },
+      }),
+    ).toMatchObject({
+      status: 'finished',
+      result: { status: 'ok', stop: 'confirmed' },
+    });
+    expect(
+      (
+        await lab.owner.query(
+          "select result from command_receipt where operation='write.execute' and command_id=$1 and actor_id=$2 and scope=$3",
+          [newExecution, successor, 'requirement:' + demand],
+        )
+      ).rows,
+    ).toEqual([
+      {
+        result: expect.objectContaining({
+          status: 'finished',
+          result: expect.objectContaining({ status: 'ok', stop: 'confirmed' }),
+        }),
+      },
+    ]);
+    expect(await readFile(sample, 'utf8')).toBe(
+      'baseline|workbench-tool|fork-write',
+    );
+    const finalLoop = startLoop(forkScope, forkGeneration);
     await expect.poll(finalLoop.pid).toBeGreaterThan(1);
     closingGate = releaseCommitGate();
     await b.page.getByRole('button', { name: '释放写锁' }).click();
@@ -922,10 +1192,19 @@ test('two real fleet logins hand over after physical stop and write through Nati
       status: 'finished',
       result: { stop: 'confirmed' },
     });
+    expect(() => process.kill(-finalLoop.pid(), 0)).toThrow(/ESRCH/);
+    expect(await originalStatus()).toMatchObject({
+      generation: forkGeneration,
+      phase: 'released',
+      native_session_id: forkSession,
+      run_id: null,
+    });
     expect(await databaseOwner()).toBeNull();
     expect(received).toHaveLength(2);
     expect(await fingerprint(sources)).toBe(sourcesBefore);
-    expect(await readFile(sample, 'utf8')).toBe('baseline|workbench-tool');
+    expect(await readFile(sample, 'utf8')).toBe(
+      'baseline|workbench-tool|fork-write',
+    );
     const { events } = await journal(root, bSession);
     const inserted = events
       .filter((event) => event.type === 'agent/inbox/spliced')
@@ -1004,23 +1283,37 @@ test('two real fleet logins hand over after physical stop and write through Nati
     releaseGate?.release();
     closingGate?.release();
     try {
-      await web?.close();
-      if (closing) await closing;
-      else await app?.close();
+      try {
+        await web?.close();
+      } finally {
+        await (closing ?? app?.close());
+      }
     } finally {
       NativeFixtureToolJob.prototype.control = control;
       setDefaultCACertificates(originalCAs);
-      if (supplier) {
+      try {
         const listener = supplier;
-        await new Promise<void>((resolve) => {
-          listener.close(() => resolve());
-          listener.closeAllConnections();
+        await Promise.allSettled([
+          listener &&
+            new Promise<void>((resolve) => {
+              listener.close(() => resolve());
+              listener.closeAllConnections();
+            }),
+          trees?.close(),
+          mirrors?.close(),
+        ]).then((outcomes) => {
+          const failed = outcomes.find(
+            (outcome) => outcome.status === 'rejected',
+          );
+          if (failed) throw failed.reason;
         });
+      } finally {
+        try {
+          await source?.close();
+        } finally {
+          await lab.close();
+        }
       }
-      await trees?.close();
-      await mirrors?.close();
-      await source?.close();
-      await lab.close();
     }
   }
 });

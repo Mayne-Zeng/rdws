@@ -260,6 +260,7 @@
   - 已交付子项：[原始日志前缀核对](02-directory-and-engineering-design.html#t16-raw-prefix-delivery-20261118)可对受信字节截止计算或校验 SHA-256，已用真实 Native 压缩原件核对。
   - 已交付子项：[独立持久锚点](02-directory-and-engineering-design.html#t16-anchor-delivery-20261119)。隔离 0010 迁移、独立 PostgreSQL 登录、真实只读挂载、原键核对和留卷重启通过。独立复审、整仓 168 项、浏览器 32 项与基线通过。
   - 已交付子项：[自动确定物理截止](02-directory-and-engineering-design.html#t16-automatic-cutoff-delivery-20261119)。可信静止快照可按完整 JSONL 行或 Zstandard 帧自动记录原始字节截止。实际只读挂载与留卷重启、独立复审、整仓 178 项、浏览器 32 项及基线通过。正式环境只读授权和轨迹页用户侧验收仍待完成。
+  - 已确认[首轮正式验收](02-directory-and-engineering-design.html#t16-named-preproduction-acceptance-20261120)。使用具名隔离内网预发、停稳刷盘的原生日志快照和独立非 root 只读校验。部署方与 DBA 提供快照和目标库专用账号，验收后回收凭据。真实锚点、权限反例、篡改与恢复、用户走查四项全部通过后结项。
 
 - [ ] **T17 · 审计中心**（进行中：业务与权限审计、执行摘要及锚点联查已验证）
   - 说明：按授权范围查询业务、执行、权限和交付事件，提供详情与导出。

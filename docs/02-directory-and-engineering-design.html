@@ -1358,6 +1358,17 @@
   <p>方案正确性、安全两面复审及独立交付复审均为 APPROVE。复审修订覆盖已到达但尚无帧尾的损坏压缩块，并把最后一次期限检查放到数据与身份复核之后。<code>RDWS_TEST_ANCHOR_READONLY=1 caffeinate -i pnpm test tests/integration/trace-anchor.test.ts tests/integration/trace-cutoff.test.ts tests/integration/trace-prefix.test.ts tests/integration/native-preset-composition.test.ts</code> 退出 0（4 文件、22 项）。</p>
   <p><code>caffeinate -i pnpm check</code> 返回 0（28 文件、178 项，类型、lint、格式及构建通过），构建仍有主包体积提示。<code>caffeinate -i pnpm test:e2e</code> 返回 0（32 项，约 1 分钟），<code>pnpm validate:baseline</code> 返回 0（29 任务、62 个追溯点、16 视图）。无新增迁移。本地修订以 <code>feat: derive session anchor cutoffs from trusted journals</code> 为准。</p>
 
+  <h4 id="t16-named-preproduction-acceptance-20261120">11.18.8 T16 首轮正式验收</h4>
+  <p>用户确认在具名、隔离的内网预发环境验收。部署方选取已确认刷盘且 Native 已停稳的原生日志不可变快照，以只读方式挂载给独立的非 root 校验身份。目标库使用专用锚点账号，DBA 通过密钥管理机制发放凭据，验收结束后回收。</p>
+  <p>以下四项全部通过后记录 T16 正式验收通过。</p>
+  <ol>
+    <li>从真实原生日志记录锚点，独立核对 SHA-256 摘要和原始日志的物理截止位置。</li>
+    <li>验证日志只读、锚点仅追加，并验证跨授权范围的读取或写入被拒绝。</li>
+    <li>在测试副本上验证篡改与截断能检出，原键重跑和重启后均可恢复核对。</li>
+    <li>用户走查轨迹页固定切点、事件详情和摘要导出，确认能区分逻辑轨迹与原始日志的物理锚点。</li>
+  </ol>
+  <p>当前已确认验收方式。预发环境标识、快照、目标库的受限身份与正式运行证据由部署方和 DBA 提供。</p>
+
   <h3 id="t05-worktree-plan-20261118">11.19 T05 需求工作树</h3>
   <p>Change / R3，非批量，基线 <code>e14963e</code>。按 T05、D22、D23、I3-WRITE、I6-COMMAND 和 T04 已验镜像交付“需求创建冻结基线 → 平台准备需求内私有 bare 与工作树 → 在需求根注册 Native workspace”。保留 §3 方案 C 的布局、分支和归属，改用受控本地 Git 传输将冻结 SHA 的可达对象复制到私有仓，避免共享 inode 在随后写阶段影响 sources。真实 T04 镜像的离线验证已证明文件指纹原样、共享对象 inode 为 0、Git 移动及修复可用。当前继续零执行工具。只在隔离测试库执行迁移。</p>
   <ol>

@@ -1155,6 +1155,22 @@
 
   <p>macOS arm64 与 Node 24.20.0 下，最终 <code>pnpm test</code> 通过 53 文件、300 项，另有 1 项既有非 macOS 条件跳过。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code>、<code>pnpm validate:baseline</code> 和 <code>git diff --check</code> 均通过。</p>
 
+  <h4 id="t13-attachment-postgres-plan-20261120">11.16.42 T13 附件分路首写与数据库撤权定序</h4>
+  <p>非批量，基线 <code>3300753</code>。复用已有附件回环和一次性 PostgreSQL 夹具，在同一已迁移隔离库登记受管所有者，普通应用角色使用独立运行证明。真实 <code>createProjectContextReader</code> 读取原登录、项目、需求和本人会话，<code>ContextRuns</code> 使用签名测试绑定，首写通过实际 <code>createBusiness.withModelAuthority</code>。本切片改动限于隔离集成夹具和验收文档。</p>
+  <ol>
+    <li>分别将新 Files 和引用已确认回执的 Messages 建立为有效绑定。先用当前有效登录完成同一步 Files 上传及 Messages 引用，校准实际首写回调、TCP 观察和 HTTP 请求两侧计数。待撤权 Messages 使用原回执的同项目、需求、会话、认证及变体和独立新绑定，待撤权 Files 使用尚无回执的范围。两路各使用独立原登录，登录和归属由数据库读回。</li>
+    <li>对每路在同代应用连接的事务删除原登录并保留锁。尝试发出真实 HTTPS，绑定仍然有效，独立连接观察首写授权的会话行共享读实际由该删除事务阻塞。只在观察到准确的阻塞 PID 和查询后提交撤权。在事务提交前后核对准备完成后的客户端 TCP 字节、首写回调及供应商读取正文前的 HTTP 入口均未增加。允许建立 TLS 握手。核对数据库拒绝来自原登录已失效，排除超时、错绑定和缺回执导致的假阳性。</li>
+    <li>用有效登录对同范围、同变体重新建立新绑定。原许可回执仍可核对，新 Files 的已证实零写保留重新上传机会。回执、正文摘要、真实首写及供应商入口作正向对照。清理按撤权事务结算、请求及 TCP 排空、所有者释放、应用连接及隔离库关闭顺序。运行附件、载体、首写和回环邻域，随后运行类型、lint、格式、构建、整仓及基线。合成签名运行只用于测试。正式 Native 装配、生产共享池和跨代持久回执仍待验收。</li>
+  </ol>
+
+  <p>双面独立方案审查 APPROVE。两面分别核对原登录行的实际锁冲突、撤权提交后的 401 与 PG 超时区分、逐连接字节边界及同范围出站正对照。按准备后客户端 TCP、供应商 TLS 解密数据和 HTTP 入口三处观察。</p>
+  <p id="t13-attachment-postgres-evidence-20261120">实际隔离受管 PostgreSQL 上，先完成同一有效原绑定的 Files 上传与 Messages 文件引用。阻塞例各自另签有效绑定。在同所有者的独立应用连接删除原登录，管理员观察连接核对正确应用、事务 PID 和 <code>auth_session FOR SHARE</code> 查询，命中锁等待后提交删除，另读确认登录记录消失。两路真实授权都因原登录失效返回 401。授权准备后的客户端方向 TCP 字节和供应商解密应用字节均为零，读取正文前的 HTTP 入口、完整正文与锁内写入回调均无新增。每笔仍完成一次独立 TLS 握手。</p>
+  <p>同项目、需求、会话、认证和变体用有效登录重新签发后，Messages 继续引用已确认回执，Files 对已核实零写的变体完成上传并可引用新回执。两次被拒之外，共有五笔实际锁内首写、五个 HTTP 入口和五份完整正文摘要与原请求一致。隔离夹具关闭后通过应用角色释放所有者并读回空代次。现有受管库证据用于当代首写，正式接线仍依可信原入箱清单、共享连接池及跨代回执。</p>
+
+  <p>独立交付复审 APPROVE。原始 TCP 观察窗口从请求密文准备完成、进入授权回调起算，供应商解密数据自握手成立起计。隔离库使用仓库锁定 PostgreSQL 18.7。附件、真实 Native、载体及正式文本首写共 7 个邻域文件、45 项通过。两路撤权用例额外连续实跑 3 次均通过。</p>
+
+  <p>最终 <code>pnpm test</code> 在 macOS arm64 与 Node 24.20.0 下通过 53 文件、301 项，1 项在非 macOS 上适用的既有用例跳过。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code>、<code>pnpm validate:baseline</code> 及 <code>git diff --check</code> 均通过。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

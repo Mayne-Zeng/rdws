@@ -1,17 +1,26 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:https';
+import {
+  connect,
+  createServer as createTcpServer,
+  type Socket,
+} from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { acquireAuthority, connectDatabase, releaseAuthority } from '@rdws/db';
 import { bodyHash, signGrant, verifyGrant } from '@rdws/dsh/access';
 import type { ModelCarrierRequest } from '@rdws/dsh/web';
 import { expect, test, vi } from 'vitest';
+import { createBusiness } from '../../apps/server/src/modules/business.ts';
 import {
   createLoopbackAttachmentEgress,
   type AttachmentManifest,
 } from '../../apps/server/src/modules/model-attachment-egress.ts';
 import { ContextRuns } from '../../apps/server/src/modules/runtime-context.ts';
+import { createProjectContextReader } from '../../apps/server/src/modules/native-projects.ts';
+import { authorityDatabase } from '../helpers/authority-database.ts';
 import { modelTlsCertificate } from '../helpers/model-tls.ts';
 
 const sha = (value: Buffer) => createHash('sha256').update(value).digest('hex');
@@ -20,6 +29,19 @@ const imageB = Buffer.concat([imageA, Buffer.from([0])]);
 const mediaType = 'image/png';
 const filesBeta = 'files-api-2025-04-14';
 const model = { provider: 'fixture', model: 'fixture-vision' };
+
+type DatabaseAuthority = {
+  projectId: string;
+  business: Pick<
+    ReturnType<typeof createBusiness>,
+    'readWithDeadline' | 'withModelAuthority'
+  >;
+};
+type SessionAuthority = {
+  userId: string;
+  authSessionId: string;
+  requirementId: string;
+};
 
 async function uploadBody(image: Buffer) {
   const data = new FormData();
@@ -68,21 +90,26 @@ const inline = (image: Buffer) =>
 
 async function withSupplier(
   run: (fixture: Awaited<ReturnType<typeof supplierFixture>>) => Promise<void>,
+  authority?: DatabaseAuthority,
 ) {
-  const fixture = await supplierFixture();
+  const fixture = await supplierFixture(authority);
   try {
     await run(fixture);
   } finally {
-    fixture.server.closeAllConnections();
-    await new Promise<void>((resolve) => fixture.server.close(() => resolve()));
-    await rm(fixture.root, { recursive: true, force: true });
-    vi.useRealTimers();
+    try {
+      await fixture.close();
+    } finally {
+      vi.useRealTimers();
+    }
   }
 }
 
-async function supplierFixture() {
+async function supplierFixture(authority?: DatabaseAuthority) {
   const root = await mkdtemp(join(tmpdir(), 'rdws-attachment-https-'));
-  const tls = await modelTlsCertificate(root);
+  const tls = await modelTlsCertificate(root).catch(async (error: unknown) => {
+    await rm(root, { recursive: true, force: true });
+    throw error;
+  });
   const state = {
     fileId: 'synthetic-first',
     bytes: imageA.length,
@@ -93,9 +120,12 @@ async function supplierFixture() {
     beforeWrite: undefined as (() => void) | undefined,
   };
   const arrivals: { route: string; sha256: string }[] = [];
+  const httpEntries: string[] = [];
+  const applicationBytes: number[] = [];
   const server = createServer(
     { ...tls, minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3' },
     async (request, response) => {
+      httpEntries.push(request.url!);
       try {
         const chunks: Buffer[] = [];
         for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -127,28 +157,95 @@ async function supplierFixture() {
       }
     },
   );
+  server.on('secureConnection', (socket) => {
+    const index = applicationBytes.push(0) - 1;
+    socket.on('data', (bytes: Buffer) => {
+      applicationBytes[index]! += bytes.length;
+    });
+  });
+  const sockets = new Set<Socket>();
+  const transmissions: { counting: boolean; bytes: number; closed: boolean }[] =
+    [];
+  let supplierPort = 0;
+  const proxy =
+    authority &&
+    createTcpServer((client) => {
+      const upstream = connect(supplierPort, '127.0.0.1');
+      const attempt = { counting: false, bytes: 0, closed: false };
+      transmissions.push(attempt);
+      sockets.add(client).add(upstream);
+      client.on('data', (bytes: Buffer) => {
+        if (attempt.counting) attempt.bytes += bytes.length;
+      });
+      client.on('error', () => upstream.destroy());
+      upstream.on('error', () => client.destroy());
+      client.once('close', () => {
+        attempt.closed = true;
+        sockets.delete(client);
+        upstream.destroy();
+      });
+      upstream.once('close', () => {
+        sockets.delete(upstream);
+        client.destroy();
+      });
+      client.pipe(upstream).pipe(client);
+    });
+  async function close() {
+    try {
+      for (const socket of sockets) socket.destroy();
+      if (proxy?.listening)
+        await new Promise<void>((resolve) => proxy.close(() => resolve()));
+    } finally {
+      try {
+        server.closeAllConnections();
+        if (server.listening)
+          await new Promise<void>((resolve) => server.close(() => resolve()));
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  }
   try {
     server.listen(0, '127.0.0.1');
     await once(server, 'listening');
+    supplierPort = (server.address() as { port: number }).port;
+    if (proxy) {
+      proxy.listen(0, '127.0.0.1');
+      await once(proxy, 'listening');
+    }
   } catch (error) {
-    server.close();
-    await rm(root, { recursive: true, force: true });
+    await close();
     throw error;
   }
-  const rootUrl = `https://127.0.0.1:${(server.address() as { port: number }).port}/v1`;
+  const port = proxy
+    ? (proxy.address() as { port: number }).port
+    : supplierPort;
+  const rootUrl = 'https://127.0.0.1:' + port + '/v1';
   const routes = { files: `${rootUrl}/files`, messages: `${rootUrl}/messages` };
   const key = randomUUID(),
     generation = randomUUID(),
     aud = 'rdws:bff:' + generation;
   const manifests = new Map<string, AttachmentManifest>();
   const lockReads: string[] = [];
+  const firstWrites: { authSessionId: string; outcome?: string }[] = [];
+  const authorityFailures: {
+    authSessionId: string;
+    statusCode?: number;
+    publicMessage?: string;
+  }[] = [];
+  const projectId = authority?.projectId ?? 'fixture-project';
+  const readContext =
+    authority && createProjectContextReader(authority.business);
   const runs = new ContextRuns(
     generation,
     (token) => verifyGrant(key, token, aud),
-    async () => ({
-      value: { snapshot: {}, digest: 'fixture' },
-      validBefore: Date.now() + 10000,
-    }),
+    (who, requirementId, sessionId, related) =>
+      readContext
+        ? readContext(projectId, who, requirementId, sessionId, related)
+        : Promise.resolve({
+            value: { snapshot: {}, digest: 'fixture' },
+            validBefore: Date.now() + 10000,
+          }),
     () => false,
     async () => ({
       ...model,
@@ -156,8 +253,43 @@ async function supplierFixture() {
       routes,
       isCurrent: () => true,
     }),
-    async (who, _requirementId, _sessionId, _related, write) => {
+    async (who, requirementId, sessionId, related, write) => {
       lockReads.push(who.authSessionId);
+      if (authority) {
+        const attempt = transmissions.at(-1);
+        if (!attempt || attempt.counting)
+          throw new Error('Missing new TLS attempt');
+        attempt.counting = true;
+        try {
+          return await authority.business.withModelAuthority(
+            who,
+            projectId,
+            requirementId,
+            sessionId,
+            related,
+            (deadline) => {
+              const observed: (typeof firstWrites)[number] = {
+                authSessionId: who.authSessionId,
+              };
+              firstWrites.push(observed);
+              const result = write(deadline);
+              observed.outcome = (result as { outcome?: string }).outcome;
+              return result;
+            },
+          );
+        } catch (error) {
+          const { statusCode, publicMessage } = error as {
+            statusCode?: number;
+            publicMessage?: string;
+          };
+          authorityFailures.push({
+            authSessionId: who.authSessionId,
+            statusCode,
+            publicMessage,
+          });
+          throw error;
+        }
+      }
       state.beforeWrite?.();
       const result = write(Date.now() + (state.revoked ? -1 : 5000));
       if (
@@ -181,11 +313,15 @@ async function supplierFixture() {
     sessionId: string,
     image = imageA,
     credentialGeneration = 'fixture-credential-generation',
+    scope: SessionAuthority = {
+      userId: 'synthetic-owner',
+      authSessionId: randomUUID(),
+      requirementId: 'requirement-' + sessionId,
+    },
   ) {
-    const authSessionId = randomUUID(),
-      requirementId = 'requirement-' + sessionId;
+    const { userId, authSessionId, requirementId } = scope;
     const admission = runs.admit(
-      { userId: 'synthetic-owner', authSessionId },
+      { userId, authSessionId },
       requirementId,
       sessionId,
       randomUUID(),
@@ -211,7 +347,7 @@ async function supplierFixture() {
     )) as { modelBindingId: string };
     const bindingId = ready.modelBindingId;
     manifests.set(bindingId, {
-      projectId: 'fixture-project',
+      projectId,
       requirementId,
       sessionId,
       bindingId,
@@ -247,9 +383,13 @@ async function supplierFixture() {
   const forget = (request: ModelCarrierRequest) =>
     manifests.delete(request.call.bindingId!);
   return {
-    root,
-    server,
+    close,
     routes,
+    httpEntries,
+    applicationBytes,
+    transmissions,
+    firstWrites,
+    authorityFailures,
     egress,
     open,
     arrivals,
@@ -476,4 +616,302 @@ test.skipIf(process.platform !== 'darwin')(
       expect(arrivals).toHaveLength(1);
     });
   },
+);
+
+test.skipIf(process.platform !== 'darwin')(
+  'database revocation precedes both attachment first writes on the observed connection',
+  async () => {
+    const lab = await authorityDatabase();
+    const projectId = 'attachment-authority';
+    const userId = randomUUID();
+    const requirementId = randomUUID();
+    const receiptSession = randomUUID();
+    const newFileSession = randomUUID();
+    const active = randomUUID();
+    const revokeFiles = randomUUID();
+    const revokeMessages = randomUUID();
+    const ticket = randomBytes(32).toString('hex');
+    const applicationName = 'rdws-attachment-authorization-fixture';
+    const connection = new URL(lab.databaseUrl);
+    connection.searchParams.set('application_name', applicationName);
+    const { db, pool } = connectDatabase(
+      connection.href,
+      randomBytes(32).toString('hex'),
+    );
+    let ownerGeneration: string | null = null;
+    try {
+      await lab.owner.query('insert into project(id,name) values($1,$2)', [
+        projectId,
+        'Synthetic attachment project',
+      ]);
+      await lab.owner.query(
+        'insert into auth_user(id,name,email) values($1,$2,$3)',
+        [userId, 'Synthetic developer', 'attachment-developer@fixture.invalid'],
+      );
+      await lab.owner.query(
+        "insert into project_member values($1,$2,'developer')",
+        [projectId, userId],
+      );
+      await lab.owner.query(
+        "insert into requirement(id,project_id,title,description,acceptance,lead_id,created_by) values($1,$2,'Synthetic attachment requirement','','',$3,$3)",
+        [requirementId, projectId, userId],
+      );
+      await lab.owner.query(
+        "insert into requirement_participant values($1,$2,'developer')",
+        [requirementId, userId],
+      );
+      for (const id of [receiptSession, newFileSession])
+        await lab.owner.query(
+          'insert into native_session(id,requirement_id,owner_id) values($1,$2,$3)',
+          [id, requirementId, userId],
+        );
+      for (const id of [active, revokeFiles, revokeMessages])
+        await lab.owner.query(
+          "insert into auth_session(id,token,user_id,expires_at) values($1,$2,$3,now()+interval '5 minutes')",
+          [id, randomUUID(), userId],
+        );
+      await lab.owner.query(
+        'update rdws_authority.owner set managed=true,ticket_digest=$1 where singleton',
+        [sha(Buffer.from(ticket))],
+      );
+      ownerGeneration = await acquireAuthority(pool, true, ticket);
+      expect(ownerGeneration).not.toBeNull();
+      await lab.admin.query('select 1');
+
+      await withSupplier(
+        async (fixture) => {
+          const {
+            open,
+            egress,
+            firstWrites,
+            authorityFailures,
+            transmissions,
+            applicationBytes,
+            httpEntries,
+            arrivals,
+            lockReads,
+            state,
+          } = fixture;
+          const scope = (authSessionId: string) => ({
+            userId,
+            requirementId,
+            authSessionId,
+          });
+          const firstFile = await uploadBody(imageA);
+          const secondFile = await uploadBody(imageB);
+          const allowed = await open(
+            receiptSession,
+            imageA,
+            undefined,
+            scope(active),
+          );
+          expect(
+            await (await egress(allowed.request('files', firstFile))).json(),
+          ).toMatchObject({ id: 'synthetic-first' });
+          const cached = reference('synthetic-first');
+          expect(
+            await (await egress(allowed.request('messages', cached))).json(),
+          ).toEqual({ fixture: 'message accepted' });
+
+          async function revokeWhileWaiting(
+            request: ModelCarrierRequest,
+            authSessionId: string,
+          ) {
+            const remover = await pool.connect();
+            const stop = new AbortController();
+            const start = {
+              transport: transmissions.length,
+              tls: applicationBytes.length,
+              writes: firstWrites.length,
+              http: httpEntries.length,
+              body: arrivals.length,
+            };
+            let inTransaction = false;
+            let settled:
+              Promise<{ response: Response } | { error: unknown }> | undefined;
+            try {
+              await remover.query('begin');
+              inTransaction = true;
+              const backend = await remover.query<{ pid: number }>(
+                'select pg_backend_pid() as pid',
+              );
+              const removed = await remover.query<{ id: string }>(
+                'delete from auth_session where id=$1 returning id',
+                [authSessionId],
+              );
+              expect(removed.rows).toEqual([{ id: authSessionId }]);
+              settled = egress({ ...request, signal: stop.signal }).then(
+                (response) => ({ response }),
+                (error: unknown) => ({ error }),
+              );
+              await expect
+                .poll(
+                  async () =>
+                    (
+                      await lab.admin.query<{ waiting: boolean }>(
+                        "select exists(select 1 from pg_stat_activity where datname=current_database() and usename='rdws_test_app' and application_name=$1 and state='active' and wait_event_type='Lock' and $2=any(pg_blocking_pids(pid)) and query ~* 'from \"auth_session\".*for share') as waiting",
+                        [applicationName, backend.rows[0]!.pid],
+                      )
+                    ).rows[0]?.waiting,
+                  { timeout: 2500, interval: 15 },
+                )
+                .toBe(true);
+              const beforeCommit = {
+                writes: firstWrites.length,
+                http: httpEntries.length,
+                bytes: transmissions[start.transport]?.bytes,
+              };
+              const commit = await remover.query('commit');
+              inTransaction = false;
+              expect(commit.command).toBe('COMMIT');
+              expect(beforeCommit).toEqual({
+                writes: start.writes,
+                http: start.http,
+                bytes: 0,
+              });
+
+              expect(await settled).toMatchObject({
+                error: { message: 'Model HTTPS transport unavailable' },
+              });
+              const live = await lab.owner.query(
+                'select id from auth_session where id=$1',
+                [authSessionId],
+              );
+              expect(live.rows).toEqual([]);
+              expect(authorityFailures.at(-1)).toEqual({
+                authSessionId,
+                statusCode: 401,
+                publicMessage: '登录已失效，请重新登录',
+              });
+              await expect
+                .poll(() => transmissions[start.transport]?.closed)
+                .toBe(true);
+              expect(transmissions.slice(start.transport)).toEqual([
+                { counting: true, bytes: 0, closed: true },
+              ]);
+              expect(applicationBytes.slice(start.tls)).toEqual([0]);
+              expect(firstWrites).toHaveLength(start.writes);
+              expect(httpEntries).toHaveLength(start.http);
+              expect(arrivals).toHaveLength(start.body);
+            } finally {
+              stop.abort();
+              try {
+                if (inTransaction) await remover.query('rollback');
+              } finally {
+                remover.release();
+                const outcome = await settled;
+                if (outcome && 'response' in outcome)
+                  await outcome.response.body?.cancel();
+              }
+            }
+          }
+
+          const deniedReference = await open(
+            receiptSession,
+            imageA,
+            undefined,
+            scope(revokeMessages),
+          );
+          await revokeWhileWaiting(
+            deniedReference.request('messages', cached),
+            revokeMessages,
+          );
+          const deniedUpload = await open(
+            newFileSession,
+            imageB,
+            undefined,
+            scope(revokeFiles),
+          );
+          await revokeWhileWaiting(
+            deniedUpload.request('files', secondFile),
+            revokeFiles,
+          );
+
+          const validReference = await open(
+            receiptSession,
+            imageA,
+            undefined,
+            scope(active),
+          );
+          await (
+            await egress(validReference.request('messages', cached))
+          ).json();
+          const validUpload = await open(
+            newFileSession,
+            imageB,
+            undefined,
+            scope(active),
+          );
+          state.fileId = 'synthetic-second';
+          state.bytes = imageB.length;
+          expect(
+            await (
+              await egress(validUpload.request('files', secondFile))
+            ).json(),
+          ).toMatchObject({ id: 'synthetic-second' });
+          const secondReference = reference('synthetic-second');
+          await (
+            await egress(validUpload.request('messages', secondReference))
+          ).json();
+          expect(lockReads).toEqual([
+            active,
+            active,
+            revokeMessages,
+            revokeFiles,
+            active,
+            active,
+            active,
+          ]);
+          expect(firstWrites).toEqual(
+            Array.from({ length: 5 }, () => ({
+              authSessionId: active,
+              outcome: 'submitted',
+            })),
+          );
+          expect(
+            authorityFailures.map(({ authSessionId }) => authSessionId),
+          ).toEqual([revokeMessages, revokeFiles]);
+          const expected = [
+            { route: '/v1/files', sha256: sha(firstFile.bytes) },
+            { route: '/v1/messages', sha256: sha(cached.bytes) },
+            { route: '/v1/messages', sha256: sha(cached.bytes) },
+            { route: '/v1/files', sha256: sha(secondFile.bytes) },
+            { route: '/v1/messages', sha256: sha(secondReference.bytes) },
+          ];
+          expect(httpEntries).toEqual(expected.map(({ route }) => route));
+          expect(arrivals).toEqual(expected);
+          expect(applicationBytes.map((bytes) => bytes > 0)).toEqual([
+            true,
+            true,
+            false,
+            false,
+            true,
+            true,
+            true,
+          ]);
+          expect(
+            transmissions.map(({ counting, bytes }) => counting && bytes > 0),
+          ).toEqual([true, true, false, false, true, true, true]);
+        },
+        { projectId, business: createBusiness(db) },
+      );
+    } finally {
+      try {
+        if (ownerGeneration) {
+          await releaseAuthority(pool, ownerGeneration);
+          const readback = await lab.owner.query<{ generation: string | null }>(
+            'select generation from rdws_authority.owner where singleton',
+          );
+          expect(readback.rows).toEqual([{ generation: null }]);
+        }
+      } finally {
+        try {
+          await pool.end();
+        } finally {
+          await lab.close();
+        }
+      }
+    }
+  },
+  60000,
 );

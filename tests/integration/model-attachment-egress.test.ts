@@ -18,6 +18,7 @@ const sha = (value: Buffer) => createHash('sha256').update(value).digest('hex');
 const imageA = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const imageB = Buffer.concat([imageA, Buffer.from([0])]);
 const mediaType = 'image/png';
+const filesBeta = 'files-api-2025-04-14';
 const model = { provider: 'fixture', model: 'fixture-vision' };
 
 async function uploadBody(image: Buffer) {
@@ -33,6 +34,7 @@ async function uploadBody(image: Buffer) {
   return {
     bytes: Buffer.from(await body.arrayBuffer()),
     type: body.headers.get('content-type')!,
+    usesFiles: true,
   };
 }
 
@@ -52,6 +54,7 @@ function messageBody(
       }),
     ),
     type: 'application/json',
+    usesFiles: source.type === 'file',
   };
 }
 
@@ -218,7 +221,7 @@ async function supplierFixture() {
     const callId = randomUUID();
     const request = (
       routeId: keyof typeof routes,
-      body: { bytes: Buffer; type: string },
+      body: { bytes: Buffer; type: string; usesFiles: boolean },
       {
         attemptId = randomUUID(),
         credential = 'synthetic-model-credential',
@@ -231,6 +234,9 @@ async function supplierFixture() {
       headers: new Headers({
         authorization: `Bearer ${credential}`,
         'content-type': body.type,
+        'anthropic-version': '2023-06-01',
+        ...(body.usesFiles ? { 'anthropic-beta': filesBeta } : {}),
+        ...(routeId === 'messages' ? { accept: 'text/event-stream' } : {}),
       }),
       body: new Response(Uint8Array.from(body.bytes)).body!,
       signal: new AbortController().signal,
@@ -264,6 +270,11 @@ test.skipIf(process.platform !== 'darwin')(
       expect(receipt.status).toBe(200);
       expect(await receipt.json()).toMatchObject({ id: 'synthetic-first' });
       const cached = reference('synthetic-first');
+      const unadvertisedReference = step.request('messages', cached);
+      unadvertisedReference.headers.delete('anthropic-beta');
+      await expect(egress(unadvertisedReference)).rejects.toThrow(
+        'Attachment egress unavailable',
+      );
       await expect(
         egress(
           step.request('messages', cached, { attemptId: upload.attemptId }),
@@ -426,6 +437,43 @@ test.skipIf(process.platform !== 'darwin')(
         '/v1/files',
         '/v1/messages',
       ]);
+    });
+  },
+);
+
+test.skipIf(process.platform !== 'darwin')(
+  'the attachment relay rejects invalid protocol fields before authorizing a write',
+  async () => {
+    await withSupplier(async ({ egress, open, lockReads, arrivals }) => {
+      const step = await open('header-check');
+      const file = await uploadBody(imageA);
+      const cases = [
+        ['files', file, 'anthropic-version', null],
+        ['files', file, 'anthropic-version', '2023-06-01, 2023-06-01'],
+        ['files', file, 'anthropic-beta', null],
+        ['files', file, 'anthropic-beta', filesBeta + ', another-beta'],
+        ['files', file, 'accept', 'text/event-stream'],
+        ['files', file, 'accept-encoding', 'gzip'],
+        ['files', file, 'authorization', 'Bearer synthetic, Bearer other'],
+        ['files', file, 'x-api-key', 'synthetic-second-credential'],
+        ['files', file, 'x-fixture-only', 'synthetic-field'],
+        ['messages', inline(imageA), 'accept', 'application/json'],
+        ['messages', inline(imageA), 'anthropic-beta', filesBeta],
+      ] as const;
+      for (const [route, body, name, value] of cases) {
+        const request = step.request(route, body);
+        if (value === null) request.headers.delete(name);
+        else request.headers.set(name, value);
+        await expect(egress(request)).rejects.toThrow(
+          'Attachment egress unavailable',
+        );
+      }
+      expect(lockReads).toEqual([]);
+      expect(arrivals).toEqual([]);
+
+      await (await egress(step.request('messages', inline(imageA)))).text();
+      expect(lockReads).toEqual([step.authSessionId]);
+      expect(arrivals).toHaveLength(1);
     });
   },
 );

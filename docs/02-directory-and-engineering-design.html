@@ -1126,6 +1126,22 @@
   <p><code>pnpm test tests/integration/model-attachment-egress.test.ts tests/integration/model-attempt-authority.test.ts tests/integration/model-https-relay.test.ts tests/integration/model-attachment-evidence.test.ts</code> 通过 4 文件、38 项。真实 HTTPS 测试对照两次首写的实际请求摘要与授权顺序，确认同一步有效 Files 回执可供 Messages 核对。Messages 换当前有效步骤时仍读取原授权。实测错会话、错命名空间、错认证值、错代、回执过期、锁内清单撤回均无新增上游请求。收到截断回执或在实际提交后拿不到授权事务确认时，跨步骤也拒绝重传；重新授权的匹配内联可单独写出。夹具代替生产锁和部署，仅用于本机隔离。</p>
   <p>Node 24.20.0 和 Apple Git 2.54.0 下，<code>pnpm test</code> 通过 53 文件、298 项，1 项既有平台条件跳过。类型、lint、格式、构建、基线和补丁完整性检查均通过。后续持锁的真实 Native 回环联查还需处理锁版来源、制品身份和会话归因报头。</p>
 
+  <h4 id="t13-native-attachment-relay-plan-20261120">11.16.40 T13 签名 Native 与附件回环首写联查</h4>
+  <p>Change / R3，基线 <code>ca6053f</code>。将 §11.16.38 的真实 Native 原入箱证据与 §11.16.39 的隔离 HTTPS 出口串起。只在仓库 <code>pnpm-lock.yaml</code> 固定的 DSH 版本与依赖、合成 Profile、签名 Native、继承 FD 4、显式测试 CA 和 IPv4 回环内验证。复用正常 Native Host 加载固定依赖，记录实测锁定版本。部署制品及生产来源单独验收。保留已有内联回退用例。合成授权回调核对原主体和独立首写，正式共享授权池、受信图片接纳、正文规范化、冷启回执和具名部署继续按原门槛推进。</p>
+  <ol>
+    <li>两路都要求 <code>anthropic-version: 2023-06-01</code>、有效 Content-Type 和唯一认证头。保留 Native Profile 的 <code>x-api-key</code> 及回执夹具的 <code>Authorization: Bearer</code> 两种互斥形态。Files 必须带 <code>anthropic-beta: files-api-2025-04-14</code> 且缺少 Accept。Messages 要求 <code>accept: text/event-stream</code>，正文有 Files 引用时要求同一精确 beta，无引用时该头必须缺失。拒绝未知报头、错误值、合并凭据及双认证。按此契约重建出站头。Native User-Agent 和本地用户、会话归因字段仅允许入站，全部丢弃。FD 4 入站允许精确的 <code>accept-encoding: identity</code>，TLS 层自行生成传输字段。现有回执测试夹具按同一协议构造合成请求。文件 ID、身份和报头值不写生产诊断。</li>
+    <li>从实际 spliced、claimed 和 readImageRequest 证据核对原请求、用户、nonce、来源消息及附件 ID，给当前 FD 4 绑定建立临时测试清单。原入箱缺失时清单为空。将同一份 FD 4 正文交给独立出口，真实 ContextRuns 只通过各自的锁内首写回调核对源登录和绑定，避免在传输前消耗尝试。分别观测 Files、Messages 的锁内提交结果，核对不同尝试 ID 属于同一绑定和同一原登录、项目、需求及会话。</li>
+    <li>回环 HTTPS 在读取正文前记录请求入口，读完整后比对两个路由的实际正文摘要和协议头，并核对在 FD 4 实际存在的归因字段已去除。Files 回执按收到的变体生成，Native 必须用同一 ID 的摘要完成原会话 Messages，并收到流式结果。另一签名会话复用同一 Profile、端点、认证域、附件引用和变体 ID。在 FD 4 核对缓存文件 ID 摘要相同，原入箱和领取缺少该图、模型输入仍含图，验证首写授权次数及 HTTPS 到达数均未增加且无回复。此负例证明联合拒绝，原入箱门和回执跨会话定域分别由 §11.16.38 的保留用例和 §11.16.39 的独立回执用例覆盖。</li>
+    <li>聚焦覆盖两条真实 Native 路径、缺失或不匹配报头和回执回归，随后跑整仓测试、类型、lint、格式、构建、T00 基线和补丁完整性。每例使用新临时 DSH_HOME 和合成端点。锁版 SDK 的 <code>llm-deepseek/files-v3.json</code> 可独立于本进程回执存在，缓存恢复不授予回执、不触发自动重传。回退可还原回环适配和夹具，先关闭 Native Host 并排空 FD 4，再关闭 HTTPS 监听、移除临时 Profile。无数据迁移和正式路由切换。</li>
+  </ol>
+
+  <p>方案第二轮 A/B 均 APPROVE。首轮补齐了两路的实际报头契约、同一绑定下两次独立首写与 HTTPS 入口的观测点，并限定跨会话负例的证明范围。锁文件、回执冷启边界和关停顺序一并入案。</p>
+  <p id="t13-native-attachment-relay-evidence-20261120">锁定 DSH 0.2.2-rc.3 使用合成 Profile 运行。Files 和 Messages 的锁内同步回调各报告一次提交，同属一个原签名绑定，尝试 ID 不同。回环接收端在读取前数到两个 HTTP 入口，两路完整正文摘要及 Content-Type 都与 FD 4 一致。Messages 使用 <code>application/json</code>。接收端独立解包 multipart，所收图片与 <code>readImageRequest</code> 的 8×8 证据相同。Native 在 Messages 引用实际回执并消费 SSE 回复。协议报头及合成凭据抵达回环，FD 4 原有的 Native User-Agent、用户和会话归因字段均未抵达。</p>
+  <p>同一 Native 实例的另一签名会话发出同一缓存文件 ID 摘要。它的原入箱和领取没有该附件，模型请求仍含同一变体，HTTPS 入口数和锁内提交数均未增加，Native 没有成功回复。内联回退及有清单但回执归属不同会话的对照继续保留。报头回归覆盖缺失或合并版本、缺失及额外 Files beta、格式错误的 Accept 或编码、合并或双份认证，以及未知字段。正式图片接纳、正文规范化、共享授权池、回执冷启和具名部署继续验收。</p>
+
+  <p>独立交付复审 APPROVE。首轮指出应逐路取证 Content-Type。补齐 FD 4 与 HTTPS 双侧取证及 Messages 的 JSON 断言，定点回归通过。</p>
+  <p>macOS arm64、Node 24.20.0 和 Apple Git 2.54.0 下，6 个附件、载体及首写测试文件通过 43 项。<code>pnpm test</code> 通过 53 文件、300 项，另有 1 项既有非 macOS 分支跳过。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code>、<code>pnpm validate:baseline</code> 和 <code>git diff --check</code> 均通过。构建仍提示前端主包超过 500 kB。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

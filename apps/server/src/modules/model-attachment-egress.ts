@@ -44,11 +44,20 @@ const maxUploads = 128;
 const bodyLimit = 1024 * 1024;
 const responseLimit = 64 * 1024;
 const attemptDeadlineMs = 10000;
-const allowedHeaders = new Set([
+const messagesVersion = '2023-06-01';
+const filesBeta = 'files-api-2025-04-14';
+const sse = 'text/event-stream';
+const allowedIncomingHeaders = new Set([
   'authorization',
   'x-api-key',
   'content-type',
   'accept',
+  'anthropic-version',
+  'anthropic-beta',
+  'accept-encoding',
+  'user-agent',
+  'x-deepseek-harness-user-id',
+  'x-deepseek-harness-session-id',
 ]);
 const fileId = /^[a-zA-Z0-9_-]{1,256}$/;
 const responseFields = [
@@ -223,15 +232,34 @@ export function createLoopbackAttachmentEgress(
       request.destination !== routes[routeId]
     )
       throw invalid();
-    const headers = new Headers(request.headers);
-    const bearer = headers.get('authorization');
-    const apiKey = headers.get('x-api-key');
+    const incoming = request.headers;
+    const bearer = incoming.get('authorization');
+    const apiKey = incoming.get('x-api-key');
+    const contentType = incoming.get('content-type');
+    const beta = incoming.get('anthropic-beta');
+    const encoding = incoming.get('accept-encoding');
     if (
-      [...headers.keys()].some((name) => !allowedHeaders.has(name)) ||
+      [...incoming.keys()].some((name) => !allowedIncomingHeaders.has(name)) ||
       (bearer === null) === (apiKey === null) ||
-      !(bearer || apiKey)
+      (bearer !== null && !/^Bearer [\x21-\x2b\x2d-\x7e]+$/.test(bearer)) ||
+      (apiKey !== null && !/^[\x21-\x2b\x2d-\x7e]+$/.test(apiKey)) ||
+      !contentType ||
+      incoming.get('anthropic-version') !== messagesVersion ||
+      incoming.get('accept') !== (routeId === 'messages' ? sse : null) ||
+      (encoding !== null && encoding !== 'identity') ||
+      (routeId === 'files'
+        ? beta !== filesBeta
+        : beta !== null && beta !== filesBeta)
     )
       throw invalid();
+    const headers = new Headers({
+      'content-type': contentType,
+      'anthropic-version': messagesVersion,
+    });
+    if (bearer !== null) headers.set('authorization', bearer);
+    if (apiKey !== null) headers.set('x-api-key', apiKey);
+    if (routeId === 'messages') headers.set('accept', sse);
+    if (beta !== null) headers.set('anthropic-beta', filesBeta);
 
     const trusted = manifestFor(request);
     if (
@@ -275,7 +303,6 @@ export function createLoopbackAttachmentEgress(
       signal: attemptSignal,
       isCurrent: current,
     };
-    const contentType = headers.get('content-type');
     if (routeId === 'messages') {
       const evidence = readDeepSeekMessagesEvidence(
         bytes,
@@ -284,6 +311,8 @@ export function createLoopbackAttachmentEgress(
       );
       if (
         !evidence ||
+        (beta !== null) !==
+          evidence.images.some(({ kind }) => kind === 'file') ||
         messageDeadline(evidence, manifest, identity, credential) === undefined
       )
         throw invalid();

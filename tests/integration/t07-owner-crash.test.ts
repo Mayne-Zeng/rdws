@@ -186,6 +186,9 @@ test
     'cold-no-location',
     'cold-sync-failure',
     'cold-race',
+    'read-revoke',
+    'read-shutdown',
+    'read-unknown',
   ] as const)(
   'a crashed BFF leaves independently verifiable execution evidence (%s)',
   async (mode) => {
@@ -227,6 +230,8 @@ test
     const idleRequirement = randomUUID();
     const idleSession = randomUUID();
     const userId = randomUUID();
+    const reader = randomUUID(),
+      readerSession = randomUUID();
     const commandId = randomUUID();
     const takeoverSession = randomUUID();
     const takeoverId = randomUUID();
@@ -272,8 +277,8 @@ test
         [projectId],
       );
       await lab.owner.query(
-        "insert into auth_user(id,name,email,username,active) values($1,'Fixture lead','crash@fixture.invalid','fixture_crash',true)",
-        [userId],
+        "insert into auth_user(id,name,email,username,active,platform_admin) values($1,'Fixture lead','crash@fixture.invalid','fixture_crash',true,$2)",
+        [userId, mode === 'read-revoke'],
       );
       await lab.owner.query(
         "insert into auth_account(id,account_id,provider_id,user_id,password) values($1,$2,'credential',$2,$3)",
@@ -306,6 +311,24 @@ test
           'insert into native_session(id,requirement_id,owner_id) values($1,$2,$3)',
           [takeoverSession, requirementId, userId],
         );
+      if (mode === 'read-revoke') {
+        await lab.owner.query(
+          "insert into auth_user(id,name,email,username,active) values($1,'Fixture reader','read@fixture.invalid','fixture_read',true)",
+          [reader],
+        );
+        await lab.owner.query(
+          "insert into auth_account(id,account_id,provider_id,user_id,password) values($1,$2,'credential',$2,$3)",
+          [randomUUID(), reader, await hashPassword(password)],
+        );
+        await lab.owner.query(
+          "insert into project_member values($1,$2,'project_admin')",
+          [projectId, reader],
+        );
+        await lab.owner.query(
+          'insert into native_session(id,requirement_id,owner_id) values($1,$2,$3)',
+          [readerSession, requirementId, reader],
+        );
+      }
       git = await httpsGitFixture(projectId);
       const root = git.root;
       const mirrors = new RepositoryMirrors(root);
@@ -381,6 +404,15 @@ test
         databaseUrl: lab.databaseUrl,
         secret: lab.childEnv.BETTER_AUTH_SECRET,
         ...(mode !== 'legacy' && { supervisedExecution: true as const }),
+        ...((mode === 'read-revoke' ||
+          mode === 'read-shutdown' ||
+          mode === 'read-unknown') && {
+          readSnapshots: true as const,
+        }),
+        ...((mode === 'read-shutdown' || mode === 'read-unknown') && {
+          holdReadWorker: true as const,
+        }),
+        ...(mode === 'read-unknown' && { denyReadStop: true as const }),
         ...(mode === 'armed' && { fault: 'hold-armed' as const }),
         ...((mode === 'expired-go' || mode === 'queued-go') && {
           fault: 'hold-armed' as const,
@@ -515,6 +547,117 @@ test
       );
       expect(grant.status).toBe(200);
       const { generation } = (await grant.json()) as { generation: string };
+      if (mode === 'read-revoke') {
+        await writeFile(
+          join(execution.tree, 'source-doc.txt'),
+          'x'.repeat(32768),
+        );
+        const loginReader = await fetch(
+          firstAddress + '/api/auth/sign-in/username',
+          {
+            method: 'POST',
+            headers: { origin, 'content-type': 'application/json' },
+            body: JSON.stringify({ username: 'fixture_read', password }),
+          },
+        );
+        expect(loginReader.status).toBe(200);
+        const cookie = loginReader.headers
+          .getSetCookie()
+          .map((part) => part.split(';')[0])
+          .join('; ');
+        const identity = await fetch(firstAddress + '/api/auth/get-session', {
+          headers: { cookie },
+        });
+        const selected = await identity.json();
+        expect(selected.user.id).toBe(reader);
+        const scope = {
+          projectId,
+          requirementId,
+          sessionId: readerSession,
+          who: { userId: reader, authSessionId: selected.session.id as string },
+        };
+        const request = { repositoryId: 'app', path: 'source-doc.txt' };
+        await old.send({ kind: 'read', scope, request });
+        await expect
+          .poll(() => old!.reports.some(({ kind }) => kind === 'read-result'))
+          .toBe(true);
+        const firstRead = old.reports.find(
+          ({ kind }) => kind === 'read-result',
+        );
+        if (firstRead?.kind !== 'read-result')
+          throw new Error('Initial source read did not return');
+        expect(firstRead.result).toMatchObject({
+          totalBytes: 32768,
+          truncated: true,
+          text: 'x'.repeat(16384),
+          cursor: expect.any(String),
+        });
+        const seat = (enabled: boolean) =>
+          fetch(firstAddress + '/api/management/commands', {
+            method: 'POST',
+            headers: {
+              origin,
+              cookie: headers.cookie,
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+              kind: 'project.admin',
+              projectId,
+              username: 'fixture_read',
+              commandId: randomUUID(),
+              enabled,
+            }),
+          });
+        await old.send({ kind: 'read', scope, request, holdDelivery: true });
+        try {
+          await expect
+            .poll(() =>
+              old!.reports.some(({ kind }) => kind === 'read-delivery-held'),
+            )
+            .toBe(true);
+          const removed = await seat(false);
+          expect(removed.status, await removed.clone().text()).toBe(200);
+          expect(await removed.json()).toMatchObject({ changed: true });
+          expect(
+            (
+              await lab.owner.query(
+                'select role from project_member where project_id=$1 and user_id=$2',
+                [projectId, reader],
+              )
+            ).rows,
+          ).toEqual([]);
+        } finally {
+          await old.send({ kind: 'release-read' });
+        }
+        await expect
+          .poll(() => old!.reports.find(({ kind }) => kind === 'read-failed'))
+          .toEqual({ kind: 'read-failed', status: 409 });
+        const restored = await seat(true);
+        expect(restored.status).toBe(200);
+        expect(await restored.json()).toMatchObject({ changed: true });
+        await old.send({
+          kind: 'read',
+          scope,
+          request: { cursor: firstRead.result.cursor! },
+        });
+        await expect
+          .poll(() => old!.reports.filter(({ kind }) => kind === 'read-failed'))
+          .toEqual([
+            { kind: 'read-failed', status: 409 },
+            { kind: 'read-failed', status: 403 },
+          ]);
+        await old.send({ kind: 'read', scope, request });
+        await expect
+          .poll(
+            () =>
+              old!.reports.filter(({ kind }) => kind === 'read-result').length,
+          )
+          .toBe(2);
+        await old.send({ kind: 'stop' });
+        expect(await old.waitForExit()).toEqual([0, null]);
+        expect((await owner()).generation).toBeNull();
+        return;
+      }
       const originalOwner = await owner();
       expect({
         generation: originalOwner.generation,
@@ -869,6 +1012,70 @@ test
       }
       const persisted = await retained();
       if (binding) {
+        if (mode === 'read-shutdown' || mode === 'read-unknown') {
+          await old.send({
+            kind: 'read',
+            scope: {
+              projectId,
+              requirementId,
+              sessionId,
+              who: { userId, authSessionId },
+            },
+            request: { repositoryId: 'app', path: 'sample.txt' },
+          });
+          await expect
+            .poll(() =>
+              old!.reports.some(({ kind }) => kind === 'read-worker-held'),
+            )
+            .toBe(true);
+          const heldRead = old.reports.find(
+            ({ kind }) => kind === 'read-worker-held',
+          );
+          if (heldRead?.kind !== 'read-worker-held')
+            throw new Error('Read worker was not held');
+          const readIdentity = processIdentity(heldRead.pid);
+          expect(readIdentity).toMatchObject({
+            parent: oldPid,
+            group: heldRead.pid,
+          });
+          expect((await owner()).generation).toBe(originalOwner.generation);
+          await old.send({ kind: 'stop' });
+          if (mode === 'read-unknown') {
+            try {
+              await expect
+                .poll(
+                  () => old!.reports.some(({ kind }) => kind === 'failed'),
+                  { timeout: 4000 },
+                )
+                .toBe(true);
+              expect(processIdentity(heldRead.pid)).toEqual(readIdentity);
+              expect((await owner()).generation).toBe(originalOwner.generation);
+            } finally {
+              expect(processIdentity(heldRead.pid)).toEqual(readIdentity);
+              expect(process.kill(-heldRead.pid, 'SIGKILL')).toBe(true);
+            }
+          }
+          expect(await old.waitForExit()).toEqual([
+            mode === 'read-unknown' ? 1 : 0,
+            null,
+          ]);
+          expect(old.reports).toContainEqual({
+            kind: 'read-failed',
+            status: mode === 'read-unknown' ? 503 : 409,
+          });
+          expect(old.reports.some(({ kind }) => kind === 'read-result')).toBe(
+            false,
+          );
+          expect(disappeared(heldRead.pid) && disappeared(-heldRead.pid)).toBe(
+            true,
+          );
+          expect(disappeared(pid) && disappeared(-pid)).toBe(true);
+          executionStopped = true;
+          expect((await owner()).generation).toBe(
+            mode === 'read-unknown' ? originalOwner.generation : null,
+          );
+          return;
+        }
         const proofFile = join(
           execution.control,
           `execution-${binding.runId}.stopped.json`,

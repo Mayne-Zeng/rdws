@@ -161,6 +161,7 @@
   - 已本地交付子项：[受管主动接手与新资格](02-directory-and-engineering-design.html#t07-writable-takeover-evidence-20261121)。真实 PostgreSQL 0017、编队浏览器和受限工作树验证无任务开发成员可接手、排空后换代、双阶段失答、并发、异常退出、迟到原回执及旧会话拒写。双面独立复审，整仓 343 项与 1 条件跳过、受管 Chromium 1 项、静态及基线通过。遗留执行缺可信进程身份时持久保持只读。完整 T07 和 T08 仍按联合验收前置推进。
   - 已本地交付子项：[受管监督执行与停稳取证](02-directory-and-engineering-design.html#t07-supervised-stop-evidence-20261121)。真实受管 paused BFF、PG 原执行回执和同一 runId 绑定。两个真实崩溃停点分别证实零起跑与受信监督者独立停稳。保留非零退出和热回执缺确认时的原占位。双面复审、定点邻域 28 项、整仓 357 项与 1 条件跳过、静态和基线通过；正式工具与冷端消费继续推进。
   - 已本地交付子项：[接替实例精确补结算](02-directory-and-engineering-design.html#t07-cold-stop-recovery-evidence-20261121)。隔离 PostgreSQL、真实工作树和多个真实 BFF 进程证实浏览器之外的同键冷续作、已授未确认的空持有退休、原执行异常保留和新会话实写。缺可信证据的旧执行保持只读。双面复审、定点邻域 37 项、整仓 366 项与 1 条件跳过、静态和基线通过。正式工具和双人红到绿旅程仍待完成。
+  - 已本地交付子项：[受管内部源码 Read 与分段](02-directory-and-engineering-design.html#t07-read-snapshot-evidence-20261121)。只读身份可在写执行活跃或旧占位未确认时读真实工作树。实际 UTF-8 分段、真实撤席与关停边界、双面独立复审、17 项定点和邻域、整仓 370 项与 1 条件跳过、静态及基线通过。锁版 Native 和回环出站仍待接入。
   - 来源：I2-AUTH、I3-WRITE、I3-CONTEXT。
 
 - [ ] **T08 · 变更查看与交付快照**

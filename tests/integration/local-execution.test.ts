@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
@@ -16,6 +16,7 @@ import {
 } from 'node:fs/promises';
 import { connect, createServer } from 'node:net';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { DemandWorktrees } from '@rdws/orchestrator';
 import { RepositoryMirrors } from '@rdws/syncer/mirror';
@@ -218,6 +219,58 @@ describe.runIf(process.platform === 'darwin')(
         ),
       ).toMatchObject({ status: 'rejected', stop: 'not-started', stdout: '' });
       expect(authorizeStart).toHaveBeenCalledOnce();
+    });
+
+    test('snapshot worker discards bytes if the named file changes during the same descriptor read', async () => {
+      const path = 'read-race.txt';
+      const root = await lstat(scope.tree, { bigint: true });
+      const worker = fileURLToPath(
+        new URL(
+          '../../dsh/execution/read-snapshot-worker.mjs',
+          import.meta.url,
+        ),
+      );
+      const args = [worker, String(root.dev), String(root.ino), path, '262144'];
+      await writeFile(join(scope.tree, path), 'baseline');
+      const original = spawnSync(process.execPath, args, {
+        cwd: scope.tree,
+        env: {},
+      });
+      expect(original.status).toBe(0);
+      expect(original.stdout).toEqual(Buffer.from('baseline'));
+      for (const mutation of [
+        `fs.writeFileSync('${path}', 'modified');`,
+        `fs.writeFileSync('read-race-next.txt', 'modified'); fs.renameSync('read-race-next.txt', '${path}');`,
+      ]) {
+        await writeFile(join(scope.tree, path), 'baseline');
+        const handler = `
+          import fs from 'node:fs';
+          import { syncBuiltinESMExports } from 'node:module';
+          const inode = fs.lstatSync('${path}').ino;
+          const read = fs.readSync;
+          let changed = false;
+          fs.readSync = (descriptor, ...args) => {
+            const count = read(descriptor, ...args);
+            if (!changed && fs.fstatSync(descriptor).ino === inode) {
+              changed = true;
+              ${mutation}
+            }
+            return count;
+          };
+          syncBuiltinESMExports();
+        `;
+        const hook =
+          'data:text/javascript;base64,' +
+          Buffer.from(handler).toString('base64');
+        const observed = spawnSync(
+          process.execPath,
+          ['--import', hook, ...args],
+          { cwd: scope.tree, env: {} },
+        );
+        expect(observed.status).toBe(1);
+        expect(observed.stdout).toHaveLength(0);
+        expect(await readFile(join(scope.tree, path), 'utf8')).toBe('modified');
+      }
     });
 
     test('rejects read and write outside the worktree and preserves Git administration', async () => {

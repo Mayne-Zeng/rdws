@@ -27,6 +27,7 @@ import {
   digestOf,
   type Actor,
 } from './business.ts';
+import { createWorktreeReads } from './worktree-reads.ts';
 
 type Database = ReturnType<typeof connectDatabase>;
 type Queries = Pick<Database['db'], 'select' | 'insert' | 'update' | 'delete'>;
@@ -156,6 +157,7 @@ export async function createWriteHandoff(
   worktrees: DemandWorktrees,
   gitPath: string,
   leaseMs = leaseDuration,
+  readSnapshots = false,
 ) {
   checkLocalExecution(leaseMs);
   const database = connectDatabase(
@@ -182,6 +184,9 @@ export async function createWriteHandoff(
     worktrees,
     gitPath,
     leaseMs,
+    undefined,
+    false,
+    readSnapshots,
   );
   let shutdown: Promise<void> | undefined;
   async function stop() {
@@ -203,6 +208,7 @@ export function createOwnedWriteHandoff(
   leaseMs = leaseDuration,
   loginClosed: (id: string) => boolean = () => false,
   supervisedExecution = false,
+  readSnapshots = false,
 ) {
   checkLocalExecution(leaseMs);
   if (!authority)
@@ -238,6 +244,37 @@ export function createOwnedWriteHandoff(
   let recoveryTimer: NodeJS.Timeout | undefined;
   let recoveryWork: Promise<void> | undefined;
   let recoveryCursor: string | undefined;
+  const reads = readSnapshots
+    ? createWorktreeReads(
+        worktrees,
+        (scope, repositoryId, current) =>
+          readForCommand(scope, current, async (tx, validBefore) => {
+            const [plan] = await tx
+              .select({
+                repositories: schema.requirementWorktreePlan.repositories,
+              })
+              .from(schema.requirementWorktreePlan)
+              .where(
+                eq(
+                  schema.requirementWorktreePlan.requirementId,
+                  scope.requirementId,
+                ),
+              );
+            if (
+              !plan?.repositories.some(
+                (entry) => entry.repositoryId === repositoryId,
+              )
+            )
+              businessError(403, '仓库不在需求工作树范围内');
+            return { repositories: plan.repositories, validBefore };
+          }),
+        (scope) => {
+          requireLiveLogin(scope);
+          if (stopping) businessError(409, '当前读取已失效');
+          if (fences.size) businessError(409, '当前权限变更尚待确认');
+        },
+      )
+    : undefined;
 
   async function transaction<T>(
     work: (
@@ -684,7 +721,7 @@ export function createOwnedWriteHandoff(
   async function readForCommand<T>(
     scope: Scope,
     assertCurrent: () => void,
-    read: (tx: Queries) => Promise<T>,
+    read: (tx: Queries, validBefore: number) => Promise<T>,
   ) {
     requireLiveLogin(scope);
     assertCurrent();
@@ -708,7 +745,7 @@ export function createOwnedWriteHandoff(
         );
       if (!owned) businessError(403, '只能核对本人会话的写权操作');
       return {
-        result: await read(tx),
+        result: await read(tx, reader.expiresAt.getTime()),
         validBefore: reader.expiresAt.getTime(),
       };
     });
@@ -1973,6 +2010,7 @@ export function createOwnedWriteHandoff(
     if (stopping) businessError(503, '写入协调正在关闭');
     const token = Symbol();
     fences.add(token);
+    reads?.revoke(matches);
     const captured = [...holdings.values()].filter(({ scope }) =>
       matches(scope),
     );
@@ -2083,6 +2121,7 @@ export function createOwnedWriteHandoff(
   async function stop() {
     stopping = true;
     clearTimeout(recoveryTimer);
+    reads?.stop();
     try {
       for (const execution of executions.values()) execution.controller.abort();
       await Promise.allSettled(operations);
@@ -2098,6 +2137,7 @@ export function createOwnedWriteHandoff(
         releaseFences.size > 0 ||
         takeovers.size > 0 ||
         coldFences.size > 0 ||
+        (reads && !reads.stopped()) ||
         (
           await db
             .select({ id: leases.requirementId })
@@ -2322,6 +2362,29 @@ export function createOwnedWriteHandoff(
   return {
     startStopRecovery,
     readStatus,
+    readWorktree: (
+      scope: Scope,
+      request: Parameters<NonNullable<typeof reads>['read']>[1],
+      assertCurrent = () => {},
+      signal?: AbortSignal,
+    ) =>
+      admit(() => {
+        if (!reads) businessError(503, '当前读取暂不可用');
+        return reads.read(
+          {
+            projectId: scope.projectId,
+            requirementId: scope.requirementId,
+            sessionId: scope.sessionId,
+            who: {
+              userId: scope.who.userId,
+              authSessionId: scope.who.authSessionId,
+            },
+          },
+          structuredClone(request),
+          assertCurrent,
+          signal,
+        );
+      }),
     confirmCommandScope: (scope: Scope, assertCurrent: () => void) =>
       admit(() =>
         readForCommand(
@@ -2388,6 +2451,7 @@ export function createOwnedWriteHandoff(
       admit(() => reconcileAuthorityChange(operationId)),
     stopAdmission() {
       stopping = true;
+      reads?.stop();
     },
     close,
   };

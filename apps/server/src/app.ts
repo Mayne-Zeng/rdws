@@ -46,6 +46,7 @@ export function buildApp(options: {
     fixtureTool?: true;
     fleetCommands?: true;
     supervisedExecution?: true;
+    readSnapshots?: true;
   };
 }) {
   const modelEgress = resolveNativeModelEgress(
@@ -63,7 +64,8 @@ export function buildApp(options: {
     (process.env.RDWS_MODE !== 'test' ||
       process.platform !== 'darwin' ||
       !ticket ||
-      (isolatedWrite.supervisedExecution && fixtureTool) ||
+      ((isolatedWrite.supervisedExecution || isolatedWrite.readSnapshots) &&
+        fixtureTool) ||
       modelEgress !== (fixtureTool ? 'mediated' : 'paused') ||
       options.nativeHost ||
       !isAbsolute(isolatedWrite.gitPath))
@@ -283,6 +285,7 @@ export function buildApp(options: {
           undefined,
           prepared.writeLoginClosed,
           isolatedWrite.supervisedExecution === true,
+          isolatedWrite.readSnapshots === true,
         );
         ownedWrite.startStopRecovery();
       }

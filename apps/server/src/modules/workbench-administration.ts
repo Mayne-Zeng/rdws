@@ -452,7 +452,9 @@ export function registerAdministration(
       };
       if (
         !writeAuthority.enabled() ||
-        (input.kind !== 'account.active' && input.kind !== 'project.roles')
+        (input.kind !== 'account.active' &&
+          input.kind !== 'project.roles' &&
+          input.kind !== 'project.admin')
       )
         return manage();
       const [target] = await db

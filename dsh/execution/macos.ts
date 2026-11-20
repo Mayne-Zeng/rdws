@@ -23,6 +23,7 @@ type Scope = {
   store: string;
   admin: string;
 };
+type ReadScope = Pick<Scope, 'runtimeRoot' | 'tree'>;
 
 export type ExecutionRequest =
   | { tool: 'file'; operation: 'read'; path: string }
@@ -48,6 +49,7 @@ type Result = {
   exitCode: number | null;
   stdout: string;
   stderr: string;
+  bytes?: Buffer;
 };
 type Options = {
   runId?: string;
@@ -81,6 +83,8 @@ const execBootstrap = String.raw`
   exit 71;
 `;
 const maxBytes = 64 * 1024;
+export const maxSnapshotBytes = 256 * 1024;
+const maxReadDiagnostics = 4 * 1024;
 const stopTimeoutMs = 1500;
 const controls = /[\p{Cc}\p{Cf}]/u;
 const gitQueries = {
@@ -186,13 +190,35 @@ async function inspectFiles(root: string, signal?: AbortSignal) {
   }
 }
 
-function profile(scope: Scope, executable: string, home: string, git: boolean) {
-  const paths = [scope.runtimeRoot, scope.tree, scope.store, executable, home];
-  if (paths.some((path) => !isAbsolute(path) || controls.test(path)))
+function profile(
+  scope: ReadScope & { store?: string },
+  executable: string,
+  home: string,
+  git: boolean,
+  readWorker?: string,
+) {
+  const store = git && scope.store ? [scope.store] : [];
+  const paths = [
+    scope.runtimeRoot,
+    scope.tree,
+    ...(scope.store ? [scope.store] : []),
+    executable,
+    home,
+    ...(readWorker ? [readWorker] : []),
+  ];
+  if (
+    (!readWorker && !scope.store) ||
+    paths.some((path) => !isAbsolute(path) || controls.test(path))
+  )
     throw new Error('Invalid sandbox path');
   const quoted = JSON.stringify;
   const ancestors = new Set<string>();
-  for (const path of [scope.tree, executable, ...(git ? [scope.store] : [])]) {
+  for (const path of [
+    scope.tree,
+    executable,
+    ...store,
+    ...(readWorker ? [readWorker] : []),
+  ]) {
     for (let parent = dirname(path); parent !== '/'; parent = dirname(parent))
       ancestors.add(parent);
   }
@@ -206,14 +232,24 @@ function profile(scope: Scope, executable: string, home: string, git: boolean) {
     '(deny process-exec)',
     '(deny file-link)',
     '(deny file-write*)',
-    ...(git ? [] : [`(allow file-write* (subpath ${quoted(scope.tree)}))`]),
+    ...(git || readWorker
+      ? []
+      : [`(allow file-write* (subpath ${quoted(scope.tree)}))`]),
     '(allow file-write* (literal "/dev/null"))',
     '(deny file-write-create (vnode-type SYMLINK))',
     `(deny file-write* (subpath ${quoted(join(scope.tree, '.git'))}))`,
     `(deny file-map-executable (subpath ${quoted(scope.tree)}))`,
     `(deny file-read* (subpath ${quoted(home)}) (subpath ${quoted(scope.runtimeRoot)}))`,
+    ...(readWorker
+      ? [
+          '(deny file-read-data)',
+          '(allow file-read-data (literal "/") (subpath "/System/Library") (subpath "/usr/lib") (subpath "/private/var/db/dyld") (literal "/usr/bin/perl") (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom"))',
+          `(allow file-read* (literal ${quoted(readWorker)}))`,
+          `(allow file-read-data (literal ${quoted(readWorker)}) (literal ${quoted(executable)}) (subpath ${quoted(scope.tree)}))`,
+        ]
+      : []),
     `(allow file-read* (subpath ${quoted(scope.tree)}) (literal ${quoted(executable)}))`,
-    ...(git ? [`(allow file-read* (subpath ${quoted(scope.store)}))`] : []),
+    ...store.map((path) => `(allow file-read* (subpath ${quoted(path)}))`),
     ...[...ancestors].map(
       (path) => `(allow file-read-metadata (literal ${quoted(path)}))`,
     ),
@@ -329,10 +365,11 @@ function groupGone(pid: number) {
 
 function launch(
   runId: string,
-  scope: Scope,
+  scope: Pick<Scope, 'tree'>,
   policy: string,
   { executable, args, input }: Awaited<ReturnType<typeof program>>,
   { signal, onOutput, timeoutMs = 10_000 }: Options,
+  rawSnapshot = false,
 ): Promise<Result> {
   if (signal?.aborted) return Promise.resolve(result(runId, 'aborted'));
   let launched: ChildProcess | undefined;
@@ -391,6 +428,7 @@ function launch(
       inputFailed = true;
     });
     const streams = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
+    const captured = { stdout: 0, stderr: 0 };
     let bytes = 0;
     let settled = false;
     let requested: Status | undefined;
@@ -412,8 +450,15 @@ function launch(
         exitCode,
         stop,
         marker: 'retained',
-        stdout: Buffer.concat(streams.stdout).toString('utf8'),
-        stderr: Buffer.concat(streams.stderr).toString('utf8'),
+        stdout: rawSnapshot
+          ? ''
+          : Buffer.concat(streams.stdout).toString('utf8'),
+        stderr: rawSnapshot
+          ? ''
+          : Buffer.concat(streams.stderr).toString('utf8'),
+        ...(rawSnapshot &&
+          status === 'ok' &&
+          stop === 'confirmed' && { bytes: Buffer.concat(streams.stdout) }),
       });
     }
 
@@ -440,9 +485,14 @@ function launch(
     for (const stream of ['stdout', 'stderr'] as const) {
       child[stream]!.on('data', (chunk: Buffer) => {
         if (settled) return;
-        const part = chunk.subarray(0, maxBytes - bytes);
+        const available = rawSnapshot
+          ? (stream === 'stdout' ? maxSnapshotBytes : maxReadDiagnostics) -
+            captured[stream]
+          : maxBytes - bytes;
+        const part = chunk.subarray(0, available);
         if (part.length) {
           bytes += part.length;
+          captured[stream] += part.length;
           streams[stream].push(part);
           try {
             if (onOutput)
@@ -491,6 +541,93 @@ function launch(
     }
     return { ...result(runId, 'unavailable'), stop: 'unconfirmed' };
   });
+}
+
+function protectedReadPath(path: string) {
+  return path
+    .toLowerCase()
+    .split('/')
+    .some(
+      (part) =>
+        part === '.credentials.yaml' ||
+        part === '.credentials.yml' ||
+        part === '.ssh' ||
+        part === '.gnupg' ||
+        part === '.env' ||
+        part === 'model.env' ||
+        part.startsWith('.env.') ||
+        part.endsWith('.pem') ||
+        part.endsWith('.key') ||
+        part === '.netrc' ||
+        part === '.npmrc' ||
+        part === '.git-credentials',
+    );
+}
+
+export async function readMacosWorktree(
+  verifiedScope: () => Promise<ReadScope>,
+  path: string,
+  options: Pick<Options, 'signal' | 'authorizeStart'> = {},
+): Promise<Result> {
+  const runId = randomUUID();
+  if (options.signal?.aborted) return result(runId, 'aborted');
+  if (!safeRelativePath(path) || protectedReadPath(path))
+    return result(runId, 'rejected');
+  if (process.platform !== 'darwin') return result(runId, 'unavailable');
+  try {
+    const scope = await verifiedScope();
+    const identity = await lstat(scope.tree, { bigint: true });
+    if (
+      !identity.isDirectory() ||
+      identity.uid !== BigInt(process.getuid!()) ||
+      (identity.mode & 0o022n) !== 0n
+    )
+      return result(runId, 'rejected');
+    const [worker, executable, home] = await Promise.all([
+      realpath(new URL('./read-snapshot-worker.mjs', import.meta.url)),
+      realpath(process.execPath),
+      realpath(userInfo().homedir),
+    ]);
+    const policy = profile(scope, executable, home, false, worker);
+    const program = {
+      executable,
+      args: [
+        '--no-addons',
+        worker,
+        String(identity.dev),
+        String(identity.ino),
+        path,
+        String(maxSnapshotBytes),
+      ],
+      input: undefined,
+    };
+    const controller = new AbortController();
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, controller.signal])
+      : controller.signal;
+    let open = true;
+    let pending: Promise<Result> | undefined;
+    const start = () => {
+      if (!open) throw new Error('Read cannot be started again');
+      signal.throwIfAborted();
+      open = false;
+      pending = launch(runId, scope, policy, program, { signal }, true);
+    };
+    try {
+      if (options.authorizeStart) await options.authorizeStart(start);
+      else start();
+    } catch {
+      controller.abort();
+    } finally {
+      open = false;
+    }
+    const outcome = await pending;
+    return outcome
+      ? { ...outcome, marker: 'none' }
+      : result(runId, options.signal?.aborted ? 'aborted' : 'rejected');
+  } catch {
+    return result(runId, options.signal?.aborted ? 'aborted' : 'rejected');
+  }
 }
 
 export async function runMacosWorktree(

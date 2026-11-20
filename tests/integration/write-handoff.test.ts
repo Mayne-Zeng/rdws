@@ -1,6 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
+import {
+  link,
+  lstat,
+  mkdir,
+  readFile,
+  symlink,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import { connectDatabase, schema } from '@rdws/db';
 import { eq, sql } from 'drizzle-orm';
@@ -59,7 +67,12 @@ function controlledCommits() {
         release: () => void;
       }
     | undefined;
-  let pausedSession: ReturnType<typeof pauseQuery> | undefined;
+  let pausedSession:
+    | (ReturnType<typeof pauseQuery> & {
+        remaining: number;
+        sessionId?: string;
+      })
+    | undefined;
   let pausedReceipt:
     (ReturnType<typeof pauseQuery> & { commandId: string }) | undefined;
   let pausedPendingRead:
@@ -95,7 +108,11 @@ function controlledCommits() {
             ? []
             : input.values;
         const hold =
-          sql?.startsWith('select "id" from "native_session"') && pausedSession
+          sql?.startsWith('select "id" from "native_session"') &&
+          pausedSession &&
+          (!pausedSession.sessionId ||
+            values?.includes(pausedSession.sessionId)) &&
+          --pausedSession.remaining === 0
             ? pausedSession
             : sql?.startsWith('update "command_receipt"') &&
                 pausedReceipt &&
@@ -270,8 +287,8 @@ function controlledCommits() {
       });
       return (settling = { afterCommit, entered: false, wait, release });
     },
-    holdSession() {
-      return (pausedSession = pauseQuery());
+    holdSession(remaining = 1, sessionId?: string) {
+      return (pausedSession = { ...pauseQuery(), remaining, sessionId });
     },
     holdReceipt(commandId: string) {
       return (pausedReceipt = { ...pauseQuery(), commandId });
@@ -331,7 +348,7 @@ test.skipIf(process.platform !== 'darwin')(
       const tester = await account('tester', 'tester');
       const administrator = await account('administrator', 'project_admin');
       const alternateLogins = new Map<string, string>();
-      for (const { who } of [lead, worker]) {
+      for (const { who } of [lead, worker, tester]) {
         const alternate = randomUUID();
         alternateLogins.set(who.userId, alternate);
         await lab.owner.query(
@@ -470,6 +487,8 @@ test.skipIf(process.platform !== 'darwin')(
         ticket,
         trees,
         git,
+        undefined,
+        true,
       );
       broker = active;
       const noTask = await active.acquire(unassigned, randomUUID());
@@ -800,6 +819,31 @@ test.skipIf(process.platform !== 'darwin')(
       await expect.poll(() => started).toBe(true);
       expect(await readFile(path, 'utf8')).toBe('old');
       expect((await currentRows()).rows[0]?.run_id).toBeTruthy();
+      const beforeRead = await currentRows();
+      const activeMarker = join(
+        scope.control,
+        'isolated-execution',
+        'owner.json',
+      );
+      const markerBeforeRead = await readFile(activeMarker);
+      await expect(
+        active.readWorktree(tester, {
+          repositoryId: 'app',
+          path: 'sample.txt',
+        }),
+      ).resolves.toMatchObject({
+        text: 'old',
+        truncated: false,
+        totalBytes: 3,
+      });
+      expect((await currentRows()).rows).toEqual(beforeRead.rows);
+      expect(await readFile(activeMarker)).toEqual(markerBeforeRead);
+      await expect(
+        active.readWorktree(
+          { ...tester, sessionId: writer.sessionId },
+          { repositoryId: 'app', path: 'sample.txt' },
+        ),
+      ).rejects.toMatchObject({ statusCode: 403 });
       const readStatus = (handoff = active) =>
         handoff.readStatus(next.who, projectId, requirementId, () => {});
       expect(await readStatus()).toEqual({ state: 'held' });
@@ -1595,7 +1639,244 @@ test.skipIf(process.platform !== 'darwin')(
         ).rejects.toMatchObject({ statusCode: 403 });
       }
 
-      await active.close();
+      const longName = 'source-snapshot.ts';
+      const readSource = { repositoryId: 'app', path: longName };
+      const originalBytes = Buffer.concat([
+        Buffer.from('\ufeff' + 'a'.repeat(16 * 1024 - 4) + '界'),
+        Buffer.alloc(256 * 1024 - (16 * 1024 + 2), 'x'),
+      ]);
+      expect(originalBytes).toHaveLength(256 * 1024);
+      await writeFile(join(scope.tree, longName), originalBytes);
+      const firstPage = await active.readWorktree(tester, readSource);
+      expect(firstPage).toMatchObject({
+        through: 16 * 1024 - 1,
+        truncated: true,
+        totalBytes: originalBytes.length,
+        sha256: createHash('sha256').update(originalBytes).digest('hex'),
+        cursor: expect.any(String),
+      });
+      const editor = await active.acquire(next, randomUUID());
+      expect(
+        await active.execute(next, {
+          generation: editor.generation,
+          commandId: randomUUID(),
+          repositoryId: 'app',
+          request: {
+            tool: 'file',
+            operation: 'write',
+            path: longName,
+            text: 'revised source',
+          },
+        }),
+      ).toMatchObject({ status: 'finished', result: { status: 'ok' } });
+      const fresh = await active.readWorktree(tester, readSource);
+      expect(fresh).toMatchObject({ text: 'revised source', truncated: false });
+      expect(fresh.snapshotId).not.toBe(firstPage.snapshotId);
+      const segments = [Buffer.from(firstPage.text)];
+      let page = firstPage;
+      while (page.cursor) {
+        page = await active.readWorktree(tester, { cursor: page.cursor });
+        expect(page.snapshotId).toBe(firstPage.snapshotId);
+        segments.push(Buffer.from(page.text));
+      }
+      expect(page).toMatchObject({
+        through: originalBytes.length,
+        truncated: false,
+      });
+      expect(Buffer.concat(segments)).toEqual(originalBytes);
+      await expect(
+        active.readWorktree(next, { cursor: firstPage.cursor! }),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      await expect(
+        active.readWorktree(
+          {
+            ...tester,
+            who: {
+              userId: tester.who.userId,
+              authSessionId: alternateLogins.get(tester.who.userId)!,
+            },
+          },
+          { cursor: firstPage.cursor! },
+        ),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      await expect(
+        active.readWorktree(
+          {
+            ...tester,
+            requirementId: differentRequirement,
+            sessionId: differentSession,
+          },
+          readSource,
+        ),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      await active.release(next, editor.generation, randomUUID());
+
+      await writeFile(join(scope.tree, longName), originalBytes);
+      for (let index = 0; index < 8; index++)
+        await active.readWorktree(tester, readSource);
+      await expect(
+        active.readWorktree(tester, { cursor: firstPage.cursor! }),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      const expires = await active.readWorktree(tester, readSource);
+      const later = Date.now() + 60_001;
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(later);
+      try {
+        await expect(
+          active.readWorktree(tester, { cursor: expires.cursor! }),
+        ).rejects.toMatchObject({ statusCode: 403 });
+      } finally {
+        clock.mockRestore();
+      }
+      await writeFile(
+        join(scope.tree, 'oversized.txt'),
+        Buffer.alloc(256 * 1024 + 1, 'x'),
+      );
+      await writeFile(join(scope.tree, 'invalid.txt'), Buffer.from([255]));
+      await writeFile(join(scope.tree, '.env.private'), 'synthetic secret');
+      await writeFile(
+        join(scope.tree, 'model.env'),
+        'synthetic model settings',
+      );
+      await link(join(scope.tree, longName), join(scope.tree, 'linked.txt'));
+      await writeFile(
+        join(fixture.root, 'outside-source.txt'),
+        'private fixture',
+      );
+      await symlink(
+        join(fixture.root, 'outside-source.txt'),
+        join(scope.tree, 'outside-link.txt'),
+      );
+      for (const path of [
+        'invalid.txt',
+        '.env.private',
+        'model.env',
+        'linked.txt',
+        'outside-link.txt',
+        '../outside-file.txt',
+        '.git',
+      ])
+        await expect(
+          active.readWorktree(tester, { repositoryId: 'app', path }),
+        ).rejects.toMatchObject({ statusCode: 403 });
+      await unlink(join(scope.tree, 'linked.txt'));
+      await unlink(join(scope.tree, 'outside-link.txt'));
+      await expect(
+        active.readWorktree(tester, {
+          repositoryId: 'app',
+          path: 'oversized.txt',
+        }),
+      ).rejects.toMatchObject({ statusCode: 413 });
+      await expect(
+        active.readWorktree(tester, {
+          repositoryId: 'outside',
+          path: 'sample.txt',
+        }),
+      ).rejects.toMatchObject({ statusCode: 403 });
+
+      const runReads = Array.from({ length: 9 }, () =>
+        active.readWorktree(tester, {
+          repositoryId: 'app',
+          path: 'sample.txt',
+        }),
+      );
+      const readResults = await Promise.allSettled(runReads);
+      expect(
+        readResults.filter(({ status }) => status === 'fulfilled'),
+      ).toHaveLength(8);
+      expect(readResults[8]).toMatchObject({
+        status: 'rejected',
+        reason: { statusCode: 503 },
+      });
+      const cancelled = new AbortController();
+      const beforeStart = commits.holdSession(2, tester.sessionId);
+      const cancelledRead = active.readWorktree(
+        tester,
+        { repositoryId: 'app', path: 'sample.txt' },
+        () => {},
+        cancelled.signal,
+      );
+      void cancelledRead.catch(() => {});
+      try {
+        await expect.poll(() => beforeStart.entered).toBe(true);
+        cancelled.abort();
+      } finally {
+        beforeStart.release();
+      }
+      await expect(cancelledRead).rejects.toMatchObject({ statusCode: 409 });
+      const revokedCursor = (await active.readWorktree(tester, readSource))
+        .cursor!;
+      const pausedRead = commits.holdSession(3, tester.sessionId);
+      const pendingRead = active.readWorktree(tester, {
+        repositoryId: 'app',
+        path: 'sample.txt',
+      });
+      void pendingRead.catch(() => {});
+      try {
+        await expect.poll(() => pausedRead.entered).toBe(true);
+        await active.changeAuthority(
+          randomUUID(),
+          ({ who }) => who.userId === tester.who.userId,
+          (tx) =>
+            tx
+              .delete(schema.requirementParticipant)
+              .where(
+                sql`${schema.requirementParticipant.requirementId}=${requirementId} and ${schema.requirementParticipant.userId}=${tester.who.userId}`,
+              ),
+          async () => 'committed',
+        );
+      } finally {
+        pausedRead.release();
+      }
+      await expect(pendingRead).rejects.toMatchObject({ statusCode: 409 });
+      await expect(
+        active.readWorktree(tester, {
+          repositoryId: 'app',
+          path: 'sample.txt',
+        }),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      await active.changeAuthority(
+        randomUUID(),
+        ({ who }) => who.userId === tester.who.userId,
+        (tx) =>
+          tx.insert(schema.requirementParticipant).values({
+            requirementId,
+            userId: tester.who.userId,
+            role: 'tester',
+          }),
+        async () => 'committed',
+      );
+      await expect(
+        active.readWorktree(tester, { cursor: revokedCursor }),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(
+        await active.readWorktree(tester, {
+          repositoryId: 'app',
+          path: 'sample.txt',
+        }),
+      ).toMatchObject({ truncated: false });
+      const pausedShutdown = commits.holdSession(3, tester.sessionId);
+      const closingRead = active.readWorktree(tester, {
+        repositoryId: 'app',
+        path: 'sample.txt',
+      });
+      void closingRead.catch(() => {});
+      let closingBroker: Promise<void>;
+      try {
+        await expect.poll(() => pausedShutdown.entered).toBe(true);
+        closingBroker = active.close();
+        void closingBroker.catch(() => {});
+        expect(
+          (
+            await lab.owner.query(
+              'select generation from rdws_authority.owner where singleton',
+            )
+          ).rows[0]?.generation,
+        ).toEqual(expect.any(String));
+      } finally {
+        pausedShutdown.release();
+      }
+      await expect(closingRead).rejects.toMatchObject({ statusCode: 409 });
+      await closingBroker!;
       broker = undefined;
       const shortTicket = randomBytes(32).toString('hex');
       expect(
@@ -1767,6 +2048,8 @@ test.skipIf(process.platform !== 'darwin')(
         coldTicket,
         trees,
         git,
+        undefined,
+        true,
       );
       broker = cold;
       expect(await readStatus(cold)).toEqual({ state: 'unconfirmed' });
@@ -1781,6 +2064,14 @@ test.skipIf(process.platform !== 'darwin')(
         },
       ]);
       expect(await readFile(path, 'utf8')).toBe('new');
+      const pendingWriteEvidence = await currentRows();
+      expect(
+        await cold.readWorktree(tester, {
+          repositoryId: 'app',
+          path: 'sample.txt',
+        }),
+      ).toMatchObject({ text: 'new', truncated: false });
+      expect((await currentRows()).rows).toEqual(pendingWriteEvidence.rows);
       expect(await readFile(join(marker, 'fixture'), 'utf8')).toBe(
         'Synthetic stopped-but-retained marker',
       );

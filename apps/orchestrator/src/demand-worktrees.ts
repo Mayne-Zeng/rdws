@@ -236,7 +236,7 @@ export class DemandWorktrees {
     );
   }
 
-  private async verify(paths: Paths, plan: DemandRepositories) {
+  private async verifyReady(paths: Paths) {
     await safeDirectory(paths.demand, ['.rdws-worktree']);
     const stamp =
       createHash('sha256').update(paths.manifest).digest('hex') + '\n';
@@ -245,6 +245,10 @@ export class DemandWorktrees {
       (await read(join(paths.demand, 'demand.yaml'), 32768)) !== paths.manifest
     )
       throw new Error('Worktree readiness cannot be verified');
+  }
+
+  private async verify(paths: Paths, plan: DemandRepositories) {
+    await this.verifyReady(paths);
     const repositories = await this.pointers(paths.demand, plan);
     await Promise.all(
       repositories.map(async ({ store }, index) => {
@@ -295,6 +299,22 @@ export class DemandWorktrees {
       tree: repository.tree,
       store: repository.store,
       admin: repository.admin,
+    };
+  }
+
+  async readExecutionScope(
+    projectId: string,
+    id: string,
+    plan: DemandRepositories,
+    repositoryId: string,
+  ) {
+    if (!plan.some((item) => item.repositoryId === repositoryId))
+      throw new Error('Repository is outside the frozen plan');
+    const paths = await this.paths(projectId, id, plan);
+    await this.verifyReady(paths);
+    return {
+      runtimeRoot: paths.runtimeRoot,
+      tree: await safeDirectory(paths.demand, ['worktrees', repositoryId]),
     };
   }
 

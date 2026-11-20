@@ -32,6 +32,9 @@ export type OwnerBoot = {
   denyProofSync?: true;
   holdProofSync?: true;
   holdLogin?: string;
+  readSnapshots?: true;
+  holdReadWorker?: true;
+  denyReadStop?: true;
 };
 
 export type OwnerCommand =
@@ -42,13 +45,25 @@ export type OwnerCommand =
       commandId: string;
       exitCode?: 7;
     }
-  | { kind: 'stop' | 'release-fault' | 'release-login' };
+  | {
+      kind: 'read';
+      scope: WriteHandoffScope;
+      request: Parameters<OwnedWriteHandoff['readWorktree']>[1];
+      holdDelivery?: true;
+    }
+  | { kind: 'stop' | 'release-fault' | 'release-login' | 'release-read' };
 
 export type OwnerReport =
   | { kind: 'listening'; address: string }
   | { kind: 'go-sent'; validBefore: number }
   | { kind: 'fault-completed'; command: string }
   | { kind: 'backend-held'; pid: number }
+  | { kind: 'read-worker-held'; pid: number }
+  | {
+      kind: 'read-result';
+      result: Awaited<ReturnType<OwnedWriteHandoff['readWorktree']>>;
+    }
+  | { kind: 'read-failed'; status: number | undefined }
   | {
       kind:
         | 'authority-denied'
@@ -61,6 +76,7 @@ export type OwnerReport =
         | 'proof-sync-denied'
         | 'proof-sync-held'
         | 'proof-sync-completed'
+        | 'read-delivery-held'
         | 'login-held';
     };
 
@@ -72,6 +88,40 @@ async function run() {
   };
   const [boot] = (await once(process, 'message')) as [OwnerBoot];
   if (!process.connected) return;
+  if (boot.holdReadWorker) {
+    const spawn = childProcesses.spawn;
+    childProcesses.spawn = ((...args: unknown[]) => {
+      const child = Reflect.apply(spawn, childProcesses, args) as ReturnType<
+        typeof spawn
+      >;
+      if (
+        Array.isArray(args[1]) &&
+        args[1].some(
+          (item) =>
+            typeof item === 'string' &&
+            item.endsWith('/read-snapshot-worker.mjs'),
+        )
+      )
+        child.once('spawn', () => {
+          const pid = child.pid;
+          if (pid && child.exitCode === null && process.kill(pid, 'SIGSTOP')) {
+            if (boot.denyReadStop) {
+              const stop = process.kill;
+              process.kill = ((
+                target: number,
+                signal?: NodeJS.Signals | number,
+              ) =>
+                target === -pid && signal === 'SIGKILL'
+                  ? true
+                  : stop.call(process, target, signal)) as typeof stop;
+            }
+            send({ kind: 'read-worker-held', pid });
+          }
+        });
+      return child;
+    }) as typeof spawn;
+    syncBuiltinESMExports();
+  }
   if (boot.observeGo || boot.dropStopAck) {
     const fork = childProcesses.fork;
     childProcesses.fork = ((...args: unknown[]) => {
@@ -117,6 +167,8 @@ async function run() {
   let watchedCommand: string | undefined;
   let releaseFault = () => {};
   let releaseLogin = () => {};
+  let releaseRead = () => {};
+  let heldRead: { sessionId: string; remaining: number } | undefined;
   let loginHeld = false;
   let fixtureStopping = false;
   if (boot.denyProofSync || boot.holdProofSync) {
@@ -155,12 +207,16 @@ async function run() {
   }
   let faultFinished = false;
   let armedCommitted = false;
-  if (boot.fault) {
+  if (boot.fault || boot.readSnapshots) {
     const connect = Pool.prototype.connect;
     Pool.prototype.connect = function (this: Pool, ...args: unknown[]) {
       const opened = Reflect.apply(connect, this, args);
       const faultCommand = boot.faultCommand ?? watchedCommand;
-      if (args.length || !faultCommand || faultFinished || fixtureStopping)
+      if (
+        args.length ||
+        fixtureStopping ||
+        ((!faultCommand || faultFinished) && !heldRead)
+      )
         return opened;
       return opened.then((client: PoolClient) => {
         const query = client.query;
@@ -178,6 +234,25 @@ async function run() {
             : typeof input === 'string'
               ? undefined
               : input.values;
+          if (
+            !fixtureStopping &&
+            heldRead &&
+            sql.startsWith('select "id" from "native_session"') &&
+            values?.includes(heldRead.sessionId) &&
+            --heldRead.remaining === 0
+          ) {
+            heldRead = undefined;
+            const pause = new Promise<void>((resolve) => {
+              releaseRead = resolve;
+            });
+            return Reflect.apply(query, client, params).then(
+              async (result: unknown) => {
+                send({ kind: 'read-delivery-held' });
+                await pause;
+                return result;
+              },
+            );
+          }
           if (
             !fixtureStopping &&
             !loginHeld &&
@@ -198,7 +273,7 @@ async function run() {
               },
             );
           }
-          if (values?.includes(faultCommand)) {
+          if (faultCommand && values?.includes(faultCommand)) {
             if (sql.startsWith('update "command_receipt"')) {
               writesExecution = true;
               armed = values.some(
@@ -322,6 +397,7 @@ async function run() {
       gitPath: boot.gitPath,
       fleetCommands: true,
       supervisedExecution: boot.supervisedExecution,
+      readSnapshots: boot.readSnapshots,
     },
   });
   let stopping: Promise<unknown> | undefined;
@@ -329,6 +405,7 @@ async function run() {
     fixtureStopping = true;
     releaseFault();
     releaseLogin();
+    releaseRead();
     return (stopping ??= app
       .stopRuntime()
       .then(
@@ -366,6 +443,20 @@ async function run() {
     if (command.kind === 'stop') return void stop();
     if (command.kind === 'release-fault') return releaseFault();
     if (command.kind === 'release-login') return releaseLogin();
+    if (command.kind === 'release-read') return releaseRead();
+    if (command.kind === 'read' && boot.readSnapshots && !stopping) {
+      if (command.holdDelivery)
+        heldRead = { sessionId: command.scope.sessionId, remaining: 3 };
+      void broker.readWorktree(command.scope, command.request).then(
+        (result) => send({ kind: 'read-result', result }),
+        (error: unknown) =>
+          send({
+            kind: 'read-failed',
+            status: (error as { statusCode?: number }).statusCode,
+          }),
+      );
+      return;
+    }
     if (command.kind !== 'execute' || stopping || launched) return;
     launched = true;
     watchedCommand = command.commandId;

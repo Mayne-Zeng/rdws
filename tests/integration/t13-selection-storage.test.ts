@@ -346,9 +346,12 @@ test('managed model selection and dispatch records survive permission refresh an
         new Error('Receipt recovery must not query the Native catalog'),
       );
     expect(await store.read(scope, current)).toEqual({
-      provider: 'fixture',
-      model: 'model-b',
-      revision: newRevision,
+      selection: {
+        provider: 'fixture',
+        model: 'model-b',
+        revision: newRevision,
+      },
+      firstWrite: null,
     });
     const saveInput = {
       commandId: randomUUID(),
@@ -473,7 +476,10 @@ test('managed model selection and dispatch records survive permission refresh an
     expect(
       await store.confirmPrompt(observer, frozen, coordinates, current),
     ).toEqual(accepted);
-    expect(await store.read(observer, current)).toEqual(changed);
+    expect(await store.read(observer, current)).toEqual({
+      selection: changed,
+      firstWrite: null,
+    });
     await releaseAuthority(owner.pool, generation!);
     generation = null;
     expect(

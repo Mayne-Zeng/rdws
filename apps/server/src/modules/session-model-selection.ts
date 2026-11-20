@@ -15,6 +15,7 @@ import type {
 
 const selections = schema.sessionModelSelection;
 const dispatches = schema.sessionPromptDispatch;
+const firstWrites = schema.sessionModelFirstWrite;
 const receipts = schema.commandReceipt;
 
 export type SessionModelPilot = {
@@ -153,7 +154,49 @@ export function createSessionModelSelection(
   }
 
   function read(scope: ModelSessionScope, current: () => void) {
-    return scoped(scope, current, (tx) => readSelection(tx, scope.sessionId));
+    return scoped(scope, current, async (tx) => {
+      const evidence = tx
+        .select({ state: firstWrites.state })
+        .from(firstWrites)
+        .innerJoin(
+          dispatches,
+          and(
+            eq(dispatches.nativeSessionId, firstWrites.nativeSessionId),
+            eq(dispatches.requestId, firstWrites.selectionRequestId),
+            eq(dispatches.projectId, firstWrites.projectId),
+            eq(dispatches.requirementId, firstWrites.requirementId),
+            eq(dispatches.provider, firstWrites.provider),
+            eq(dispatches.model, firstWrites.model),
+            eq(dispatches.selectionRevision, firstWrites.selectionRevision),
+            eq(dispatches.hostGeneration, firstWrites.hostGeneration),
+          ),
+        )
+        .where(
+          and(
+            eq(firstWrites.nativeSessionId, selections.nativeSessionId),
+            eq(firstWrites.projectId, scope.projectId),
+            eq(firstWrites.requirementId, scope.requirementId),
+            eq(firstWrites.provider, selections.provider),
+            eq(firstWrites.model, selections.model),
+            eq(firstWrites.selectionRevision, selections.revision),
+            eq(dispatches.actorId, scope.who.userId),
+          ),
+        )
+        .orderBy(sql`(${firstWrites.state} = 'submitted') desc`)
+        .limit(1);
+      const [row] = await tx
+        .select({
+          provider: selections.provider,
+          model: selections.model,
+          revision: selections.revision,
+          firstWrite: sql<'prepared' | 'submitted' | null>`(${evidence})`,
+        })
+        .from(selections)
+        .where(eq(selections.nativeSessionId, scope.sessionId));
+      if (!row) return { selection: null, firstWrite: null };
+      const { firstWrite, ...selection } = row;
+      return { selection, firstWrite };
+    });
   }
 
   async function save(

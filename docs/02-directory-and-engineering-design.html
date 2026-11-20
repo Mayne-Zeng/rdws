@@ -1305,6 +1305,19 @@
   <p>该夹具保留证据无法确认的同值选模与未确认首写。派生发送门禁、正式选模和具名部署仍待按各自判据验收。范围限本地测试与取证文档。</p>
   <p>全新上下文独立交付复审 APPROVE。临时移除原请求键条件时，反例因多认一条同值回执而失败；首帧只含会话头的反例亦有红灯，两处修正后通过。用 <code>pnpm test</code> 执行固定切点、本人选模、领取定序、接纳观察与冷恢复邻域，5 文件 9 项通过。整仓 <code>pnpm test</code> 退出 0，59 文件、374 项通过、1 项平台条件跳过。整仓在最终水位和帧内行断言补齐前启动，最后用 <code>pnpm test tests/integration/t13-fixed-fork-evidence.test.ts</code> 单独核对终稿 4 项通过。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code>、<code>pnpm validate:baseline</code> 退出 0，构建保留既有主包体积提示。</p>
 
+  <h4 id="t13-saved-model-first-write-readback-plan-20261121">11.16.49 本人当前保存修订的首写回证</h4>
+  <p>Change / R2，基线 <code>85dcdb2</code>。沿 §11.16.7 的「保存、发送时重验、实际推理生效」及 §11.16.47 的真实首写证据，先为已有隔离本人选模 GET 补充当前保存修订的持久首写状态。普通运行的路由开关、产品派生门禁、选模写入、界面及供应商策略沿现状。</p>
+  <ol>
+    <li>同一受检授权事务及同一个查询快照读当前 <code>selection</code> 和其 <code>firstWrite</code>。用确切项目、需求、本人会话、原账号、当前 Provider／Model／修订，以及首写行对应的原派发行键及 Host 绑定核对；历史登录只提供原归属，当前本人登录必须重新授权。同一修订多次准备和首写时，已确认提交优先于待核对。当前选择无符合的持久证据返回 <code>firstWrite: null</code>，无需把数据库中没有记录解释为传输一定未发生。<code>prepared</code> 表示持久结果仍待核对，<code>submitted</code> 表示有不可撤回的首写正证。三种均不推断供应商已接收完整正文、推理完成或响应。回包投影限既有选择和该状态，无原请求、登录或内部传输坐标。</li>
+    <li>沿用只读本人 GET 的观察登录、失效栅栏、行锁及出站复核，不启动 Native 或触发供应商访问，普通模式保持无此入口。保存响应和其原键重试仍按原合同。使用真实隔离 PostgreSQL、锁版 Native、回环两模型及已验证的提交失答与零写故障路径，覆盖无保存、保存未发、实际提交、仅准备、同修订正证优先、同值新修订无旧正证、原账号重新登录读回和未授权主体拒绝。异会话、跨范围及错误派发关联均不构成证明。</li>
+    <li>先从真实试点入口取得旧返回缺失回证的失败断言，再完成定点及邻域、独立复审、整仓、静态和基线验证。无需迁移。回退只撤下该只读投影，保存、派发和持久证据沿已有合同。</li>
+  </ol>
+
+  <h5 id="t13-saved-model-first-write-readback-evidence-20261121">保存修订的首写只读回证</h5>
+  <p>已有隔离 GET 在同一数据库查询快照返回当前 <code>selection</code> 与匹配的 <code>firstWrite</code>，正证依据首写行与原派发行联合校验。真实隔离会话保存后未产生证据返回 null。实际零写且原授权提交失答时，已持久准备可读为 <code>prepared</code>；同一修订有实际成功提交后，<code>submitted</code> 优先。当前保存同值的新修订仍只读出该新修订自己的证据。首写证据的状态保留原含义。</p>
+  <p>真实同账号换登录、重新取得 BFF 所有者后，在 Native 启动前读回前代首写，Native ready 文件保持缺失，回环 HTTP 及 TCP 连接数均未增加。换 Cookie 后沿用旧观察登录时拒绝回证。隔离库预置的错 Host、错账号、错项目和相邻会话的同修订候选均无证明效力。删除 Host 比对后真实 GET 反例错误返回 <code>submitted</code>，恢复条件后通过。旧实现的定点红灯为已授权 GET 只返回 <code>selection</code>。保存结果、原键重放及普通模式 404 沿既有合同。</p>
+  <p>方案与终稿经全新上下文独立复审 APPROVE。真实 <code>t13-session-model</code> 定点和本人选模、固定切点、迁移存储、会话生命周期、主出口 5 文件 31 项邻域通过。隔离 <code>pnpm test</code> 退出 0，60 文件、375 项通过、1 项平台条件跳过。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code> 和 <code>pnpm validate:baseline</code> 退出 0，构建保留既有主包体积提示。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

@@ -313,6 +313,66 @@ test.skipIf(process.platform !== 'darwin')(
         'insert into native_session(id,requirement_id,owner_id,source_session_id,source_through_seq) values($1,$2,$3,$4,0)',
         [existingFork, requirementId, owner, source],
       );
+      const sibling = 'session-' + randomUUID();
+      const seededSelection = { provider, model, revision: randomUUID() };
+      const dispatchHost = randomUUID();
+      await lab.owner.query(
+        'insert into native_session(id,requirement_id,owner_id) values($1,$2,$3)',
+        [sibling, requirementId, owner],
+      );
+      await lab.owner.query(
+        'insert into session_model_selection(native_session_id,provider,model,revision) values($1,$2,$3,$4)',
+        [source, provider, model, seededSelection.revision],
+      );
+      for (const candidate of [
+        { session: source, actor: owner, host: randomUUID(), projectId },
+        { session: source, actor: other, host: dispatchHost, projectId },
+        {
+          session: source,
+          actor: owner,
+          host: dispatchHost,
+          projectId: 'wrong-fixture-project',
+        },
+        { session: sibling, actor: owner, host: dispatchHost, projectId },
+      ]) {
+        const requestId = randomUUID();
+        await lab.owner.query(
+          `insert into session_prompt_dispatch(native_session_id,request_id,project_id,requirement_id,actor_id,
+              auth_session_id,input_digest,provider,model,selection_revision,state,host_generation,peer_nonce,lease_expires_at)
+            values($1,$2,$3,$4,$5,$6,repeat('a',64),$7,$8,$9,'pending',$10,'synthetic-peer',now())`,
+          [
+            candidate.session,
+            requestId,
+            projectId,
+            requirementId,
+            candidate.actor,
+            randomUUID(),
+            provider,
+            model,
+            seededSelection.revision,
+            dispatchHost,
+          ],
+        );
+        await lab.owner.query(
+          `insert into session_model_first_write(native_session_id,selection_request_id,project_id,requirement_id,provider,model,
+              selection_revision,host_generation,agent_generation,binding_id,call_id,attempt_id,turn,step,step_seq,note_seq,state,submitted_at)
+            values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,1,1,1,2,'submitted',now())`,
+          [
+            candidate.session,
+            requestId,
+            candidate.projectId,
+            requirementId,
+            provider,
+            model,
+            seededSelection.revision,
+            candidate.host,
+            randomUUID(),
+            randomUUID(),
+            randomUUID(),
+            randomUUID(),
+          ],
+        );
+      }
       await lab.owner.query(
         'update rdws_authority.owner set managed=true,ticket_digest=$1 where singleton',
         [createHash('sha256').update(ticket).digest('hex')],
@@ -600,7 +660,20 @@ test.skipIf(process.platform !== 'darwin')(
       await unreadable.text();
       const before = await fetch(path, { headers });
       expect(before.status, await before.clone().text()).toBe(200);
-      expect(await before.json()).toEqual({ selection: null });
+      expect(await before.json()).toEqual({
+        selection: null,
+        firstWrite: null,
+      });
+      const mismatched = await fetch(
+        `${sessionsPath}/${source}/model-selection`,
+        { headers },
+      );
+      expect(mismatched.status).toBe(200);
+      expect(mismatched.headers.get('cache-control')).toBe('no-store');
+      expect(await mismatched.json()).toEqual({
+        selection: seededSelection,
+        firstWrite: null,
+      });
       const commandId = randomUUID();
       const save = (id: string, selected: string) =>
         fetch(path, {
@@ -626,7 +699,7 @@ test.skipIf(process.platform !== 'darwin')(
       await rejected.text();
       const readBack = await fetch(path, { headers });
       expect(readBack.status).toBe(200);
-      expect(await readBack.json()).toEqual(saved);
+      expect(await readBack.json()).toEqual({ ...saved, firstWrite: null });
       const forked = await fetch(
         `${sessionsPath}/${encodeURIComponent(sessionId)}/fork`,
         {
@@ -649,7 +722,8 @@ test.skipIf(process.platform !== 'darwin')(
       expect(
         (
           await lab.owner.query(
-            'select request_id from session_prompt_dispatch',
+            'select request_id from session_prompt_dispatch where native_session_id=$1',
+            [sessionId],
           )
         ).rows,
       ).toEqual([]);
@@ -803,10 +877,23 @@ test.skipIf(process.platform !== 'darwin')(
             type === 'turn/end' && data.reason.kind === 'completed',
         ).length;
       await expect.poll(() => receivedModels).toEqual([model]);
+      await expect
+        .poll(async () => {
+          const response = await fetch(path, { headers });
+          expect(response.status).toBe(200);
+          return response.json();
+        })
+        .toEqual({ ...saved, firstWrite: 'submitted' });
       const nextSave = await save(randomUUID(), defaultModel);
       expect(nextSave.status).toBe(200);
       const changed = await nextSave.json();
       expect(changed.selection.revision).not.toBe(saved.selection.revision);
+      const changedProof = await fetch(path, { headers });
+      expect(changedProof.status).toBe(200);
+      expect(await changedProof.json()).toEqual({
+        ...changed,
+        firstWrite: null,
+      });
       releaseRetry();
       await expect.poll(completedTurns, { timeout: 8000 }).toBe(1);
       expect(receivedModels).toEqual([model, model]);
@@ -1508,6 +1595,44 @@ test.skipIf(process.platform !== 'darwin')(
         expect(await databaseOwner()).toBe(generation);
       }
 
+      const legacyModelPath = () =>
+        `${address}/api/requirements/${requirementId}/sessions/${legacySession}/model-selection`;
+      const readLegacyModel = async (
+        authenticated: typeof pilotAgain.authenticated,
+      ) => {
+        const response = await fetch(legacyModelPath(), {
+          headers: authenticated,
+        });
+        expect(response.status).toBe(200);
+        return response.json();
+      };
+      const saveLegacyModel = async (
+        authenticated: typeof pilotAgain.authenticated,
+      ) => {
+        const response = await fetch(legacyModelPath(), {
+          method: 'POST',
+          headers: authenticated,
+          body: JSON.stringify({
+            commandId: randomUUID(),
+            provider,
+            model: defaultModel,
+          }),
+        });
+        expect(response.status).toBe(200);
+        return response.json();
+      };
+      const legacyChoice = await saveLegacyModel(pilotAgain.authenticated);
+      expect(legacyChoice).toEqual({
+        selection: {
+          provider,
+          model: defaultModel,
+          revision: expect.any(String),
+        },
+      });
+      expect(await readLegacyModel(pilotAgain.authenticated)).toEqual({
+        ...legacyChoice,
+        firstWrite: null,
+      });
       const receipts = async (key: string, session = legacySession) =>
         (
           await lab.owner.query<{
@@ -1666,6 +1791,11 @@ test.skipIf(process.platform !== 'darwin')(
               await receiptState(key),
               `${phase} ${outcome} zero=${!!forceZero}`,
             ).toEqual(expectedStates);
+          if (forceZero)
+            expect(await readLegacyModel(pilotAgain.authenticated)).toEqual({
+              ...legacyChoice,
+              firstWrite: outcome === 'confirm' ? 'submitted' : 'prepared',
+            });
           expect(realWrites.slice(beforeWire)).toEqual(
             outcome === 'confirm'
               ? ['not-sent', 'submitted']
@@ -2006,6 +2136,28 @@ test.skipIf(process.platform !== 'darwin')(
       expect(await databaseOwner()).toBeNull();
 
       const databasePhase = await startNext(config.sessionModelPilot);
+      expect(databasePhase.authenticated['x-rdws-edit-session']).not.toBe(
+        pilotAgain.authenticated['x-rdws-edit-session'],
+      );
+      await expect(nativeReady(root)).rejects.toMatchObject({ code: 'ENOENT' });
+      const beforeColdRead = [supplierRequests, wireConnections.length];
+      expect(await readLegacyModel(databasePhase.authenticated)).toEqual({
+        ...legacyChoice,
+        firstWrite: 'submitted',
+      });
+      const wrongLogin = await fetch(legacyModelPath(), {
+        headers: {
+          ...databasePhase.authenticated,
+          'x-rdws-edit-session':
+            pilotAgain.authenticated['x-rdws-edit-session'],
+        },
+      });
+      expect(wrongLogin.status).toBe(401);
+      expect(await wrongLogin.json()).not.toHaveProperty('firstWrite');
+      await expect(nativeReady(root)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect([supplierRequests, wireConnections.length]).toEqual(
+        beforeColdRead,
+      );
       const dbPhaseReady = await fetch(
         `${address}/api/dsh/${requirementId}/bootstrap`,
         {
@@ -2059,6 +2211,18 @@ test.skipIf(process.platform !== 'darwin')(
       expect(nativePosts).not.toContain(duringShutdownKey);
 
       const settlementPhase = await startNext(config.sessionModelPilot);
+      const sameModel = await saveLegacyModel(settlementPhase.authenticated);
+      expect(sameModel.selection).toMatchObject({
+        provider,
+        model: defaultModel,
+      });
+      expect(sameModel.selection.revision).not.toBe(
+        legacyChoice.selection.revision,
+      );
+      expect(await readLegacyModel(settlementPhase.authenticated)).toEqual({
+        ...sameModel,
+        firstWrite: null,
+      });
       const settlementKey = randomUUID();
       const heldSettlement = {
         requestId: settlementKey,
@@ -2095,6 +2259,10 @@ test.skipIf(process.platform !== 'darwin')(
         )
         .toBe(priorCompleted + 1);
       expect(await receiptState(settlementKey)).toEqual(['submitted']);
+      expect(await readLegacyModel(settlementPhase.authenticated)).toEqual({
+        ...sameModel,
+        firstWrite: 'submitted',
+      });
       const ownerWithSettlement = await databaseOwner();
       expect(ownerWithSettlement).toEqual(expect.any(String));
       const settlementClosing = app!.close();

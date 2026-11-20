@@ -93,9 +93,9 @@ export function registerSessions(
       async (request, reply) => {
         reply.header('cache-control', 'no-store');
         const { original, current, scope } = await selectionScope(request);
-        const saved = await store.read(scope, current);
+        const result = await store.read(scope, current);
         await confirmAccess(request.headers, original);
-        return { selection: saved };
+        return result;
       },
     );
     app.post(sessionModelSelectionPath, async (request, reply) => {

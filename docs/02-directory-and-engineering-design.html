@@ -1403,6 +1403,26 @@
   </ul>
   <p>平台审核后冻结每项制品的来源、精确提交与最终发布制品的 SHA-256，按现有白名单与模板版本流程登记。MCP 的实际连接与调用须满足 T07 准入及具名环境授权。实际制品审核、隔离项目验收与用户侧验收待完成。</p>
 
+  <h5 id="t14-acceptance-candidate-plan-20261121">首批运营候选的本地制品与离线验证</h5>
+  <p>Change / R2，基线 <code>f3a7cce</code>。沿已确认的「需求验收准备」三项候选交付可审源码及精确字节。源码与本次测试装配供平台审核，常规 <code>capabilityRelease</code>、平台审批和项目模板数据保持现有状态。</p>
+  <ol>
+    <li><strong>候选。</strong>三个自包含 DSH 模块放在 <code>dsh/candidates/requirement-acceptance/</code>。插件「验收会话提示」通过锁版 <code>systemPrompt</code> 作用域追加一段固定中文提示，按当前验收标准列实际证据和待验证项。技能「需求验收清单」用现有 Native 技能注册表，仅允许用户手动调用，按当前标准及用户提供的测试证据起草清单。MCP「需求资料只读」先给作用域内的离线定义，说明授权来源为现有需求读取接口，仅当前需求，字段限标题、说明和验收标准。描述没有传输地址、命令、凭据、执行回调或新 Tool 注册。</li>
+    <li><strong>装配与隔离。</strong>受控测试在固定版真实 macOS paused Native 上读取三份模块字节和 SHA-256，经已有发布制品核对及需求级 preset 装配，限定一个合成项目和一个模板。使用当前签票约束确切工作区和 preset，通过测试观测器读取实际 Agent 的精确提示段、Native 技能目录和离线 MCP 定义，仅投影候选的固定字段。另一需求和同需求未绑定会话的对照不取得能力。原配置重启后按本机持久 preset 重新装载。同文件不同摘要用临时副本错配反例核对。默认运行时只继续加载现有注册表。</li>
+    <li><strong>验收与移交。</strong>对照工作台现有需求读取契约，核对实际技能仅用户可用、模板提示实际进入对应 Native 提示组装、MCP 只登记静态内容且不建立连接、不启动 MCP 进程或发布工具。能力之外不新增模型、文件、凭据、权限、接口和生产依赖。定点、Native preset／会话邻域、独立复审、整仓和静态检查通过后记录三个源码路径及 SHA-256，精确来源为本地交付提交。平台审核及正式发布登记、用户侧验收和具名 MCP 接入保持待验收。</li>
+  </ol>
+
+  <h5 id="t14-acceptance-candidate-evidence-20261121">首批运营候选的本地装配证据</h5>
+  <p>本地源码与 SHA-256 如下，精确来源为本节随同交付的本地 Git 提交。发布用字节及版本由平台审核冻结。</p>
+  <table>
+    <tr><th>候选</th><th>源码</th><th>SHA-256</th></tr>
+    <tr><td>验收会话提示</td><td><code>dsh/candidates/requirement-acceptance/session-guidance.mjs</code></td><td><code>61503576fbd7b04a5e4ea21d023713f6face39af8562ddcb43b37e952be7ebec</code></td></tr>
+    <tr><td>需求验收清单</td><td><code>dsh/candidates/requirement-acceptance/checklist.mjs</code></td><td><code>6fc2db1d58d08c327ae3f9689ae319078a6ea2567817501752709b50f07e1070</code></td></tr>
+    <tr><td>需求资料只读</td><td><code>dsh/candidates/requirement-acceptance/requirement-readonly-mcp.mjs</code></td><td><code>84a14f9ed728deb87ddad0f1c4c8a1446a108285fc3ab23615c6a9e47200b027</code></td></tr>
+  </table>
+  <p>锁版 paused Native 的绑定会话实际组装出一段完整验收提示，技能进入原生用户目录，<code>modelInvocable</code> 为 false，实际模型组装未列该技能。MCP 在所属 Agent 中仅暴露静态定义，数据字段为 <code>title</code>、<code>description</code>、<code>acceptance</code>，无工具注册。同需求原默认会话和未绑定的邻需求会话均无三项能力，邻需求持有错作用域签票返回 403。给临时副本附加空行并保留登记摘要后，装配拒绝该副本。冷启动以原本机 preset 复验同一能力集合，回环合成供应商监听在两代 Native 运行期间收到零 TCP 连接。</p>
+  <p>临时开启模型调用技能时，真实原生目录与技能元数据断言因 <code>modelInvocable</code> 为 true 失败。恢复手动专用后，固定候选、Native preset、会话模板和需求模板邻域 4 文件 11 项退出 0。候选仅在夹具加载，平台审核、正式登记、用户侧验收和真实 MCP 接入待各自确认。</p>
+  <p>方案和交付均经全新上下文独立复审 APPROVE。隔离 <code>pnpm test</code> 退出 0，60 文件、375 项通过、1 项平台条件跳过。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code>、<code>pnpm validate:baseline</code> 退出 0，构建保留既有主包体积提示。</p>
+
   <h4 id="t12-session-template-status-plan-20261120">11.17.12 T12 会话实际模板版本</h4>
   <p>Change / R2，基线 <code>f8dfd45</code>。依据 T12 的模板引用和生效状态验收，复用 T14 <a href="#t14-demand-binding-delivery-20261119">绑定配置</a>与<a href="#t14-preset-delivery-evidence-20261119">精确版本装载和冷恢复</a>已验证子能力。需求一旦更换绑定，当前配置与历史会话实际采用的版本可以不同。先交付上下文页的会话模板读回。需求背景维护及 T14 运营制品和用户侧验收维持清单状态。</p>
   <ol>

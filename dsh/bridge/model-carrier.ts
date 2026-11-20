@@ -83,6 +83,7 @@ export interface ModelCarrierCall {
   sessionId?: string;
   purpose?: string;
   bindingId?: string;
+  attachmentGrant?: string;
 }
 export interface ModelCarrierRequest {
   routeId: string;
@@ -99,6 +100,7 @@ export interface NativeModelTransport {
   handle(request: ModelCarrierRequest): Promise<Response>;
   signal?: AbortSignal;
   firstMessageTitle?: boolean;
+  attachmentManifests?: boolean;
 }
 
 const unavailable = () => new Error('Native model carrier unavailable');
@@ -180,7 +182,10 @@ function decodeCall(raw: unknown): ModelCarrierCall | undefined {
       (value.sessionId !== undefined && !named(value.sessionId)) ||
       (value.purpose !== undefined && !named(value.purpose)) ||
       (value.bindingId !== undefined &&
-        (typeof value.bindingId !== 'string' || !uuid.test(value.bindingId)))
+        (typeof value.bindingId !== 'string' || !uuid.test(value.bindingId))) ||
+      (value.attachmentGrant !== undefined &&
+        (typeof value.attachmentGrant !== 'string' ||
+          !uuid.test(value.attachmentGrant)))
     )
       return;
     return {
@@ -190,6 +195,7 @@ function decodeCall(raw: unknown): ModelCarrierCall | undefined {
       sessionId: value.sessionId as string | undefined,
       purpose: value.purpose as string | undefined,
       bindingId: value.bindingId as string | undefined,
+      attachmentGrant: value.attachmentGrant as string | undefined,
     };
   } catch {
     return;
@@ -449,7 +455,12 @@ export function openModelCarrier(socket: Duplex, generation: string) {
   return {
     ready,
     close: () => session.destroy(),
-    async fetch(route: string, call: ModelCarrierCall, request: Request) {
+    async fetch(
+      route: string,
+      call: ModelCarrierCall,
+      request: Request,
+      isCurrent?: () => boolean,
+    ) {
       try {
         await ready;
       } catch {
@@ -460,6 +471,7 @@ export function openModelCarrier(socket: Duplex, generation: string) {
         session.destroyed ||
         session.closed ||
         active >= maxStreams ||
+        (isCurrent && !isCurrent()) ||
         request.method !== 'POST' ||
         !routeKey.test(route)
       )

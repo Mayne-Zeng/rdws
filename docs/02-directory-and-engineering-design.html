@@ -1171,6 +1171,23 @@
 
   <p>最终 <code>pnpm test</code> 在 macOS arm64 与 Node 24.20.0 下通过 53 文件、301 项，1 项在非 macOS 上适用的既有用例跳过。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code>、<code>pnpm validate:baseline</code> 及 <code>git diff --check</code> 均通过。</p>
 
+  <h4 id="t13-native-attachment-manifest-plan-20261120">11.16.43 T13 本轮可信附件清单</h4>
+  <p>Change / R3，非批量，基线 <code>f083a92</code>。依据 §11.16.17 和 §11.16.38–42，为既有回环出口补 RDWS Access 与 ContextRuns 的清单生产链。显式程序化 <code>NativeWebHost</code> 媒介模式只在成对回环 Files/Messages 开启。测试装配直接创建该 Host、ContextRuns、回环附件出口，用已登记所有者的隔离 PostgreSQL 及真实业务上下文和 <code>withModelAuthority</code>。当前受管 main/title、direct/paused 和浏览器的文字准入沿用原契约。首片覆盖当前签名运行在本步骤实际领取的图片。历史、跨轮、重启和派生的图片、供应商句柄路径清理、跨代回执与正式启用继续验收。</p>
+  <ol>
+    <li>在真实 <code>session/event</code> 的 <code>agent/inbox/spliced</code> 第一次观察有效运行用户消息，对消息 UUID、已签 Peer 用户、原请求、nonce、有序原生附件 ID 和内容块位置拍快照。<code>claimed</code> 匹配同一快照并记真实领取轮。<code>agent/pre-step</code> 在 <code>await next()</code> 前用原始 <code>messages</code> 冻结本步实际领取批次。真实带 Agent Loop 标记的模型流按 <code>options.messages</code> 枚举所有有图片的普通用户消息并核对该批次快照，拒绝异会话、晚插图、历史、工具图片、已 offload 图片和重复原消息位置。允许同一原图在不同合法内容块重复。原生块坐标用于来源和唯一性，线上比较采用出现顺序，兼容合并相邻同角色与插入文本句柄。</li>
+    <li>在同一个真实模型调用的异步作用域观察原生 <code>readImageRequest</code>，按附件 ID 补真实变体摘要、长度和 MIME。多次读同 ID 要求结果一致。首个成对路由调用 <code>channel.fetch</code> 前，以现有签名 IPC 为当前 <code>call.id</code> 一次登记有序出现列表。最多 64 个出现点，只传原运行、实际来源用户、运行的原登录、请求及 Peer nonce、消息/位置/附件 ID 与承诺值。完整信封仍受 64 KiB／2 秒约束，允许已核对的无图主调用登记空表。ACK 返回固定步骤与调用，以及父端生成的随机登记凭据。Native 匹配 ACK 并复查当前步骤和取消状态，FD 4 仅附固定调用、步骤和该私有凭据。同一模型流的 Files、Messages、内联共享它并各用新尝试 ID。</li>
+    <li>ContextRuns 严格接受已知 IPC 字段，核对当前 Host、主运行与仍有效的完整步骤批次、同项目及需求/会话、当前 Agent、轮、步骤和模型。每处证据由 Native 核对真实原生消息，BFF 用既有 <code>Run.who</code> 及原运行核对用户、原登录、原请求和 nonce，校验来源坐标格式及唯一性。项目和认证代由装配策略补齐。每步仅一个活动清单，每个真实 <code>call.id</code> 一次冻结且有界结算标记，拒绝该调用重登记和迟到复活。无有效 ACK 无私有凭据。退出或取消尽力签名关闭该 call，超时与步骤/登录失效封闭其可消费期。同一步触发新模型流时新 call 必须重新登记，且受现有完整 429 才能释放的已提交首写槽约束。当前接口和 TLS 锁内两处核对同一个清单、调用凭据、Host、主用途、实际模型、精确路由/地址、认证代和当前绑定；原批次各登录分别通过真实定序。IPC 无图片字节、正文、认证头和路径。</li>
+    <li>隔离轮履行正反对照。新模式由产品 IPC 与 ContextRuns 供给清单，夹具日志只在出站及完成后的观察中比对。用一条真实领取的 [A,B,A] 证明两次 Files、一次 Messages 的真实回执重复及顺序，借独立供应商拒绝 Files 的条件验证实际内联三处。晚插图、丢 ACK 的当前有效输入在 FD 4 之前拒绝，另对相同有效清单的错调用/会话/用途/原登录、已关闭调用、撤权、取消和旧代执行有限绑定反例。核对锁内原身份、供应商 HTTP 与完整正文。聚焦、邻域、类型、lint、格式、构建、整仓与基线后统一归档。清理按 Native、FD 4、回环监听、授权所有者及隔离库顺序。</li>
+  </ol>
+
+  <p>双面独立方案复审第二轮 APPROVE。首轮意见闭合于原始领取批次、原生与线上坐标、父端私有 ACK 及调用结算、原登录证据和真实受管隔离装配。验收增加一次实际 429 与同一步新调用复用回执。</p>
+  <p id="t13-native-attachment-manifest-evidence-20261120">锁定 Native 0.2.2-rc.3、程序化回环 Host 和隔离受管 PostgreSQL 18.7 上，RDWS Access 从已签原消息和实际领取快照生成 [A,B,A]，真实原生读取补两种变体，IPC 登记后 FD 4 使用父端授予凭据。由实际 <code>ContextRuns.attachmentManifestFor</code> 提供清单，锁内与出站观察独立于测试见证日志。供应商收到两个 Files 上传和按 A、B、A 顺序的三个引用。完整 429 后同一步新调用登记、旧调用结算，以原两份回执再次发送 Messages，没有新增 Files。另一轮回环拒绝 Files 后实际收到三处内联图。</p>
+  <p>晚插图和父端登记成功但 Native 丢 ACK 两种情形均无 FD 4 和供应商到达。完成登记后、回 ACK 前提交原登录撤权，两条实际分路均抵达 PostgreSQL 授权并因原登录失效返回 401，锁内首写与供应商 HTTP 均无新增。另核对错用户、错原登录、错 nonce／原请求、额外路径字段、重放、旧 Host、同一步已结算调用、错用途、取消及定序中撤权。正式图片接纳、历史与派生授权、路径投影及跨代持久回执继续验收。</p>
+
+  <p>双面独立交付复审 APPROVE。复审指出清单截止须传到实际 TLS 首写，并须逐路对照 FD 4 与供应商实收正文。最终把签名清单截止并入 Files 和 Messages 的最早物理写入期限，分别实测。对照了完整正文 SHA-256、Content-Type、协议报头、归因剥离、尝试 ID 唯一性和私有登记凭据无出站。复核了原生入箱、领取及实际请求的同一原身份，以及拒绝时 TLS 解密应用字节。最终 7 个相关文件、59 项通过。</p>
+
+  <p>macOS arm64、Node 24.20.0 下，最终 <code>pnpm test</code> 通过 53 文件、306 项，另有 1 项非 macOS 条件用例跳过。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code>、<code>pnpm validate:baseline</code> 与 <code>git diff --check</code> 均通过。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

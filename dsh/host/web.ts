@@ -197,6 +197,7 @@ export class NativeWebHost {
     handle: NativeModelTransport['handle'];
     signal?: AbortSignal;
     firstMessageTitle?: boolean;
+    attachmentManifests?: boolean;
   };
   private closeCarrier?: () => Promise<void>;
   get signal() {
@@ -214,11 +215,28 @@ export class NativeWebHost {
       resolveNativeModelEgress('paused');
       if (!modelTransport)
         throw new Error('Mediated Native requires a model carrier');
+      const routes = snapshotModelRoutes(modelTransport.routes);
+      if (modelTransport.attachmentManifests) {
+        const fileRoute = routes.get('files');
+        const files = fileRoute && new URL(fileRoute);
+        if (
+          routes.size !== 2 ||
+          !files ||
+          !files.pathname.endsWith('/files') ||
+          files.protocol !== 'https:' ||
+          files.hostname !== '127.0.0.1' ||
+          routes.get('messages') !== new URL('messages', files).href
+        )
+          throw new Error(
+            'Native attachment manifests require loopback Files and Messages',
+          );
+      }
       this.modelTransport = {
-        routes: snapshotModelRoutes(modelTransport.routes),
+        routes,
         handle: modelTransport.handle,
         signal: modelTransport.signal,
         firstMessageTitle: modelTransport.firstMessageTitle,
+        attachmentManifests: modelTransport.attachmentManifests,
       };
     } else {
       resolveNativeModelEgress(modelEgress);
@@ -445,6 +463,8 @@ export class NativeWebHost {
                       ),
                       firstMessageTitle:
                         this.modelTransport.firstMessageTitle === true,
+                      attachmentManifests:
+                        this.modelTransport.attachmentManifests === true,
                     }
                   : {}),
                 contextEvidenceFile: join(

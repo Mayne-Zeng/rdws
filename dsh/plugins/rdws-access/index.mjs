@@ -170,13 +170,17 @@ export function apply(ctx, config) {
     route,
     context.request,
   );
-  if (config.modelRoutes)
-    installModelCarrier(
-      ctx,
-      config.contextGeneration,
-      config.modelRoutes,
-      contextBinding.modelBindingFor,
-    );
+  if (config.modelRoutes) {
+    const installCarrier = (scope) =>
+      installModelCarrier(
+        scope,
+        config.contextGeneration,
+        config.modelRoutes,
+        contextBinding,
+      );
+    if (config.attachmentManifests) ctx.inject(['attachments'], installCarrier);
+    else installCarrier(ctx);
+  }
   const presets = installPresets(ctx, config, route);
   route('health', () => ({
     ready: true,

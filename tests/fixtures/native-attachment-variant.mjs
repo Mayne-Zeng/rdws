@@ -10,6 +10,10 @@ const image = {
   mediaType: 'image/png',
   data: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGPgidpCU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULAHy7aD0Nf3XZAAAAAElFTkSuQmCC',
 };
+const otherImage = {
+  ...image,
+  data: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGMQKlpFU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULANkmuD10cOORAAAAAElFTkSuQmCC',
+};
 const sha = (data) => createHash('sha256').update(data).digest('hex');
 const imageIds = ({ content }) =>
   content
@@ -23,7 +27,7 @@ const identity = (message) => ({
   images: imageIds(message),
 });
 
-export function apply(ctx, { accepted, late, evidencePath }) {
+export function apply(ctx, { accepted, late, evidencePath, repeatImages }) {
   const attachments = ctx.attachments;
   const scope = new AsyncLocalStorage();
   const inserted = new Map();
@@ -55,7 +59,10 @@ export function apply(ctx, { accepted, late, evidencePath }) {
         if (!firstRef && marked({ content }, accepted)) {
           const admitted = await original.call(
             this,
-            [...content, image],
+            [
+              ...content,
+              ...(repeatImages ? [image, otherImage, image] : [image]),
+            ],
             ...rest,
           );
           firstRef = admitted.find((part) => part.type === 'image')?.attachment;

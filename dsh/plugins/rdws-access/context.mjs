@@ -2,12 +2,18 @@ import { randomUUID, createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import { signGrant, bodyHash } from '../../bridge/access.ts';
 import { cancelTitleOrigins, rememberTitleOrigin } from './title-binding.mjs';
+
+const imageId = /^sha256:[a-f0-9]{64}$/;
+const maxImageOccurrences = 64;
+const attachmentUnavailable = () =>
+  new Error('Native attachment evidence unavailable');
 export function installContext(ctx, config, key, route, requestContext) {
   const authorized = new Map(),
     agents = new WeakMap(),
     earlyInsertions = new WeakMap(),
     completedTitleTurns = new WeakMap(),
     modelSteps = new Map();
+  const imageOrigins = config.attachmentManifests ? new WeakMap() : undefined;
   let modelSequence = 0;
   const lookup = (r) => r.sessionId + ':' + r.requestId + ':' + r.peerNonce;
   const inboxInputs = (agent) => [
@@ -36,6 +42,73 @@ export function installContext(ctx, config, key, route, requestContext) {
       principal.nonce,
       source.rpcId,
     ]);
+  }
+  function imageOrigin(message) {
+    const identity = inputIdentity(message);
+    if (
+      !identity ||
+      message.role !== 'user' ||
+      message.source?.kind !== 'user' ||
+      typeof message.id !== 'string'
+    )
+      return;
+    const images = [];
+    for (const [blockIndex, block] of message.content.entries()) {
+      if (block.type !== 'image') continue;
+      if (
+        block.offloaded === true ||
+        !imageId.test(block.attachment?.attachmentId)
+      )
+        return;
+      images.push({ blockIndex, attachmentId: block.attachment.attachmentId });
+    }
+    if (images.length > 0 && images.length <= maxImageOccurrences)
+      return {
+        messageId: message.id,
+        userId: message.source.principal.userId,
+        identity,
+        images,
+      };
+  }
+  const matchingOrigin = (a, b) =>
+    a !== undefined && b !== undefined && bodyHash(a) === bodyHash(b);
+  if (imageOrigins)
+    ctx.on(
+      'session/event',
+      (session, event) => {
+        if (event.type !== 'agent/inbox/spliced') return;
+        for (const message of event.data.inserted) {
+          const source = message.source;
+          const run = authorized.get(
+            lookup({
+              sessionId: String(session.id),
+              requestId: source?.rpcId,
+              peerNonce: source?.principal?.nonce,
+            }),
+          );
+          if (
+            run &&
+            inputIdentity(message) &&
+            run.expiresAt > Date.now() &&
+            !imageOrigins.has(run)
+          )
+            imageOrigins.set(run, { origin: imageOrigin(message) });
+        }
+      },
+      { global: true },
+    );
+  function claimedImages(agent, messages, turn) {
+    const sources = new Map();
+    for (const message of messages) {
+      const run = currentInputRun(agent, message);
+      const proof = run && imageOrigins.get(run);
+      if (
+        proof?.turn === turn &&
+        matchingOrigin(proof.origin, imageOrigin(message))
+      )
+        sources.set(message.id, { origin: proof.origin, run });
+    }
+    return sources;
   }
   function inputRun(agent, source) {
     return authorized.get(
@@ -173,6 +246,12 @@ export function installContext(ctx, config, key, route, requestContext) {
       if (run) {
         run.claimed = true;
         run.claimedTurn = turn;
+        const attachment = imageOrigins?.get(run);
+        if (
+          attachment &&
+          matchingOrigin(attachment.origin, imageOrigin(message))
+        )
+          attachment.turn = turn;
       }
     },
     { global: true },
@@ -406,8 +485,11 @@ export function installContext(ctx, config, key, route, requestContext) {
     );
   ctx.on(
     'agent/pre-step',
-    async ({ agent, turn, step, signal, modelSelection }, next) => {
+    async ({ agent, turn, step, signal, modelSelection, messages }, next) => {
       closeAgentModelStep(agent);
+      const attachmentSources = imageOrigins
+        ? claimedImages(agent, messages, turn)
+        : undefined;
       const decision = await next();
       if (decision.kind === 'reject' || signal.aborted) return decision;
       let state = agents.get(agent);
@@ -476,6 +558,7 @@ export function installContext(ctx, config, key, route, requestContext) {
             agent,
             body: { ...state.binding, modelStep },
             signal,
+            attachmentSources,
             runs: bindings.map((binding) => authorized.get(lookup(binding))),
             close: () => closeModelStep(record),
           };
@@ -608,6 +691,20 @@ export function installContext(ctx, config, key, route, requestContext) {
     },
     { global: true },
   );
+  function modelBindingFor(options) {
+    const record = modelSteps.get(options.sessionId);
+    if (!record?.bindingId || !currentModelStep(record)) return;
+    const { noteId, provider, model } = record.body.modelStep;
+    const note = options.messages.findLast(
+      (m) => m.source?.kind === 'rdws-context',
+    );
+    if (
+      note?.id === noteId &&
+      options.provider === provider &&
+      options.model === model
+    )
+      return record.bindingId;
+  }
   return {
     revoke(authSessionId, requirementId, cutoff) {
       if (config.firstMessageTitle)
@@ -626,19 +723,58 @@ export function installContext(ctx, config, key, route, requestContext) {
         )
           authorized.delete(id);
     },
-    modelBindingFor(options) {
-      const record = modelSteps.get(options.sessionId);
-      if (!record?.bindingId || !currentModelStep(record)) return;
-      const { noteId, provider, model } = record.body.modelStep;
-      const note = options.messages.findLast(
-        (m) => m.source?.kind === 'rdws-context',
-      );
-      if (
-        note?.id === noteId &&
-        options.provider === provider &&
-        options.model === model
-      )
-        return record.bindingId;
-    },
+    modelBindingFor,
+    attachmentCallFor:
+      imageOrigins &&
+      ((options, call) => {
+        const record = modelSteps.get(options.sessionId);
+        if (
+          !record ||
+          !call.bindingId ||
+          modelBindingFor(options) !== call.bindingId
+        )
+          return;
+        const expected = [];
+        const seen = new Set();
+        for (const message of options.messages) {
+          if (!message.content.some((part) => part.type === 'image')) continue;
+          const source = record.attachmentSources.get(message.id);
+          if (
+            !source ||
+            !record.runs.includes(source.run) ||
+            !matchingOrigin(source.origin, imageOrigin(message)) ||
+            seen.has(message.id)
+          )
+            throw attachmentUnavailable();
+          seen.add(message.id);
+          for (const part of source.origin.images)
+            expected.push({
+              ...part,
+              runId: source.run.runId,
+              requestId: source.run.requestId,
+              peerNonce: source.run.peerNonce,
+              userId: source.origin.userId,
+              authSessionId: source.run.authSessionId,
+              messageId: source.origin.messageId,
+            });
+          if (expected.length > maxImageOccurrences)
+            throw attachmentUnavailable();
+        }
+        const { relatedRuns: _related, ...position } = record.body;
+        const cause = {
+          ...position,
+          callId: call.id,
+          bindingId: call.bindingId,
+        };
+        return {
+          expected,
+          signal: record.signal,
+          isCurrent: () => currentModelStep(record),
+          prepare: (images, signal) =>
+            service('model-attachment-prepare', { ...cause, images }, signal),
+          close: () =>
+            service('model-attachment-release', cause).catch(() => {}),
+        };
+      }),
   };
 }

@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import {
   mkdir,
@@ -13,6 +13,8 @@ import { createServer, type Server } from 'node:https';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { acquireAuthority, connectDatabase, releaseAuthority } from '@rdws/db';
+import { isRecord } from '@rdws/dsh/access';
 import { sessionRpc } from '@rdws/dsh/sessions';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { expect, test } from 'vitest';
@@ -20,11 +22,14 @@ import {
   createLoopbackAttachmentEgress,
   type AttachmentManifest,
 } from '../../apps/server/src/modules/model-attachment-egress.ts';
+import { createBusiness } from '../../apps/server/src/modules/business.ts';
+import { createProjectContextReader } from '../../apps/server/src/modules/native-projects.ts';
 import { ContextRuns } from '../../apps/server/src/modules/runtime-context.ts';
 import {
   readDeepSeekFilesEvidence,
   readDeepSeekMessagesEvidence,
 } from '../../apps/server/src/modules/model-attachment-evidence.ts';
+import { authorityDatabase } from '../helpers/authority-database.ts';
 import { modelTlsCertificate } from '../helpers/model-tls.ts';
 
 const fixtureCredential = 'synthetic-variant-only';
@@ -126,10 +131,23 @@ function syntheticMessages(model: string) {
 
 test
   .skipIf(process.platform !== 'darwin')
-  .each(['inline', 'TLS receipt'] as const)(
+  .each([
+    'inline',
+    'TLS receipt',
+    'native receipt',
+    'native inline',
+    'native lost ACK',
+    'native revoked',
+  ] as const)(
   'Native variant evidence follows the original claimed input with %s',
   async (transport) => {
-    const useTls = transport === 'TLS receipt';
+    const useTls = transport !== 'inline';
+    const nativeManifest = transport.startsWith('native ');
+    const nativeInline = transport === 'native inline';
+    const loseAck = transport === 'native lost ACK';
+    const revokeBeforeCarrier = transport === 'native revoked';
+    const denied = loseAck || revokeBeforeCarrier;
+    let retryFirstMessage = transport === 'native receipt';
     const root = await mkdtemp(
       join(await realpath(tmpdir()), 'rdws-attachment-variant-'),
     );
@@ -158,6 +176,9 @@ test
       sessionId: string;
     }[] = [];
     let replies = 0;
+    const receivedImages: Attempt['messageImages'][] = [];
+    const wireGrants = new Set<string>();
+    const visibleGrants: boolean[] = [];
     const httpEntries: string[] = [];
     const uploadedImages: Image[] = [];
     const arrivals: {
@@ -171,7 +192,22 @@ test
       attribution: string[];
       fixtureCredentialPresent: boolean;
     }[] = [];
-    const attemptScope = new AsyncLocalStorage<Attempt>();
+    const attemptScope = new AsyncLocalStorage<
+      Pick<Attempt, 'route' | 'attemptId' | 'bindingId'>
+    >();
+    const nativeAttempts: (Pick<
+      Attempt,
+      'route' | 'attemptId' | 'bindingId' | 'callId'
+    > & {
+      manifest?: AttachmentManifest;
+      wireSha256?: string;
+      contentType: string | null;
+    })[] = [];
+    const registrations: {
+      operation: string;
+      callId: unknown;
+      bindingId: unknown;
+    }[] = [];
     const lockReads: ((typeof contextReads)[number] & {
       attemptId: string;
       route: string;
@@ -181,11 +217,36 @@ test
     const carrierEntries: string[] = [];
     const historicalInputs = new Map<string, Witness>();
     let tlsConnections = 0;
+    const applicationBytes: number[] = [];
     let tcpConnections = 0;
     let authorityEntries = 0;
+    const authorityFailures: { route: string; statusCode?: number }[] = [];
     let server: Server | undefined;
     let startedHost: NativeWebHost | undefined;
+    let lab: Awaited<ReturnType<typeof authorityDatabase>> | undefined;
+    let database: ReturnType<typeof connectDatabase> | undefined;
+    let ownerGeneration: string | null = null;
     try {
+      if (nativeManifest) {
+        lab = await authorityDatabase();
+        const startup = randomBytes(32).toString('hex');
+        database = connectDatabase(
+          lab.databaseUrl,
+          randomBytes(32).toString('hex'),
+        );
+        await lab.owner.query('insert into project(id,name) values($1,$2)', [
+          project,
+          'Synthetic attachment project',
+        ]);
+        await lab.owner.query(
+          'update rdws_authority.owner set managed=true,ticket_digest=$1 where singleton',
+          [sha(startup)],
+        );
+        ownerGeneration = await acquireAuthority(database.pool, true, startup);
+        if (!ownerGeneration) throw new Error('Missing test authority owner');
+      }
+      const business = database && createBusiness(database.db);
+      const readContext = business && createProjectContextReader(business);
       let base = 'http://127.0.0.1:1/v1';
       const tls = useTls ? await modelTlsCertificate(root) : undefined;
       if (tls) {
@@ -200,6 +261,14 @@ test
                 chunks.push(Buffer.from(chunk));
               const wire = Buffer.concat(chunks);
               const { headers } = request;
+              if (nativeManifest)
+                visibleGrants.push(
+                  [...wireGrants].some(
+                    (grant) =>
+                      JSON.stringify(headers).includes(grant) ||
+                      wire.includes(grant),
+                  ),
+                );
               arrivals.push({
                 path,
                 wireSha256: sha(wire),
@@ -229,19 +298,33 @@ test
                   sha256: sha(Buffer.from(await image.arrayBuffer())),
                 });
                 const receipt = JSON.stringify({
-                  id: receiptId,
+                  id: nativeManifest
+                    ? receiptId + '-' + uploadedImages.length
+                    : receiptId,
                   type: 'file',
                   size_bytes: image.size,
                   created_at: new Date().toISOString(),
                   filename: image.name,
                   mime_type: image.type,
                 });
-                response.writeHead(200, {
+                response.writeHead(nativeInline ? 403 : 200, {
                   'content-type': 'application/json',
                   'content-length': Buffer.byteLength(receipt),
                 });
                 response.end(receipt);
               } else if (path === '/v1/messages') {
+                receivedImages.push(
+                  readDeepSeekMessagesEvidence(
+                    wire,
+                    headers['content-type'] ?? null,
+                    model,
+                  )?.images ?? [],
+                );
+                if (retryFirstMessage) {
+                  retryFirstMessage = false;
+                  response.writeHead(429, { 'content-length': '0' }).end();
+                  return;
+                }
                 const reply = await syntheticMessages(model).text();
                 response.writeHead(200, {
                   'content-type': 'text/event-stream',
@@ -258,7 +341,13 @@ test
           },
         );
         server.on('connection', () => tcpConnections++);
-        server.on('secureConnection', () => tlsConnections++);
+        server.on('secureConnection', (socket) => {
+          const index = tlsConnections++;
+          applicationBytes.push(0);
+          socket.on('data', (bytes: Buffer) => {
+            applicationBytes[index]! += bytes.length;
+          });
+        });
         server.listen(0, '127.0.0.1');
         await once(server, 'listening');
         base =
@@ -277,8 +366,32 @@ test
           'mediated',
           {
             routes,
+            attachmentManifests: nativeManifest,
             async handle(request): Promise<Response> {
               carrierEntries.push(request.routeId);
+              if (nativeManifest) {
+                if (request.call.attachmentGrant)
+                  wireGrants.add(request.call.attachmentGrant);
+                const attempt: (typeof nativeAttempts)[number] = {
+                  route: request.routeId,
+                  attemptId: request.attemptId,
+                  callId: request.call.id,
+                  bindingId: request.call.bindingId,
+                  manifest: runs.attachmentManifestFor(request),
+                  contentType: request.headers.get('content-type'),
+                };
+                nativeAttempts.push(attempt);
+                const [body, observation] = request.body.tee();
+                const [response] = await Promise.all([
+                  attemptScope.run(attempt, () =>
+                    egress!({ ...request, body }),
+                  ),
+                  new Response(observation).arrayBuffer().then((wire) => {
+                    attempt.wireSha256 = sha(Buffer.from(wire));
+                  }),
+                ]);
+                return response;
+              }
               const wire = Buffer.from(
                 await new Response(request.body).arrayBuffer(),
               );
@@ -409,13 +522,21 @@ test
         const runs = new ContextRuns(
           host.contextGeneration,
           (token) => host.verifyContext(token),
-          async (who, requirementId, sessionId) => {
+          async (who, requirementId, sessionId, related) => {
             contextReads.push({
               userId: who.userId,
               authSessionId: who.authSessionId,
               requirementId,
               sessionId,
             });
+            if (readContext)
+              return readContext(
+                project,
+                who,
+                requirementId,
+                sessionId,
+                related,
+              );
             return {
               value: {
                 snapshot: { requirementId, contextVersion: 1 },
@@ -433,34 +554,92 @@ test
             isCurrent: () => true,
           }),
           useTls
-            ? async (who, requirementId, sessionId, _related, write) => {
+            ? async (who, requirementId, sessionId, related, write) => {
                 authorityEntries++;
                 const attempt = attemptScope.getStore();
                 if (!attempt)
                   throw new Error('Missing attempt at fixture authority');
-                const result = write(Date.now() + 5000);
-                lockReads.push({
-                  userId: who.userId,
-                  authSessionId: who.authSessionId,
-                  requirementId,
-                  sessionId,
-                  route: attempt.route,
-                  attemptId: attempt.attemptId,
-                  bindingId: attempt.bindingId,
-                  outcome: (result as { outcome?: string }).outcome,
-                });
-                return result;
+                const submit = (deadline: number) => {
+                  const result = write(deadline);
+                  lockReads.push({
+                    userId: who.userId,
+                    authSessionId: who.authSessionId,
+                    requirementId,
+                    sessionId,
+                    route: attempt.route,
+                    attemptId: attempt.attemptId,
+                    bindingId: attempt.bindingId,
+                    outcome: (result as { outcome?: string }).outcome,
+                  });
+                  return result;
+                };
+                if (!business) return submit(Date.now() + 5000);
+                try {
+                  return await business.withModelAuthority(
+                    who,
+                    project,
+                    requirementId,
+                    sessionId,
+                    related,
+                    submit,
+                  );
+                } catch (error) {
+                  authorityFailures.push({
+                    route: attempt.route,
+                    statusCode: (error as { statusCode?: number }).statusCode,
+                  });
+                  throw error;
+                }
               }
+            : undefined,
+          false,
+          nativeManifest
+            ? { projectId: project, credentialGeneration }
             : undefined,
         );
         const egress =
           tls &&
           createLoopbackAttachmentEgress(routes, tls.cert, runs, (request) =>
-            manifests.get(request.call.bindingId!),
+            nativeManifest
+              ? runs.attachmentManifestFor(request)
+              : manifests.get(request.call.bindingId!),
           );
-        host.configureContext((input, token, reply) =>
-          runs.handle(input, token, reply),
-        );
+        host.configureContext(async (input, token, reply) => {
+          const capability = host.verifyContext(token);
+          const operation = capability?.operation;
+          if (
+            nativeManifest &&
+            isRecord(input) &&
+            (operation === 'model-attachment-prepare' ||
+              operation === 'model-attachment-release')
+          ) {
+            const prepare = operation === 'model-attachment-prepare';
+            const result = await runs.handle(
+              input,
+              token,
+              denied && prepare ? undefined : reply,
+            );
+            if (prepare && revokeBeforeCarrier) {
+              const image = Array.isArray(input.images) && input.images[0];
+              if (!isRecord(image) || !database || !capability)
+                throw new Error('Missing original login at revoke checkpoint');
+              const deleted = await database.pool.query(
+                'delete from auth_session where id=$1 returning id',
+                [image.authSessionId],
+              );
+              if (deleted.rowCount !== 1)
+                throw new Error('Original login was not revoked');
+              reply(result, capability.expiresAt);
+            }
+            registrations.push({
+              operation,
+              callId: input.callId,
+              bindingId: input.bindingId,
+            });
+            return result;
+          }
+          return runs.handle(input, token, reply);
+        });
         return { host, runs };
       }
       let { host, runs } = makeHost();
@@ -503,7 +682,10 @@ test
                   imagePixelBudget: 64,
                 },
               ],
-              retryPolicy: { mode: 'normal', maxRetries: 0 },
+              retryPolicy: {
+                mode: 'normal',
+                maxRetries: transport === 'native receipt' ? 1 : 0,
+              },
             },
           },
           {
@@ -516,7 +698,12 @@ test
                     import.meta.url,
                   ),
                 ),
-                config: { accepted, late, evidencePath },
+                config: {
+                  accepted,
+                  late,
+                  evidencePath,
+                  repeatImages: nativeManifest,
+                },
               },
             ],
           },
@@ -564,6 +751,34 @@ test
               workspaceId: workspace.workspaceId,
             },
           )) as { sessionId: string });
+        if (database) {
+          const { pool } = database;
+          const { userId, authSessionId } = identity;
+          await pool.query(
+            'insert into auth_user(id,name,email) values($1,$2,$3)',
+            [userId, 'Synthetic vision user', userId + '@fixture.invalid'],
+          );
+          await pool.query(
+            "insert into project_member values($1,$2,'developer')",
+            [project, userId],
+          );
+          await pool.query(
+            "insert into requirement(id,project_id,title,description,acceptance,lead_id,created_by) values($1,$2,'Synthetic vision request','','',$3,$3)",
+            [requirementId, project, userId],
+          );
+          await pool.query(
+            "insert into requirement_participant values($1,$2,'developer')",
+            [requirementId, userId],
+          );
+          await pool.query(
+            'insert into native_session(id,requirement_id,owner_id) values($1,$2,$3)',
+            [sessionId, requirementId, userId],
+          );
+          await pool.query(
+            "insert into auth_session(id,token,user_id,expires_at) values($1,$2,$3,now()+interval '5 minutes')",
+            [authSessionId, randomUUID(), userId],
+          );
+        }
         const browser = {
           ...identity,
           purpose: 'browser' as const,
@@ -642,6 +857,28 @@ test
         expect(
           await sessionRpc(host, ticket, 'session/prompt', prompt),
         ).toEqual({ accepted: true });
+        if (nativeManifest) {
+          const currentTurn = async () =>
+            (await currentEvents()).find(
+              ({ type, data }) => type === 'turn/end' && data.turn === 1,
+            );
+          await expect
+            .poll(async () => Boolean(await currentTurn()), { timeout: 15000 })
+            .toBe(true);
+          const completed = checkPublicRejection && !denied;
+          expect((await currentTurn())?.data.reason).toMatchObject({
+            kind: completed ? 'completed' : 'error',
+          });
+          const replies = (await currentEvents()).filter(
+            ({ type }) => type === 'assistant/message',
+          );
+          if (completed)
+            expect(JSON.stringify(replies)).toContain(
+              'synthetic accepted variant',
+            );
+          else expect(replies).toHaveLength(0);
+          return { pair: [], identity, sessionId, previousEvents };
+        }
         const expectedRoutes =
           useTls && !checkPublicRejection
             ? ['messages']
@@ -776,6 +1013,173 @@ test
       }
 
       const warm = await send(accepted, true);
+      if (nativeManifest) {
+        const origin = {
+          userId: warm.identity.userId,
+          authSessionId: warm.identity.authSessionId,
+          requirementId: warm.identity.requirementId,
+          sessionId: warm.sessionId,
+        };
+        expect(contextReads).toContainEqual(origin);
+        const witnesses = (await readFile(evidencePath, 'utf8'))
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line) as Witness);
+        const derived = new Map(
+          witnesses.map((witness) => [
+            witness.attachmentId,
+            witness.variant.image,
+          ]),
+        );
+        const first = witnesses[0]!.inserted;
+        const appearances = first.images;
+        const admission = originals.get(warm.sessionId)!;
+        const source = {
+          id: first.id,
+          requestId: admission.requestId,
+          userId: admission.userId,
+          nonce: admission.nonce,
+          images: appearances,
+        };
+        for (const witness of witnesses)
+          expect(witness).toMatchObject({
+            sessionId: warm.sessionId,
+            inserted: source,
+            claimed: { ...source, turn: 1 },
+            requested: source,
+            variant: { width: 8, height: 8 },
+          });
+        expect(derived.size).toBe(2);
+        expect(appearances).toHaveLength(3);
+        expect(appearances[0]).toBe(appearances[2]);
+        expect(appearances[0]).not.toBe(appearances[1]);
+        const evidence = appearances.map((id) => derived.get(id)!);
+        expect(evidence[0]!.sha256).not.toBe(evidence[1]!.sha256);
+        const expectedRoutes = loseAck
+          ? []
+          : nativeInline || revokeBeforeCarrier
+            ? ['files', 'messages']
+            : ['files', 'files', 'messages', 'messages'];
+        const expectedHttp = denied
+          ? []
+          : expectedRoutes.map((route) => '/v1/' + route);
+        expect(carrierEntries).toEqual(expectedRoutes);
+        expect(httpEntries).toEqual(expectedHttp);
+        expect(nativeAttempts.map(({ route }) => route)).toEqual(
+          expectedRoutes,
+        );
+        expect(authorityEntries).toBe(expectedRoutes.length);
+        expect(
+          new Set(nativeAttempts.map(({ attemptId }) => attemptId)).size,
+        ).toBe(nativeAttempts.length);
+        expect(arrivals).toEqual(
+          denied
+            ? []
+            : nativeAttempts.map(({ route, wireSha256, contentType }) => ({
+                path: '/v1/' + route,
+                wireSha256,
+                contentType,
+                accept: route === 'messages' ? 'text/event-stream' : undefined,
+                version: '2023-06-01',
+                beta:
+                  route === 'files' || !nativeInline
+                    ? 'files-api-2025-04-14'
+                    : undefined,
+                encoding: 'identity',
+                attribution: [],
+                fixtureCredentialPresent: true,
+              })),
+        );
+        expect(visibleGrants).toEqual(expectedHttp.map(() => false));
+        expect(lockReads).toEqual(
+          denied
+            ? []
+            : nativeAttempts.map(({ route, attemptId, bindingId }) => ({
+                ...origin,
+                route,
+                attemptId,
+                bindingId,
+                outcome: 'submitted',
+              })),
+        );
+        for (const attempt of nativeAttempts)
+          expect(attempt.manifest).toEqual({
+            projectId: project,
+            requirementId: origin.requirementId,
+            sessionId: origin.sessionId,
+            bindingId: attempt.bindingId,
+            credentialGeneration,
+            images: evidence,
+          });
+
+        const prepared = registrations.filter(
+          ({ operation }) => operation === 'model-attachment-prepare',
+        );
+        const expectedCalls = !denied && !nativeInline ? 2 : 1;
+        expect(prepared).toHaveLength(expectedCalls);
+        expect(new Set(prepared.map(({ callId }) => callId)).size).toBe(
+          expectedCalls,
+        );
+        expect(new Set(prepared.map(({ bindingId }) => bindingId)).size).toBe(
+          1,
+        );
+        expect(registrations).toEqual(
+          prepared.flatMap((event) => [
+            event,
+            { ...event, operation: 'model-attachment-release' },
+          ]),
+        );
+        if (nativeInline) {
+          expect(uploadedImages).toEqual([evidence[0]]);
+          expect(receivedImages).toEqual([
+            evidence.map((image) =>
+              expect.objectContaining({ kind: 'inline', image }),
+            ),
+          ]);
+        } else if (!denied) {
+          expect(uploadedImages).toEqual(evidence.slice(0, 2));
+          const expectedReferences = [1, 2, 1].map((index) =>
+            expect.objectContaining({
+              kind: 'file',
+              fileIdSha256: sha(receiptId + '-' + index),
+            }),
+          );
+          expect(receivedImages).toEqual([
+            expectedReferences,
+            expectedReferences,
+          ]);
+          expect(nativeAttempts.map(({ callId }) => callId)).toEqual([
+            prepared[0]!.callId,
+            prepared[0]!.callId,
+            prepared[0]!.callId,
+            prepared[1]!.callId,
+          ]);
+        }
+        expect(replies).toBe(denied ? 0 : 1);
+
+        expect(authorityFailures).toEqual(
+          revokeBeforeCarrier
+            ? [
+                { route: 'files', statusCode: 401 },
+                { route: 'messages', statusCode: 401 },
+              ]
+            : [],
+        );
+        await send(late);
+        await host.close();
+        expect(carrierEntries).toEqual(expectedRoutes);
+        expect(tcpConnections).toBe(expectedRoutes.length);
+        expect(tlsConnections).toBe(expectedRoutes.length);
+        expect(httpEntries).toEqual(expectedHttp);
+        expect(authorityEntries).toBe(expectedRoutes.length);
+        expect(registrations).toHaveLength(expectedCalls * 2);
+        expect(wireGrants.size).toBe(loseAck ? 0 : expectedCalls);
+        expect(applicationBytes.map((bytes) => bytes > 0)).toEqual(
+          expectedRoutes.map(() => !denied),
+        );
+        expect(replies).toBe(denied ? 0 : 1);
+        return;
+      }
       const positive = warm.pair;
       expect(replies).toBe(1);
       expect(positive.every(({ hasOriginalImage }) => hasOriginalImage)).toBe(
@@ -982,10 +1386,23 @@ test
             );
           }
         } finally {
-          await rm(root, { recursive: true, force: true });
+          try {
+            if (database && ownerGeneration)
+              await releaseAuthority(database.pool, ownerGeneration);
+          } finally {
+            try {
+              await database?.pool.end();
+            } finally {
+              try {
+                await lab?.close();
+              } finally {
+                await rm(root, { recursive: true, force: true });
+              }
+            }
+          }
         }
       }
     }
   },
-  45000,
+  60000,
 );

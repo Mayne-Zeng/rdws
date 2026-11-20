@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { bodyHash, isRecord, type Grant } from '@rdws/dsh/access';
+import { bodyHash, isRecord, onlyKeys, type Grant } from '@rdws/dsh/access';
 import type {
   ModelCarrierRequest,
   ModelWireCommit,
@@ -16,6 +16,8 @@ import {
   type NativeFixtureToolJob,
 } from './native-fixture-tool-job.ts';
 import type { FixtureToolProjection } from './model-egress-policy.ts';
+import type { AttachmentManifest } from './model-attachment-egress.ts';
+import { readWorkingDirectoryEdits } from './model-attachment-evidence.ts';
 type Detail = Awaited<ReturnType<ReturnType<typeof createBusiness>['read']>>;
 export function contextSnapshot(data: Detail) {
   const r = data.requirement;
@@ -153,6 +155,13 @@ type ModelStep = {
   fixtureWire?: FixtureWire;
   attempts: Set<string>;
   wireAttempt?: string;
+  attachmentCalls?: Set<string>;
+  attachment?: {
+    callId: string;
+    grant: string;
+    validBefore: number;
+    manifest: AttachmentManifest;
+  };
 };
 type FixtureWire = {
   job: NativeFixtureToolJob;
@@ -172,6 +181,11 @@ type TitleOrigin = {
   callId?: string;
 };
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+const attachmentRoutes = new Set(['files', 'messages']);
+const imageDigest = /^[a-f0-9]{64}$/;
+const attachmentId = /^sha256:[a-f0-9]{64}$/;
+const maxAttachmentCalls = 16;
+const maxAttachmentOccurrences = 64;
 const invalidModel = () => businessError(403, '当前模型尝试未获授权');
 function parseStepMarker(input: unknown): StepMarker {
   const positive = (value: unknown): value is number =>
@@ -229,7 +243,14 @@ export class ContextRuns {
       writeLease?: NonNullable<NativeFixtureToolJob['wireLease']>,
     ) => Promise<T>,
     private allowTitles = false,
-  ) {}
+    private attachmentPolicy?: Pick<
+      AttachmentManifest,
+      'projectId' | 'credentialGeneration'
+    >,
+  ) {
+    if (attachmentPolicy)
+      this.attachmentPolicy = Object.freeze({ ...attachmentPolicy });
+  }
   admit(
     who: Actor,
     requirementId: string,
@@ -339,6 +360,7 @@ export class ContextRuns {
     if (step?.batch.includes(run)) {
       step.closed = true;
       step.fixtureToolJob?.cancel();
+      step.attachment = undefined;
       if (step.batch.every((member) => this.runs.get(member.runId) !== member))
         this.modelSteps.delete(run.sessionId);
     }
@@ -362,6 +384,27 @@ export class ContextRuns {
     }
     return retired;
   }
+  async authorizeImageIntake(
+    who: Actor,
+    projectId: string,
+    requirementId: string,
+    sessionId: string,
+  ) {
+    if (
+      this.attachmentPolicy?.projectId !== projectId ||
+      !this.lockModelAuthority ||
+      this.closing(who.authSessionId, who.userId, requirementId)
+    )
+      return invalidModel();
+    const { validBefore } = await this.read(who, requirementId, sessionId);
+    if (
+      !Number.isFinite(validBefore) ||
+      validBefore <= Date.now() ||
+      this.closing(who.authSessionId, who.userId, requirementId)
+    )
+      return invalidModel();
+    return validBefore;
+  }
   private current(batch: readonly Run[]) {
     const now = Date.now();
     return batch.every(
@@ -370,6 +413,193 @@ export class ContextRuns {
         run.expiresAt > now &&
         !this.closing(run.who.authSessionId, run.who.userId, run.requirementId),
     );
+  }
+  attachmentManifestFor(request: ModelAttempt): AttachmentManifest | undefined {
+    const { routeId, destination, call, signal } = request;
+    const step = call.sessionId && this.modelSteps.get(call.sessionId);
+    if (!step || step.closed || !step.attachment || !step.selection) return;
+    const { attachment, selection } = step;
+    if (
+      !this.attachmentPolicy ||
+      attachment.manifest.projectId !== this.attachmentPolicy.projectId ||
+      attachment.manifest.credentialGeneration !==
+        this.attachmentPolicy.credentialGeneration ||
+      !attachmentRoutes.has(routeId) ||
+      selection.routes[routeId] !== destination ||
+      selection.provider !== call.provider ||
+      selection.model !== call.model ||
+      step.id !== call.bindingId ||
+      attachment.callId !== call.id ||
+      attachment.grant !== call.attachmentGrant ||
+      call.purpose !== undefined ||
+      attachment.validBefore <= Date.now() ||
+      !selection.isCurrent() ||
+      signal.aborted ||
+      !request.isCurrent() ||
+      !this.current(step.batch)
+    )
+      return;
+    return attachment.manifest;
+  }
+  private handleAttachment(input: Record<string, unknown>, cap: Grant) {
+    const policy = this.attachmentPolicy;
+    const step =
+      typeof input.sessionId === 'string'
+        ? this.modelSteps.get(input.sessionId)
+        : undefined;
+    const run = step?.batch[0];
+    const closing = cap.operation === 'model-attachment-release';
+    if (
+      !policy ||
+      !this.lockModelAuthority ||
+      !run ||
+      !step?.selection ||
+      !onlyKeys(input, [
+        ...Object.keys(this.binding(run)),
+        'agentGeneration',
+        'turn',
+        'modelStep',
+        'bindingId',
+        'callId',
+        ...(closing
+          ? []
+          : [
+              'images',
+              'userContentSha256',
+              'workingDirectoryEdits',
+              'projectedUserContentSha256',
+            ]),
+      ]) ||
+      Object.entries(this.binding(run)).some(
+        ([key, value]) => input[key] !== value,
+      ) ||
+      !isRecord(input.modelStep) ||
+      !onlyKeys(input.modelStep, Object.keys(step.stamp)) ||
+      bodyHash(parseStepMarker(input.modelStep)) !== bodyHash(step.stamp) ||
+      input.agentGeneration !== step.agentGeneration ||
+      input.turn !== step.turn ||
+      input.bindingId !== step.id ||
+      typeof input.callId !== 'string' ||
+      !uuid.test(input.callId) ||
+      !Object.hasOwn(step.selection.routes, 'files') ||
+      !Object.hasOwn(step.selection.routes, 'messages') ||
+      step.closed ||
+      !step.selection.isCurrent() ||
+      !this.current(step.batch)
+    )
+      return invalidModel();
+    const { callId } = input;
+    const calls = (step.attachmentCalls ??= new Set());
+    if (closing) {
+      if (step.attachment?.callId === callId) step.attachment = undefined;
+      if (calls.size < maxAttachmentCalls) calls.add(callId);
+      return { closed: true };
+    }
+    if (step.attachment && step.attachment.validBefore <= Date.now())
+      step.attachment = undefined;
+    const workingDirectoryEdits = readWorkingDirectoryEdits(
+      input.workingDirectoryEdits,
+    );
+    if (
+      calls.size >= maxAttachmentCalls ||
+      calls.has(callId) ||
+      step.attachment ||
+      step.attempts.size >= 128 ||
+      step.wireAttempt !== undefined ||
+      typeof input.userContentSha256 !== 'string' ||
+      !imageDigest.test(input.userContentSha256) ||
+      typeof input.projectedUserContentSha256 !== 'string' ||
+      !imageDigest.test(input.projectedUserContentSha256) ||
+      !workingDirectoryEdits ||
+      (!workingDirectoryEdits.length &&
+        input.projectedUserContentSha256 !== input.userContentSha256) ||
+      !Array.isArray(input.images) ||
+      input.images.length > maxAttachmentOccurrences
+    )
+      return invalidModel();
+
+    const messages = new Map<string, Run>();
+    const positions = new Set<string>();
+    const imageHandleDigests: string[] = [];
+    const images = input.images.map((entry: unknown) => {
+      if (
+        !isRecord(entry) ||
+        !onlyKeys(entry, [
+          'runId',
+          'requestId',
+          'peerNonce',
+          'userId',
+          'authSessionId',
+          'messageId',
+          'blockIndex',
+          'attachmentId',
+          'handleSha256',
+          'bytes',
+          'sha256',
+          'mediaType',
+        ]) ||
+        typeof entry.messageId !== 'string' ||
+        !uuid.test(entry.messageId) ||
+        typeof entry.blockIndex !== 'number' ||
+        !Number.isSafeInteger(entry.blockIndex) ||
+        entry.blockIndex < 0 ||
+        typeof entry.attachmentId !== 'string' ||
+        !attachmentId.test(entry.attachmentId) ||
+        typeof entry.handleSha256 !== 'string' ||
+        !imageDigest.test(entry.handleSha256) ||
+        typeof entry.sha256 !== 'string' ||
+        !imageDigest.test(entry.sha256) ||
+        typeof entry.bytes !== 'number' ||
+        !Number.isSafeInteger(entry.bytes) ||
+        entry.bytes < 1 ||
+        entry.bytes > 1024 * 1024 ||
+        (entry.mediaType !== 'image/png' &&
+          entry.mediaType !== 'image/jpeg' &&
+          entry.mediaType !== 'image/webp' &&
+          entry.mediaType !== 'image/gif')
+      )
+        return invalidModel();
+      const source = step.batch.find((item) => item.runId === entry.runId);
+      const position = entry.messageId + ':' + entry.blockIndex;
+      const prior = messages.get(entry.messageId);
+      if (
+        !source ||
+        source.requestId !== entry.requestId ||
+        source.peerNonce !== entry.peerNonce ||
+        source.who.userId !== entry.userId ||
+        source.who.authSessionId !== entry.authSessionId ||
+        positions.has(position) ||
+        (prior && prior !== source)
+      )
+        return invalidModel();
+      messages.set(entry.messageId, source);
+      positions.add(position);
+      imageHandleDigests.push(entry.handleSha256);
+      return Object.freeze({
+        mediaType: entry.mediaType,
+        bytes: entry.bytes,
+        sha256: entry.sha256,
+      });
+    });
+    const grant = randomUUID();
+    calls.add(callId);
+    step.attachment = {
+      callId,
+      grant,
+      validBefore: cap.expiresAt,
+      manifest: Object.freeze({
+        ...policy,
+        requirementId: run.requirementId,
+        sessionId: run.sessionId,
+        bindingId: step.id,
+        images: Object.freeze(images),
+        imageHandleDigests: Object.freeze(imageHandleDigests),
+        userContentSha256: input.userContentSha256,
+        workingDirectoryEdits,
+        projectedUserContentSha256: input.projectedUserContentSha256,
+      }),
+    };
+    return { bindingId: step.id, callId, grant };
   }
   authorizeModelAttempt<T>(request: ModelAttempt, send: () => T) {
     return this.withAuthorizedAttempt(request, send);
@@ -564,7 +794,16 @@ export class ContextRuns {
         ? this.modelSteps.get(call.sessionId)
         : undefined;
     const selection = step?.selection;
+    const needsAttachment =
+      this.attachmentPolicy && attachmentRoutes.has(routeId);
+    const attachment = needsAttachment
+      ? this.attachmentManifestFor(request)
+      : undefined;
+    const attachmentDeadline = needsAttachment
+      ? (step?.attachment?.validBefore ?? 0)
+      : Infinity;
     if (
+      (needsAttachment && !attachment) ||
       !step ||
       step.closed ||
       step.wireAttempt !== undefined ||
@@ -602,6 +841,7 @@ export class ContextRuns {
       const deadline = Math.min(
         validBefore,
         fixtureWire ? (step.validBefore ?? 0) : Infinity,
+        attachmentDeadline,
         ...step.batch.map(({ expiresAt }) => expiresAt),
       );
       if (
@@ -616,6 +856,8 @@ export class ContextRuns {
         !request.isCurrent() ||
         signal.aborted ||
         this.modelSteps.get(run.sessionId) !== step ||
+        (needsAttachment &&
+          this.attachmentManifestFor(request) !== attachment) ||
         step.closed ||
         step.wireAttempt !== undefined ||
         !this.current(step.batch) ||
@@ -664,6 +906,8 @@ export class ContextRuns {
         'model-title-close',
         ...(fixtureEnabled ? ['fixture-tool-permit'] : []),
         ...(fixtureOperation ? [fixtureOperation] : []),
+        'model-attachment-prepare',
+        'model-attachment-release',
       ].includes(cap.operation ?? '') ||
       cap.hostGeneration !== this.generation ||
       !isRecord(input) ||
@@ -701,6 +945,11 @@ export class ContextRuns {
       reply?.(result, result.expiresAt);
       return result;
     }
+    if (cap.operation?.startsWith('model-attachment-')) {
+      const result = this.handleAttachment(input, cap);
+      reply?.(result, cap.expiresAt);
+      return result;
+    }
     if (cap.operation?.startsWith('model-title-')) {
       const result = this.handleTitle(input, cap);
       reply?.(result, cap.expiresAt);
@@ -727,6 +976,7 @@ export class ContextRuns {
       ) {
         current.closed = true;
         current.fixtureToolJob?.cancel();
+        current.attachment = undefined;
       }
       const result = { released: true };
       reply?.(result, cap.expiresAt);
@@ -830,6 +1080,7 @@ export class ContextRuns {
       if (previous) {
         previous.closed = true;
         previous.fixtureToolJob?.cancel();
+        previous.attachment = undefined;
       }
       this.modelSteps.set(run.sessionId, modelStep);
     }

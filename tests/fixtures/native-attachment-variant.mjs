@@ -1,14 +1,21 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
+import { setTimeout as wait } from 'node:timers/promises';
 
 export const name = 'test-native-attachment-variant';
-export const inject = ['attachments', 'llm'];
+export const inject = ['attachments', 'llm', 'systemPrompt', 'sessionQuery'];
 
 const image = {
   type: 'image',
   mediaType: 'image/png',
+  name: 'rdws-synthetic-picture-a-first.png',
   data: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGPgidpCU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULAHy7aD0Nf3XZAAAAAElFTkSuQmCC',
+};
+const otherImage = {
+  ...image,
+  name: 'rdws-synthetic-picture-b.png',
+  data: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGMQKlpFU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULANkmuD10cOORAAAAAElFTkSuQmCC',
 };
 const sha = (data) => createHash('sha256').update(data).digest('hex');
 const imageIds = ({ content }) =>
@@ -23,7 +30,26 @@ const identity = (message) => ({
   images: imageIds(message),
 });
 
-export function apply(ctx, { accepted, late, evidencePath }) {
+export function apply(
+  ctx,
+  {
+    accepted,
+    late,
+    evidencePath,
+    repeatImages,
+    file,
+    runtimeNote,
+    observeOnly,
+    activationGate,
+  },
+) {
+  if (runtimeNote)
+    ctx.systemPrompt.context({
+      name: 'fixture:retained-runtime',
+      order: -1000,
+      interpolate: false,
+      text: () => runtimeNote,
+    });
   const attachments = ctx.attachments;
   const scope = new AsyncLocalStorage();
   const inserted = new Map();
@@ -32,38 +58,75 @@ export function apply(ctx, { accepted, late, evidencePath }) {
   const marked = (message, text) =>
     message.content.some((part) => part.type === 'text' && part.text === text);
 
-  function wrap(method, replacement) {
-    const descriptor = Object.getOwnPropertyDescriptor(attachments, method);
-    const original = attachments[method];
+  function wrap(method, replacement, target = attachments) {
+    const descriptor = Object.getOwnPropertyDescriptor(target, method);
+    const original = target[method];
     const observed = replacement(original);
-    Object.defineProperty(attachments, method, {
+    Object.defineProperty(target, method, {
       configurable: true,
       writable: true,
       value: observed,
     });
     ctx.effect(() => () => {
-      if (attachments[method] !== observed) return;
-      if (descriptor) Object.defineProperty(attachments, method, descriptor);
-      else delete attachments[method];
+      if (target[method] !== observed) return;
+      if (descriptor) Object.defineProperty(target, method, descriptor);
+      else delete target[method];
     });
   }
 
-  wrap(
-    'admitPromptContent',
-    (original) =>
-      async function (content, ...rest) {
-        if (!firstRef && marked({ content }, accepted)) {
-          const admitted = await original.call(
-            this,
-            [...content, image],
-            ...rest,
-          );
-          firstRef = admitted.find((part) => part.type === 'image')?.attachment;
-          return admitted;
-        }
-        return original.call(this, content, ...rest);
-      },
-  );
+  if (activationGate) {
+    let held = false;
+    wrap(
+      'observeSession',
+      (original) =>
+        async function (...args) {
+          const pause = !held && existsSync(activationGate.arm);
+          if (pause) {
+            held = true;
+            writeFileSync(activationGate.ready, '');
+            const deadline = Date.now() + 5000;
+            while (!existsSync(activationGate.release)) {
+              if (Date.now() >= deadline)
+                throw new Error('Synthetic activation gate expired');
+              await wait(10);
+            }
+          }
+          const result = await original.call(this, ...args);
+          if (pause) writeFileSync(activationGate.resumed, '');
+          return result;
+        },
+      ctx.sessionQuery,
+    );
+  }
+
+  if (!observeOnly)
+    wrap(
+      'admitPromptContent',
+      (original) =>
+        async function (content, ...rest) {
+          if (!firstRef && marked({ content }, accepted)) {
+            const admitted = await original.call(
+              this,
+              [
+                ...content,
+                ...(repeatImages
+                  ? [
+                      image,
+                      otherImage,
+                      { ...image, name: 'rdws-synthetic-picture-a-last.png' },
+                    ]
+                  : [image]),
+              ],
+              ...rest,
+            );
+            firstRef = admitted.find(
+              (part) => part.type === 'image',
+            )?.attachment;
+            return admitted;
+          }
+          return original.call(this, content, ...rest);
+        },
+    );
 
   ctx.on(
     'session/event',
@@ -89,6 +152,27 @@ export function apply(ctx, { accepted, late, evidencePath }) {
     'agent/pre-step',
     async (_event, next) => {
       const decision = await next();
+      if (
+        decision.kind === 'enter' &&
+        file &&
+        decision.messages.some((message) => marked(message, file))
+      ) {
+        const attachment = await attachments.saveFile({
+          data: Buffer.from('Synthetic file fixture'),
+          name: 'rdws-synthetic-file.txt',
+        });
+        return {
+          ...decision,
+          messages: decision.messages.map((message) =>
+            marked(message, file)
+              ? {
+                  ...message,
+                  content: [...message.content, { type: 'file', attachment }],
+                }
+              : message,
+          ),
+        };
+      }
       if (
         decision.kind !== 'enter' ||
         !firstRef ||

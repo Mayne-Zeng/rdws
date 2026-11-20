@@ -3,6 +3,7 @@ import { isRecord, onlyKeys } from '@rdws/dsh/access';
 
 const bodyLimit = 1024 * 1024;
 const imageLimit = 600;
+const directoryEditLimit = 64;
 const multipartType =
   /^multipart\/form-data; boundary=(----formdata-undici-[0-9]{12})$/;
 const fileHeader =
@@ -151,7 +152,7 @@ function readImage(
   };
 }
 
-export function readDeepSeekMessagesEvidence(
+function inspectDeepSeekMessages(
   body: Buffer,
   contentType: string | null | undefined,
   model: string,
@@ -234,5 +235,138 @@ export function readDeepSeekMessagesEvidence(
     }
   }
   if (!body.equals(Buffer.from(JSON.stringify(value)))) return;
-  return { request: commit(body), images };
+  return {
+    value,
+    messages: value.messages as Array<{
+      role: string;
+      content: Record<string, unknown>[];
+    }>,
+    evidence: { request: commit(body), images },
+  };
+}
+
+export function readDeepSeekMessagesEvidence(
+  body: Buffer,
+  contentType: string | null | undefined,
+  model: string,
+) {
+  return inspectDeepSeekMessages(body, contentType, model)?.evidence;
+}
+
+export type WorkingDirectoryEdit = Readonly<{
+  index: number;
+  start: number;
+  end: number;
+}>;
+
+export function readWorkingDirectoryEdits(value: unknown) {
+  if (!Array.isArray(value) || value.length > directoryEditLimit) return;
+  const bounded = (position: unknown): position is number =>
+    typeof position === 'number' &&
+    Number.isSafeInteger(position) &&
+    position >= 0 &&
+    position <= bodyLimit;
+  const edits: WorkingDirectoryEdit[] = [];
+  let previous = -1;
+  for (const edit of value) {
+    if (
+      !isRecord(edit) ||
+      !onlyKeys(edit, ['index', 'start', 'end']) ||
+      !bounded(edit.index) ||
+      !bounded(edit.start) ||
+      !bounded(edit.end) ||
+      edit.index <= previous ||
+      edit.end <= edit.start
+    )
+      return;
+    edits.push(
+      Object.freeze({ index: edit.index, start: edit.start, end: edit.end }),
+    );
+    previous = edit.index;
+  }
+  return Object.freeze(edits);
+}
+
+function userContentDigest(blocks: readonly Record<string, unknown>[]) {
+  return digest(
+    JSON.stringify(
+      blocks.map(({ type, text }) =>
+        type === 'text' ? ['text', text] : ['image'],
+      ),
+    ),
+  );
+}
+
+export function projectDeepSeekMessages(
+  body: Buffer,
+  contentType: string,
+  model: string,
+  proof: {
+    imageHandleDigests: readonly string[];
+    userContentSha256: string;
+    workingDirectoryEdits: readonly WorkingDirectoryEdit[];
+    projectedUserContentSha256: string;
+  },
+) {
+  const parsed = inspectDeepSeekMessages(body, contentType, model);
+  if (
+    !parsed ||
+    parsed.evidence.images.length !== proof.imageHandleDigests.length
+  )
+    return;
+  const removals = new Map<number, Set<number>>();
+  for (const [
+    occurrence,
+    { messageIndex, blockIndex },
+  ] of parsed.evidence.images.entries()) {
+    const index = blockIndex - 1;
+    const handle = parsed.messages[messageIndex]?.content[index];
+    if (
+      handle?.type !== 'text' ||
+      typeof handle.text !== 'string' ||
+      digest(JSON.stringify(handle.text)) !==
+        proof.imageHandleDigests[occurrence]
+    )
+      return;
+    const removed = removals.get(messageIndex) ?? new Set();
+    removed.add(index);
+    removals.set(messageIndex, removed);
+  }
+  const messages = parsed.messages.map((message, index) => {
+    const removed = removals.get(index);
+    return removed
+      ? {
+          ...message,
+          content: message.content.filter((_, block) => !removed.has(block)),
+        }
+      : message;
+  });
+  const userBlocks = messages
+    .filter(({ role }) => role === 'user')
+    .flatMap(({ content }) => content);
+  if (userContentDigest(userBlocks) !== proof.userContentSha256) return;
+  const edits = readWorkingDirectoryEdits(proof.workingDirectoryEdits);
+  if (!edits) return;
+  for (const { index, start, end } of edits) {
+    const block = userBlocks[index];
+    if (
+      block?.type !== 'text' ||
+      typeof block.text !== 'string' ||
+      end > block.text.length ||
+      end - start < 3 ||
+      block.text[start] !== '"' ||
+      block.text[end - 1] !== '"'
+    )
+      return;
+    block.text = block.text.slice(0, start) + '"."' + block.text.slice(end);
+  }
+  if (userContentDigest(userBlocks) !== proof.projectedUserContentSha256)
+    return;
+  return {
+    evidence: parsed.evidence,
+    body:
+      removals.size || edits.length
+        ? Buffer.from(JSON.stringify({ ...parsed.value, messages }))
+        : body,
+  };
 }

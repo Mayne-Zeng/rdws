@@ -38,6 +38,12 @@ T13 附件正文验证按锁定的 Native 序列化核对实际 Files 与 Messag
 
 回环附件适配器按 Files 和 Messages 路由核对固定版本、正文格式、单一认证和适用的 Files beta。Messages 要求 SSE Accept，文件引用与 beta 同步校验。出站报头重新构造，丢弃 Native User-Agent 与本地用户、会话归因字段。锁定 Native 的合成 Profile 和回环 HTTPS 已联合核对投影、独立首写和跨会话缓存引用拒绝。正式图片接纳与正文规范化继续验收。[Native 联查证据](docs/02-directory-and-engineering-design.html#t13-native-attachment-relay-evidence-20261120)
 
+回环 Messages 按签名清单逐图核对锁版 SDK 生成的相邻说明，并在 TLS 封口前移除该说明。单独的源有序内容摘要保证用户文本和图片相对顺序。上传及回执继续用实际变体与当前授权核对。其它原生路径贡献仍需正式正文验收。[图片说明清理证据](docs/02-directory-and-engineering-design.html#t13-attachment-handle-evidence-20261120)
+
+显式程序化回环图片准入为真实 Native 暂存和 Prompt 分别签发原登录短票据。私有暂存只在完整字节承诺后走锁版图片服务，暂存回执只供同原用户、登录、需求、会话和请求消费一次。RPC 与实际原入箱共同确认，后续首写仍经过领取清单和 PostgreSQL 原授权。断开或失联封住后续操作，已开始的 Native 内容地址存储可能留下本机对象。一般浏览器提示词准入保持文字。[新选图片准入](docs/02-directory-and-engineering-design.html#t13-native-image-intake-evidence-20261120)
+
+回环 Messages 会把锁定 Native 具名运行快照中的工作目录替换为相对位置。Native 校验确切快照框架并登记有界坐标与双摘要。BFF 对源及结果顺序都核对后才准备 TLS，原生会话记录与用户自己输入的目录句保留。旧快照或独立工作目录通知留在模型表面时，该附件装配拒绝外发。[工作目录投影证据](docs/02-directory-and-engineering-design.html#t13-working-directory-projection-evidence-20261120)
+
 主推理 TLS 1.3 转发在锁定的 macOS Node 24.20.0 环境完成回环验收。受信回调在同一同步段复核授权与最早期限，提交加密首段。步骤中只有明确零写入或完整验证的供应商 429 可开放下一次写入。转发先检查 HTTP 诊断与 TLS keylog，回归用合成标记检查性能记录、输出和运行产物。正式供应商接线及部署诊断仍待验收。 [TLS 转发验证](docs/02-directory-and-engineering-design.html#t13-tls13-first-write-20261119)
 
 停用与恢复写入账号代次，登录会话保存发行时的代次。数据库在插入时定序，业务读取和执行检查当前代次。旧登录不会在恢复后重新有效。单项目成员变动对该账号的同项目会话和连接生效。通知失败保留 BFF 截止与 Native 短租约两层不同的证据，已获准的外部请求可能完成。

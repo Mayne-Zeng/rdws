@@ -11,7 +11,7 @@ export const RDWS_TOOL_GUARD_DENIAL = {
 } as const;
 export interface Grant {
   aud: string;
-  purpose: 'browser' | 'create' | 'fork' | 'service';
+  purpose: 'browser' | 'create' | 'fork' | 'service' | 'image-prompt';
   issuedAt: number;
   expiresAt: number;
   nonce: string;
@@ -25,6 +25,7 @@ export interface Grant {
   operation?: string;
   bodyHash?: string;
   runId?: string;
+  requestId?: string;
   hostGeneration?: string;
   sourceSessionId?: string;
   atSeq?: number;
@@ -64,7 +65,9 @@ export function verifyGrant(
     ) as Grant;
     if (
       value.aud !== aud ||
-      !['browser', 'create', 'fork', 'service'].includes(value.purpose) ||
+      !['browser', 'create', 'fork', 'service', 'image-prompt'].includes(
+        value.purpose,
+      ) ||
       !Number.isFinite(value.issuedAt) ||
       !Number.isFinite(value.expiresAt) ||
       value.expiresAt <= now ||
@@ -81,6 +84,29 @@ export function verifyGrant(
 }
 export const bodyHash = (body: unknown) =>
   createHash('sha256').update(JSON.stringify(body)).digest('hex');
+export type NativeImageType =
+  'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+export const nativeImageType = (value: unknown): value is NativeImageType =>
+  value === 'image/png' ||
+  value === 'image/jpeg' ||
+  value === 'image/webp' ||
+  value === 'image/gif';
+export const imageStageHash = (mediaType: NativeImageType, bytes: Uint8Array) =>
+  bodyHash([
+    mediaType,
+    bytes.byteLength,
+    createHash('sha256').update(bytes).digest('hex'),
+  ]);
+export const imagePromptHash = (request: Record<string, unknown>) =>
+  bodyHash([
+    request.sessionId,
+    request.requestId,
+    request.mode,
+    (request.content as Record<string, unknown>[]).map((part) =>
+      part.type === 'text' ? ['text', part.text] : ['file', part.receiptId],
+    ),
+  ]);
+
 export const nativeLoginBinding = (
   authSessionId: string,
   projectId: string,
@@ -131,6 +157,21 @@ export function targetSession(args: Record<string, unknown>) {
     return request.address.sessionId;
   return undefined;
 }
+const promptText = (part: unknown) =>
+  isRecord(part) &&
+  onlyKeys(part, ['type', 'text']) &&
+  part.type === 'text' &&
+  typeof part.text === 'string' &&
+  part.text.length <= 8000 &&
+  !part.text.trimStart().startsWith('/');
+
+const imageReceipt = (part: unknown) =>
+  isRecord(part) &&
+  onlyKeys(part, ['type', 'receiptId']) &&
+  part.type === 'file' &&
+  typeof part.receiptId === 'string' &&
+  /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(part.receiptId);
+
 export function actionAllowed(
   grant: Grant,
   action: string,
@@ -138,6 +179,31 @@ export function actionAllowed(
   now = Date.now(),
 ) {
   if (grant.expiresAt <= now || grant.purpose === 'service') return false;
+  if (grant.purpose === 'image-prompt') {
+    const request = args.request;
+    return (
+      action === 'session/prompt' &&
+      onlyKeys(args, ['request']) &&
+      isRecord(request) &&
+      onlyKeys(request, ['sessionId', 'requestId', 'mode', 'content']) &&
+      grant.ownSessionIds?.length === 1 &&
+      grant.ownSessionIds[0] === request.sessionId &&
+      grant.readSessionIds?.length === 1 &&
+      grant.readSessionIds[0] === request.sessionId &&
+      typeof grant.requestId === 'string' &&
+      request.requestId === grant.requestId &&
+      request.mode === 'queue' &&
+      Array.isArray(request.content) &&
+      request.content.length > 1 &&
+      request.content.length <= 8 &&
+      request.content.filter(imageReceipt).length === 1 &&
+      request.content.every((part) => promptText(part) || imageReceipt(part)) &&
+      request.content.some(
+        (part) => promptText(part) && part.text.trim().length > 0,
+      ) &&
+      grant.bodyHash === imagePromptHash(request)
+    );
+  }
   if (grant.purpose === 'fork')
     return (
       action === 'session/fork' &&
@@ -218,15 +284,7 @@ export function actionAllowed(
           typeof part.text === 'string' &&
           part.text.trim().length > 0,
       ) &&
-      request.content.every(
-        (part) =>
-          isRecord(part) &&
-          onlyKeys(part, ['type', 'text']) &&
-          part.type === 'text' &&
-          typeof part.text === 'string' &&
-          part.text.length <= 8000 &&
-          !part.text.trimStart().startsWith('/'),
-      )
+      request.content.every(promptText)
     );
   return false;
 }
@@ -242,6 +300,16 @@ export function resourceRoles(grant: Grant) {
     actionAllowed(grant, action, args ?? {})
       ? { kind: 'allow' }
       : { kind: 'deny', reason: 'rdws-scope' };
+  if (grant.purpose === 'image-prompt')
+    return (grant.ownSessionIds ?? []).map((id) => ({
+      role: {
+        name: 'rdws-image-prompt',
+        resource: 'session',
+        actions: ['session/prompt'],
+      },
+      resource: { kind: 'session', id },
+      condition,
+    }));
   if (grant.purpose === 'create')
     return [
       {

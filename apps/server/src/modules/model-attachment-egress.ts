@@ -6,8 +6,10 @@ import {
 } from '@rdws/dsh/web';
 import type { ContextRuns } from './runtime-context.ts';
 import {
+  projectDeepSeekMessages,
   readDeepSeekFilesEvidence,
-  readDeepSeekMessagesEvidence,
+  type readDeepSeekMessagesEvidence,
+  type WorkingDirectoryEdit,
 } from './model-attachment-evidence.ts';
 
 type FilesEvidence = NonNullable<ReturnType<typeof readDeepSeekFilesEvidence>>;
@@ -24,6 +26,10 @@ export type AttachmentManifest = Readonly<{
   bindingId: string;
   credentialGeneration: string;
   images: readonly Readonly<Image>[];
+  imageHandleDigests: readonly string[];
+  userContentSha256: string;
+  workingDirectoryEdits: readonly WorkingDirectoryEdit[];
+  projectedUserContentSha256: string;
 }>;
 
 type UploadScope = {
@@ -81,6 +87,14 @@ const manifestKey = (scope: AttachmentManifest) =>
     scope.bindingId,
     scope.credentialGeneration,
     scope.images.map(imageKey),
+    scope.imageHandleDigests,
+    scope.userContentSha256,
+    scope.workingDirectoryEdits.map(({ index, start, end }) => [
+      index,
+      start,
+      end,
+    ]),
+    scope.projectedUserContentSha256,
   ]);
 
 async function readBytes(
@@ -268,12 +282,17 @@ export function createLoopbackAttachmentEgress(
       trusted.bindingId !== call.bindingId ||
       !trusted.credentialGeneration ||
       trusted.images.length > 600 ||
+      trusted.images.length !== trusted.imageHandleDigests.length ||
       !request.isCurrent()
     )
       throw invalid();
     const manifest = {
       ...trusted,
       images: trusted.images.map((image) => ({ ...image })),
+      imageHandleDigests: [...trusted.imageHandleDigests],
+      workingDirectoryEdits: trusted.workingDirectoryEdits.map((edit) => ({
+        ...edit,
+      })),
     };
     const bound = manifestKey(manifest);
     const identity = identityKey(manifest);
@@ -295,27 +314,30 @@ export function createLoopbackAttachmentEgress(
       );
     };
     const bytes = await readBytes(request.body, bodyLimit, preparationSignal);
-    const prepared = {
+    const prepare = (body: Buffer) => ({
       ...request,
       call: { ...call },
       headers,
-      body: new Response(Uint8Array.from(bytes)).body!,
+      body: new Response(Uint8Array.from(body)).body!,
       signal: attemptSignal,
       isCurrent: current,
-    };
+    });
     if (routeId === 'messages') {
-      const evidence = readDeepSeekMessagesEvidence(
+      const projected = projectDeepSeekMessages(
         bytes,
         contentType,
         call.model,
+        manifest,
       );
+      if (!projected) throw invalid();
+      const { evidence } = projected;
       if (
-        !evidence ||
         (beta !== null) !==
           evidence.images.some(({ kind }) => kind === 'file') ||
         messageDeadline(evidence, manifest, identity, credential) === undefined
       )
         throw invalid();
+      const prepared = prepare(projected.body);
       return messages(prepared, (write) =>
         runs.authorizeModelWireAttempt(prepared, (validBefore) => {
           const deadline = messageDeadline(
@@ -332,6 +354,7 @@ export function createLoopbackAttachmentEgress(
     }
 
     const evidence = readDeepSeekFilesEvidence(bytes, contentType);
+    const prepared = prepare(bytes);
     if (
       !evidence ||
       !manifest.images.some((image) => sameImage(image, evidence.image))

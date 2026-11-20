@@ -16,6 +16,7 @@ import {
 import { bootInjections } from '@deepseek-ai/dsh-client-modules';
 import { RemoteStreamMuxServer } from '@deepseek-ai/dsh-api-gateway/src/stream-server.ts';
 import { installContext } from './context.mjs';
+import { installImageIntake } from './image-intake.mjs';
 import { openContextIpc } from '../../bridge/context-ipc.ts';
 import { installModelCarrier } from './model-carrier.mjs';
 import { installPresets } from './presets.mjs';
@@ -129,6 +130,18 @@ export function apply(ctx, config) {
       return 'rdws-scope';
     },
   });
+  async function imagePromptBody(request) {
+    const chunks = [];
+    let length = 0;
+    for await (const chunk of request) {
+      length += chunk.length;
+      if (length > 64000) throw new Error('Request too large');
+      chunks.push(chunk);
+    }
+    return new TextDecoder('utf8', { fatal: true }).decode(
+      Buffer.concat(chunks, length),
+    );
+  }
   async function body(request) {
     let text = '';
     for await (const chunk of request) {
@@ -177,13 +190,17 @@ export function apply(ctx, config) {
     route,
     context.request,
   );
-  if (config.modelRoutes)
-    installModelCarrier(
-      ctx,
-      config.contextGeneration,
-      config.modelRoutes,
-      contextBinding.modelBindingFor,
-    );
+  if (config.modelRoutes) {
+    const installCarrier = (scope) =>
+      installModelCarrier(
+        scope,
+        config.contextGeneration,
+        config.modelRoutes,
+        contextBinding,
+      );
+    if (config.attachmentManifests) ctx.inject(['attachments'], installCarrier);
+    else installCarrier(ctx);
+  }
   const presets = installPresets(ctx, config, route);
   route('health', () => ({
     ready: true,
@@ -369,6 +386,20 @@ export function apply(ctx, config) {
       );
     },
   });
+  const imageIntake = config.imageIntake
+    ? installImageIntake(ctx, {
+        authenticate,
+        register,
+        inspectSession,
+        assertActivation,
+        ensurePreset: (preset, requirementId) =>
+          isDemandPreset(preset)
+            ? presets.ensure(preset, requirementId)
+            : undefined,
+        bindIntake: contextBinding.bindIntake,
+      })
+    : undefined;
+  if (imageIntake) route('image.status', imageIntake.accepted);
   const handler = ctx.connection.createSharedFetchHandler('/api');
   register({
     kind: 'prefix',
@@ -384,10 +415,50 @@ export function apply(ctx, config) {
       const abort = () => controller.abort();
       request.once('aborted', abort);
       record.peer.signal.addEventListener('abort', abort, { once: true });
+      const imagePrompt = record.cap.purpose === 'image-prompt';
+      if (imagePrompt) response.once('close', abort);
       try {
-        const text = await body(request);
         const url = new URL(request.url, 'http://rdws.invalid');
         if (
+          imagePrompt &&
+          (!imageIntake ||
+            request.method !== 'POST' ||
+            request.url !== '/_rdws/api/session/prompt')
+        ) {
+          response.writeHead(403);
+          response.end();
+          return;
+        }
+        if (imagePrompt && response.destroyed) abort();
+        const text = imagePrompt
+          ? await imagePromptBody(request)
+          : await body(request);
+        if (imagePrompt) {
+          assertActivation(record, controller.signal);
+          const envelope = JSON.parse(text);
+          if (
+            !onlyKeys(envelope, ['type', 'rpcId', 'method', 'payload']) ||
+            envelope.type !== 'client-request' ||
+            typeof envelope.rpcId !== 'string' ||
+            !envelope.rpcId ||
+            envelope.method !== 'session/prompt' ||
+            !onlyKeys(envelope.payload, ['args']) ||
+            !isRecord(envelope.payload.args)
+          )
+            throw new Error('Native image intake unavailable');
+          await prepareActivation(
+            record,
+            'session/prompt',
+            envelope.payload,
+            controller.signal,
+          );
+          if (response.destroyed) abort();
+          imageIntake.consume(
+            record,
+            envelope.payload.args.request,
+            controller.signal,
+          );
+        } else if (
           record.cap.purpose === 'browser' &&
           text &&
           (url.pathname === '/_rdws/api/session/prompt' ||
@@ -455,6 +526,7 @@ export function apply(ctx, config) {
         if (!response.headersSent) response.writeHead(503);
         response.end();
       } finally {
+        if (imagePrompt) response.off('close', abort);
         record.peer.signal.removeEventListener('abort', abort);
       }
     },

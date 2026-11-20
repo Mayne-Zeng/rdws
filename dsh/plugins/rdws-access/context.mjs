@@ -1,14 +1,111 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 import { signGrant, bodyHash } from '../../bridge/access.ts';
 import { cancelTitleOrigins, rememberTitleOrigin } from './title-binding.mjs';
 import { installFixtureToolProbe } from './tool-probe.mjs';
+import { intakeImageMatches } from './image-intake.mjs';
+
+const imageId = /^sha256:[a-f0-9]{64}$/;
+const maxImageOccurrences = 64;
+const attachmentUnavailable = () =>
+  new Error('Native attachment evidence unavailable');
+const workingDirectoryPrefix = 'Current working directory: ';
+const workingDirectorySection = 'working-directory:current';
+const reminderIntros = [
+  '<system-reminder>\nThe following information describes your current session:\n\n',
+  '<system-reminder>\nThe following information describes your current session. It replaces earlier versions of this context, including any retained in conversation summaries.\n\n',
+];
+const reminderEnd = '\n</system-reminder>';
+const clearedReminder =
+  '<system-reminder>\nCurrent runtime context: none. Earlier runtime-context snapshots no longer apply.\n</system-reminder>';
+const escapeReminder = (value) =>
+  value.replace(/<\/system-reminder\s*>/gi, (tag) => '<\\' + tag.slice(1));
+
+export function workingDirectorySpan(message) {
+  const source = message.source;
+  if (source?.kind === 'working-directory') throw attachmentUnavailable();
+  if (source?.kind !== 'runtime-context') return;
+  const block = Array.isArray(message.content) && message.content[0];
+  const sections = source.sections;
+  if (
+    message.role !== 'user' ||
+    source.form !== 'snapshot' ||
+    !Array.isArray(message.content) ||
+    message.content.length !== 1 ||
+    block?.type !== 'text' ||
+    typeof block.text !== 'string' ||
+    !Array.isArray(sections) ||
+    sections.some(
+      (section) =>
+        !section ||
+        typeof section.name !== 'string' ||
+        typeof section.text !== 'string' ||
+        !section.text,
+    )
+  )
+    throw attachmentUnavailable();
+
+  const text = block.text;
+  if (!sections.length) {
+    if (text !== clearedReminder) throw attachmentUnavailable();
+    return;
+  }
+  const texts = sections.map((section) => section.text);
+  const body = escapeReminder(texts.join('\n\n'));
+  const opening = reminderIntros.find(
+    (intro) => text === intro + body + reminderEnd,
+  );
+  if (!opening) throw attachmentUnavailable();
+
+  const index = sections.findIndex(
+    ({ name }) => name === workingDirectorySection,
+  );
+  if (index < 0) return;
+  if (
+    sections.findLastIndex(({ name }) => name === workingDirectorySection) !==
+    index
+  )
+    throw attachmentUnavailable();
+  const section = texts[index];
+  if (!section.startsWith(workingDirectoryPrefix) || !section.endsWith('.'))
+    throw attachmentUnavailable();
+  const quoted = section.slice(workingDirectoryPrefix.length, -1);
+  let directory;
+  try {
+    directory = JSON.parse(quoted);
+  } catch {
+    throw attachmentUnavailable();
+  }
+  if (
+    typeof directory !== 'string' ||
+    !isAbsolute(directory) ||
+    JSON.stringify(directory) !== quoted
+  )
+    throw attachmentUnavailable();
+
+  const leading = [...texts.slice(0, index), workingDirectoryPrefix].join(
+    '\n\n',
+  );
+  const start = opening.length + escapeReminder(leading).length;
+  const end = start + escapeReminder(quoted).length;
+  texts[index] = workingDirectoryPrefix + '".".';
+  const projected = text.slice(0, start) + '"."' + text.slice(end);
+  if (projected !== opening + escapeReminder(texts.join('\n\n')) + reminderEnd)
+    throw attachmentUnavailable();
+  return { start, end };
+}
+
 export function installContext(ctx, config, key, route, requestContext) {
   const authorized = new Map(),
     agents = new WeakMap(),
     earlyInsertions = new WeakMap(),
     completedTitleTurns = new WeakMap(),
     modelSteps = new Map();
+  const imageOrigins = config.attachmentManifests ? new WeakMap() : undefined;
+  const intakeImages = config.imageIntake ? new WeakMap() : undefined;
+  const matchesIntake = (run, message) =>
+    !intakeImages || intakeImageMatches(message, intakeImages.get(run));
   let modelSequence = 0;
   const lookup = (r) => r.sessionId + ':' + r.requestId + ':' + r.peerNonce;
   const toolProbe =
@@ -52,6 +149,77 @@ export function installContext(ctx, config, key, route, requestContext) {
       principal.nonce,
       source.rpcId,
     ]);
+  }
+  function imageOrigin(message) {
+    const identity = inputIdentity(message);
+    if (
+      !identity ||
+      message.role !== 'user' ||
+      message.source?.kind !== 'user' ||
+      typeof message.id !== 'string'
+    )
+      return;
+    const images = [];
+    for (const [blockIndex, block] of message.content.entries()) {
+      if (block.type !== 'image') continue;
+      if (
+        block.offloaded === true ||
+        !imageId.test(block.attachment?.attachmentId)
+      )
+        return;
+      images.push({ blockIndex, attachmentId: block.attachment.attachmentId });
+    }
+    if (images.length > 0 && images.length <= maxImageOccurrences)
+      return {
+        messageId: message.id,
+        userId: message.source.principal.userId,
+        identity,
+        images,
+      };
+  }
+  const matchingOrigin = (a, b) =>
+    a !== undefined && b !== undefined && bodyHash(a) === bodyHash(b);
+  if (imageOrigins)
+    ctx.on(
+      'session/event',
+      (session, event) => {
+        if (event.type !== 'agent/inbox/spliced') return;
+        for (const message of event.data.inserted) {
+          const source = message.source;
+          const run = authorized.get(
+            lookup({
+              sessionId: String(session.id),
+              requestId: source?.rpcId,
+              peerNonce: source?.principal?.nonce,
+            }),
+          );
+          if (
+            run &&
+            inputIdentity(message) &&
+            run.expiresAt > Date.now() &&
+            !imageOrigins.has(run)
+          )
+            imageOrigins.set(run, {
+              origin: matchesIntake(run, message)
+                ? imageOrigin(message)
+                : undefined,
+            });
+        }
+      },
+      { global: true },
+    );
+  function claimedImages(agent, messages, turn) {
+    const sources = new Map();
+    for (const message of messages) {
+      const run = currentInputRun(agent, message);
+      const proof = run && imageOrigins.get(run);
+      if (
+        proof?.turn === turn &&
+        matchingOrigin(proof.origin, imageOrigin(message))
+      )
+        sources.set(message.id, { origin: proof.origin, run });
+    }
+    return sources;
   }
   function inputRun(agent, source) {
     return authorized.get(
@@ -191,6 +359,13 @@ export function installContext(ctx, config, key, route, requestContext) {
       if (run) {
         run.claimed = true;
         run.claimedTurn = turn;
+        const attachment = imageOrigins?.get(run);
+        if (
+          attachment &&
+          matchingOrigin(attachment.origin, imageOrigin(message)) &&
+          matchesIntake(run, message)
+        )
+          attachment.turn = turn;
       }
       if (source?.kind === 'user' || source?.kind === 'retry')
         toolProbe?.claim(
@@ -430,8 +605,11 @@ export function installContext(ctx, config, key, route, requestContext) {
     );
   ctx.on(
     'agent/pre-step',
-    async ({ agent, turn, step, signal, modelSelection }, next) => {
+    async ({ agent, turn, step, signal, modelSelection, messages }, next) => {
       closeAgentModelStep(agent);
+      const attachmentSources = imageOrigins
+        ? claimedImages(agent, messages, turn)
+        : undefined;
       const decision = await next();
       if (decision.kind === 'reject' || signal.aborted) return decision;
       let state = agents.get(agent);
@@ -500,6 +678,7 @@ export function installContext(ctx, config, key, route, requestContext) {
             agent,
             body: { ...state.binding, modelStep },
             signal,
+            attachmentSources,
             runs: bindings.map((binding) => authorized.get(lookup(binding))),
             close: () => closeModelStep(record),
           };
@@ -640,6 +819,20 @@ export function installContext(ctx, config, key, route, requestContext) {
     },
     { global: true },
   );
+  function modelBindingFor(options) {
+    const record = modelSteps.get(options.sessionId);
+    if (!record?.bindingId || !currentModelStep(record)) return;
+    const { noteId, provider, model } = record.body.modelStep;
+    const note = options.messages.findLast(
+      (m) => m.source?.kind === 'rdws-context',
+    );
+    if (
+      note?.id === noteId &&
+      options.provider === provider &&
+      options.model === model
+    )
+      return record.bindingId;
+  }
   return {
     fixtureToolGate: (exec) => toolProbe?.gate(exec),
     revoke(authSessionId, requirementId, cutoff) {
@@ -659,19 +852,123 @@ export function installContext(ctx, config, key, route, requestContext) {
         )
           authorized.delete(id);
     },
-    modelBindingFor(options) {
-      const record = modelSteps.get(options.sessionId);
-      if (!record?.bindingId || !currentModelStep(record)) return;
-      const { noteId, provider, model } = record.body.modelStep;
-      const note = options.messages.findLast(
-        (m) => m.source?.kind === 'rdws-context',
+    modelBindingFor,
+    bindIntake(cap, sessionId, image) {
+      const run = authorized.get(
+        lookup({
+          sessionId,
+          requestId: cap.requestId,
+          peerNonce: cap.nonce,
+        }),
       );
       if (
-        note?.id === noteId &&
-        options.provider === provider &&
-        options.model === model
+        !intakeImages ||
+        !run ||
+        run.authSessionId !== cap.authSessionId ||
+        run.requirementId !== cap.requirementId ||
+        run.expiresAt <= Date.now() ||
+        run.seen ||
+        intakeImages.has(run)
       )
-        return record.bindingId;
+        throw new Error('Native image intake unavailable');
+      intakeImages.set(run, image);
     },
+    attachmentCallFor:
+      imageOrigins &&
+      ((options, call) => {
+        const record = modelSteps.get(options.sessionId);
+        if (
+          !record ||
+          !call.bindingId ||
+          modelBindingFor(options) !== call.bindingId
+        )
+          return;
+        const expected = [];
+        const userContent = [];
+        const workingDirectoryEdits = [];
+        const seen = new Set();
+        for (const message of options.messages) {
+          const directory = workingDirectorySpan(message);
+          for (const part of message.content) {
+            if (
+              part.type === 'file' ||
+              (part.type === 'image' && part.offloaded === true)
+            )
+              throw attachmentUnavailable();
+            if (message.role !== 'user') continue;
+            if (part.type === 'text' && part.text) {
+              if (directory)
+                workingDirectoryEdits.push({
+                  index: userContent.length,
+                  ...directory,
+                });
+              userContent.push(['text', part.text]);
+            }
+            if (part.type === 'image') userContent.push(['image']);
+          }
+          if (!message.content.some((part) => part.type === 'image')) continue;
+          const source = record.attachmentSources.get(message.id);
+          if (
+            !source ||
+            !record.runs.includes(source.run) ||
+            !matchingOrigin(source.origin, imageOrigin(message)) ||
+            seen.has(message.id)
+          )
+            throw attachmentUnavailable();
+          seen.add(message.id);
+          for (const part of source.origin.images)
+            expected.push({
+              ...part,
+              reference: message.content[part.blockIndex].attachment,
+              runId: source.run.runId,
+              requestId: source.run.requestId,
+              peerNonce: source.run.peerNonce,
+              userId: source.origin.userId,
+              authSessionId: source.run.authSessionId,
+              messageId: source.origin.messageId,
+            });
+          if (expected.length > maxImageOccurrences)
+            throw attachmentUnavailable();
+        }
+        const {
+          relatedRuns: _related,
+          fixtureToolHistory: _fixtureHistory,
+          ...position
+        } = record.body;
+        const cause = {
+          ...position,
+          callId: call.id,
+          bindingId: call.bindingId,
+        };
+        if (workingDirectoryEdits.length > 64) throw attachmentUnavailable();
+        const userContentSha256 = bodyHash(userContent);
+        for (const { index, start, end } of workingDirectoryEdits) {
+          const [type, text] = userContent[index];
+          userContent[index] = [
+            type,
+            text.slice(0, start) + '"."' + text.slice(end),
+          ];
+        }
+        const projectedUserContentSha256 = bodyHash(userContent);
+        return {
+          expected,
+          signal: record.signal,
+          isCurrent: () => currentModelStep(record),
+          prepare: (images, signal) =>
+            service(
+              'model-attachment-prepare',
+              {
+                ...cause,
+                images,
+                userContentSha256,
+                workingDirectoryEdits,
+                projectedUserContentSha256,
+              },
+              signal,
+            ),
+          close: () =>
+            service('model-attachment-release', cause).catch(() => {}),
+        };
+      }),
   };
 }

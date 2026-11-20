@@ -113,11 +113,13 @@ export async function sessionRpc(
   grant: string | Omit<Grant, 'aud' | 'issuedAt' | 'expiresAt' | 'nonce'>,
   action: string,
   request: Record<string, unknown>,
+  signal?: AbortSignal,
 ) {
   const rpcId = randomUUID();
   const response = await host.fetch('/api/' + action, grant, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
+    signal,
     body: JSON.stringify({
       type: 'client-request',
       rpcId,

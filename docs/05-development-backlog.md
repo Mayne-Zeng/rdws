@@ -197,6 +197,7 @@
   - 可验收目标：配置使用原生 Provider／Profile／Credentials；项目只使用允许集合；个人只在允许范围选择本次会话模型；平台锁定项不能被下级覆盖；普通 DTO、日志与页面不暴露凭据；不另建模型调用权威。
   - 已确认的选模验收：本人可在同一会话反复选择允许的模型，在下次本人有权发送时重验并应用。已选模型被停用或移出允许集合时，保留待发送输入，提示重新选择可用模型，由用户再次发送，无自动默认回退。验收分别核对保存、实际 Native 生效、撤权和其他会话隔离。详见[时点和验收](02-directory-and-engineering-design.html#t13-send-time-acceptance-20261118)。
   - 已确认的出口及派生验收：统一受信出口须让实际发出与撤权同序，逐次校验主请求、重试、上传和后台标题。遇到派生前缀中的未外发模型选择，子会话须由本人明确选模后才能首次发送。历史前缀及快捷新建规则继续适用。部署方须确认瞬时处理正文和认证头的边界。DSH 统计与计量后续对接。见[决定台账](00-decision-ledger.html#t13-egress-fork-decisions-20261119)和[验收判据](02-directory-and-engineering-design.html#t13-egress-fork-acceptance-20261119)。
+  - 已确认的历史图片规则（T13-A2）：同一本人会话默认只发送文字。可一键「沿用上一张图」，输入框显示可移除缩略图，选择仅随本条消息生效。发送时重新核对当前登录、本人会话和适用模型外发权限。[产品决定](02-directory-and-engineering-design.html#t13-history-image-rule-20261120)。
   - 前置：T03；已核实所需原生公开配置接口。
   - 来源：D2、D19；台账模型配置权威。
   - 当前证据：[原生授权核查](02-directory-and-engineering-design.html#t13-native-evidence-20261118)及[会话选模验证](02-directory-and-engineering-design.html#t13-session-model-evidence-20261118)。通过 Host 公共会话能力写入原生选择，目标会话冷启动后仍能读取，另一会话与实例默认值保持原值。普通浏览器授权继续拒绝配置读取和直接选模。分层配置与用户选模入口待接线。
@@ -215,6 +216,10 @@
   - 已本地交付隔离子项：[签名 Native 与附件回环首写联查](02-directory-and-engineering-design.html#t13-native-attachment-relay-evidence-20261120)。真实锁版 Native 的原签名绑定分别完成上传与缓存 Messages 首写，归因报头不上送。另一签名会话发送相同缓存 ID，HTTPS 零新增且无回复。聚焦 43 项、整仓 300 项、独立复审、静态及基线通过。正式图片接纳、跨代持久回执和具名部署仍待验收。
   - 已本地验证隔离子项：[Native 附件缓存冷启核对](02-directory-and-engineering-design.html#t13-native-attachment-cold-evidence-20261120)。同一原会话换用新 Native 和新出口，SDK 用持久缓存引用同一文件 ID。两项受信清单齐备，缺当前回执时实际仅出现载体 Messages，本轮失败且无新增 TCP、首写、上传或内联。独立复审、聚焦 43 项、整仓 300 项、静态及基线通过。正式跨代持久回执与上传结果不明的核对继续验收。
   - 已本地验证隔离子项：[附件分路首写与数据库撤权定序](02-directory-and-engineering-design.html#t13-attachment-postgres-evidence-20261120)。真实受管隔离 PostgreSQL 中，Files 与引用已确认回执的 Messages 都以原登录进入锁等待。撤权提交后两路均无锁内首写、解密应用字节及 HTTP 请求。有效登录重新绑定后，两路正常完成。独立复审、聚焦 45 项、整仓 301 项、静态及基线通过。
+  - 已本地交付隔离子项：[本轮可信附件清单](02-directory-and-engineering-design.html#t13-native-attachment-manifest-evidence-20261120)。RDWS Access 对齐签名原消息、领取和真实模型变体，ContextRuns 按调用冻结，经受管 PostgreSQL 验证首写。实测顺序重复图、429 回执复用、内联回退、丢 ACK 和撤权。双面方案与交付复审、邻域 59 项、整仓 306 项、静态及基线通过。工作台图片接纳仍待历史授权、其它原生上下文路径和持久回执等验收。
+  - 已本地交付隔离子项：[SDK 图片说明清理](02-directory-and-engineering-design.html#t13-attachment-handle-evidence-20261120)。按签名摘要剥离 DeepSeek 生成的图片说明，独立 HTTPS 实收证明图片对象路径和显示名去除，用户原文、上传与回执保留。缺证明和实际 offload 失败闭合。双面复审、聚焦 66 项、整仓 310 项、静态及基线通过。
+  - 已本地交付隔离子项：[原生工作目录提醒投影](02-directory-and-engineering-design.html#t13-working-directory-projection-evidence-20261120)。同一无图会话的两轮原快照保持，出站只替换可信提醒的绝对目录。HTTPS 实收确认用户手写的同一目录句和其它上下文保留，错承诺及锁内变更零应用写入。双面复审、邻域 69 项、整仓 313 项、静态及基线通过。
+  - 已本地交付隔离子项：[新选图片的原登录准入](02-directory-and-engineering-design.html#t13-native-image-intake-evidence-20261120)。真实 Native 暂存的正规 ID 绑定原登录和单个原请求，经入箱、领取、真实 PG 首写和 HTTPS。并发、退休后复放、撤权、完整正文后的断开、Unicode 分块和丢确认均有实测。双面复审、邻域 73 项、整仓 317 项、静态及基线通过。
   - 实现前验证：[入箱领取选模与派生边界](02-directory-and-engineering-design.html#t13-claim-selection-probe-20261119)。实际排队发送确认本轮原模型及下轮目标模型，阻止后仍可能把未外发的选择带入派生。后续以已确认的出口及派生验收为准，现有证据用于实施方案。
   - 已交付修复：[冷恢复后首次新发送](02-directory-and-engineering-design.html#t13-queued-recovery-evidence-20261119)。已刷盘的旧输入保留在 Native 原始日志。新的有效入箱才取消缺少运行绑定的旧活动项，首次新发送完成，旧键在再次冷启后仍可核对。独立复审、整仓 187 项、浏览器 34 项、本机 Native 通知故障回归及基线通过。
   - 实现前验证：[Native 模型出口的本机隔离](02-directory-and-engineering-design.html#t13-native-egress-confinement-20261119)。锁定版 DSH 在 macOS IPv4 回环中可经出口完成 PiAi、DeepSeek Files 和 Messages，系统拒绝计划外直连，出口关闭后同进程发起新请求失败。同一 Native 进程的 Web 端点持续可访问。独立复审、整仓 190 项及基线通过。正式 Host 接线、端点身份与撤权定序按 §11.16.17 继续验证。
@@ -239,6 +244,7 @@
   - 实现前核对：[完整领取后的原生选模时点](02-directory-and-engineering-design.html#t13-selection-boundary-evidence-20261120)。锁定 Native 在同一轮的下一步按完整同修订批次命中目标模型。不同修订同批终态为阻止，即使模型相同，供应商第二次 HTTP 仍为零。独立复审、反例和 5 项原生邻域通过。该探针为保存、发送授权和派生提供实现依据。
   - 实现前核对：[原提示词接纳的原生只读证据](02-directory-and-engineering-design.html#t13-prompt-observation-evidence-20261120)。活动会话显式刷盘后核对物理序号，冷启查证无 Agent 创建、零日志变动、供应商零新增，并排除继承的输入和换 Peer。两项故障反例和原生邻域 5 项通过。
   - 已复审方案：[保存本人会话选模并在发送时生效](02-directory-and-engineering-design.html#t13-saved-session-model-plan-20261120)。第三轮 A/B 均通过，明确持久原票据、只读原键查证、当步新增和同轮累计原登录，以及试点派生和回退。共享 PG 池完成独立复审与同库整仓后启动实施。
+  - 已整合工程子项：[附件清单与图片准入分支](02-directory-and-engineering-design.html#t13-local-branch-consolidation-20261120)。附件来源证明、SDK 图片说明投影、工作目录投影及新选图片原登录准入已合入 `main`。双面复审、88 项邻域及静态检查通过。正式图片入口、历史复用、选模和具名部署仍待继续验收。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）
   - 说明：维护已审核插件、技能、MCP 白名单，生成和调整需求 preset。

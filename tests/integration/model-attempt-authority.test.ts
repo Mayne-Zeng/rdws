@@ -1,12 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test, vi } from 'vitest';
 import { bodyHash, signGrant, verifyGrant } from '@rdws/dsh/access';
+import type { WorkingDirectoryEdit } from '../../apps/server/src/modules/model-attachment-evidence.ts';
 import { ContextRuns } from '../../apps/server/src/modules/runtime-context.ts';
 
 const route = 'https://fixture.invalid/v1/chat/completions';
 const model = { provider: 'fixture', model: 'fixture-default' };
+const attachmentRoutes = {
+  files: 'https://127.0.0.1:4317/v1/files',
+  messages: 'https://127.0.0.1:4317/v1/messages',
+};
 
-function fixture(titleEnabled = false) {
+function fixture(titleEnabled = false, attachmentEnabled = false) {
   const generation = randomUUID();
   const key = randomUUID();
   const aud = 'rdws:bff:' + generation;
@@ -40,18 +45,27 @@ function fixture(titleEnabled = false) {
       return {
         ...model,
         revision: String(revision),
-        routes: { chat: destination },
+        routes: {
+          chat: destination,
+          ...(attachmentEnabled ? attachmentRoutes : {}),
+        },
         isCurrent: () =>
           revision === state.revision && destination === state.destination,
       };
     },
-    titleEnabled
+    titleEnabled || attachmentEnabled
       ? async (who, _requirement, _session, _related, write) => {
           reads.push([who.authSessionId]);
           return write(state.expires);
         }
       : undefined,
     titleEnabled,
+    attachmentEnabled
+      ? {
+          projectId: 'fixture-project',
+          credentialGeneration: 'configured-generation',
+        }
+      : undefined,
   );
   const older = runs.admit(
     { userId: 'owner', authSessionId: 'first-login' },
@@ -146,6 +160,7 @@ function fixture(titleEnabled = false) {
     step,
     newPosition,
     prepareStep,
+    opened,
     openStep,
     release,
     attempt,
@@ -470,3 +485,172 @@ test.each([
     }
   },
 );
+
+test('the attachment grant binds the original batch and retires by call', async () => {
+  const f = fixture(false, true);
+  const bindingId = await f.step(1);
+  const {
+    relatedRuns: [source],
+    ...position
+  } = f.opened.get(bindingId)!;
+  const image = {
+    runId: source!.runId,
+    requestId: source!.requestId,
+    peerNonce: source!.peerNonce,
+    authSessionId: 'first-login',
+    userId: 'owner',
+    messageId: randomUUID(),
+    blockIndex: 1,
+    attachmentId: 'sha256:' + 'a'.repeat(64),
+    mediaType: 'image/png',
+    bytes: 20,
+    sha256: 'b'.repeat(64),
+    handleSha256: 'd'.repeat(64),
+  };
+  const callId = randomUUID();
+  const userContentSha256 = bodyHash([['image']]);
+  const frame = {
+    ...position,
+    callId,
+    bindingId,
+    images: [image],
+    userContentSha256,
+    workingDirectoryEdits: [] as readonly WorkingDirectoryEdit[],
+    projectedUserContentSha256: userContentSha256,
+  };
+  const prepare = (input = frame, hostGeneration?: string) =>
+    f.runs.handle(
+      input,
+      f.signed(input, 'model-attachment-prepare', hostGeneration),
+    );
+  for (const invalid of [
+    { ...frame, images: [{ ...image, authSessionId: 'second-login' }] },
+    { ...frame, images: [{ ...image, userId: 'different-actor' }] },
+    { ...frame, images: [{ ...image, peerNonce: 'peer-c' }] },
+    { ...frame, images: [{ ...image, requestId: 'different-request' }] },
+    { ...frame, images: [image, { ...image, sha256: 'c'.repeat(64) }] },
+    { ...frame, images: [{ ...image, path: 'synthetic-local-path' }] },
+    { ...frame, projectId: 'untrusted-project' },
+    { ...frame, images: [{ ...image, handleSha256: 'synthetic-raw-handle' }] },
+    { ...frame, userContentSha256: 'synthetic-raw-user-content' },
+    { ...frame, projectedUserContentSha256: '0'.repeat(64) },
+    {
+      ...frame,
+      workingDirectoryEdits: [
+        { index: 2, start: 1, end: 5 },
+        { index: 1, start: 1, end: 5 },
+      ],
+    },
+    {
+      ...frame,
+      workingDirectoryEdits: [
+        { index: 0, start: 1, end: 5, path: '/synthetic/private' },
+      ],
+    },
+  ])
+    await expect(prepare(invalid)).rejects.toMatchObject({ statusCode: 403 });
+  await expect(prepare(frame, randomUUID())).rejects.toMatchObject({
+    statusCode: 403,
+  });
+
+  const token = f.signed(frame, 'model-attachment-prepare');
+  const { expiresAt: attachmentDeadline } = JSON.parse(
+    Buffer.from(token.split('.')[0]!, 'base64url').toString('utf8'),
+  ) as { expiresAt: number };
+  const ack = (await f.runs.handle(frame, token)) as {
+    callId: string;
+    bindingId: string;
+    grant: string;
+  };
+  expect(ack).toMatchObject({ callId, bindingId });
+  const wire = {
+    ...f.attempt(bindingId),
+    routeId: 'messages',
+    destination: attachmentRoutes.messages,
+    call: {
+      ...f.attempt(bindingId).call,
+      id: callId,
+      attachmentGrant: ack.grant,
+    },
+  };
+  const policy = {
+    projectId: 'fixture-project',
+    credentialGeneration: 'configured-generation',
+    requirementId: 'requirement',
+    sessionId: 'session',
+    bindingId,
+    images: [{ bytes: 20, mediaType: 'image/png', sha256: 'b'.repeat(64) }],
+    userContentSha256,
+    workingDirectoryEdits: [],
+    projectedUserContentSha256: userContentSha256,
+    imageHandleDigests: [image.handleSha256],
+  };
+  expect(f.runs.attachmentManifestFor(wire)).toEqual(policy);
+  expect(Object.isFrozen(f.runs.attachmentManifestFor(wire)?.images)).toBe(
+    true,
+  );
+  await expect(prepare()).rejects.toMatchObject({ statusCode: 403 });
+  await expect(
+    prepare({ ...frame, callId: randomUUID() }),
+  ).rejects.toMatchObject({ statusCode: 403 });
+
+  const aborted = new AbortController();
+  aborted.abort();
+  for (const invalid of [
+    { ...wire, call: { ...wire.call, attachmentGrant: undefined } },
+    { ...wire, call: { ...wire.call, attachmentGrant: randomUUID() } },
+    { ...wire, call: { ...wire.call, id: randomUUID() } },
+    { ...wire, call: { ...wire.call, sessionId: 'different-session' } },
+    { ...wire, call: { ...wire.call, purpose: 'session-title' } },
+    { ...wire, call: { ...wire.call, model: 'different-model' } },
+    { ...wire, destination: attachmentRoutes.files },
+    { ...wire, signal: aborted.signal },
+  ]) {
+    expect(f.runs.attachmentManifestFor(invalid)).toBeUndefined();
+    const noWrite = vi.fn(() => 'submitted' as const);
+    await expect(
+      f.runs.authorizeModelWireAttempt(invalid, noWrite),
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(noWrite).not.toHaveBeenCalled();
+  }
+
+  const submit = (deadline: number) => {
+    expect(deadline).toBe(attachmentDeadline);
+    return 'submitted' as const;
+  };
+  await expect(
+    f.runs.authorizeModelFileWireAttempt(
+      {
+        ...wire,
+        routeId: 'files',
+        destination: attachmentRoutes.files,
+        attemptId: randomUUID(),
+      },
+      submit,
+    ),
+  ).resolves.toMatchObject({ outcome: 'submitted' });
+  const submitted = await f.runs.authorizeModelWireAttempt(wire, submit);
+  const close = { ...position, callId, bindingId };
+  await expect(
+    f.runs.handle(close, f.signed(close, 'model-attachment-release')),
+  ).resolves.toEqual({ closed: true });
+  expect(f.runs.attachmentManifestFor(wire)).toBeUndefined();
+  const replacement = { ...frame, callId: randomUUID() };
+  await expect(prepare(replacement)).rejects.toMatchObject({ statusCode: 403 });
+  submitted.accept429();
+  await expect(prepare()).rejects.toMatchObject({ statusCode: 403 });
+  const next = (await prepare(replacement)) as typeof ack;
+  const retry = {
+    ...wire,
+    attemptId: randomUUID(),
+    call: { ...wire.call, id: next.callId, attachmentGrant: next.grant },
+  };
+  expect(f.runs.attachmentManifestFor(retry)).toEqual(policy);
+  f.state.select = async () => f.runs.revoke('first-login');
+  const noWrite = vi.fn(() => 'submitted' as const);
+  await expect(
+    f.runs.authorizeModelWireAttempt(retry, noWrite),
+  ).rejects.toMatchObject({ statusCode: 403 });
+  expect(f.runs.attachmentManifestFor(retry)).toBeUndefined();
+  expect(noWrite).not.toHaveBeenCalled();
+});

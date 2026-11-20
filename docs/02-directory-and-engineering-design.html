@@ -1059,6 +1059,7 @@
   <p>将同步选模临时移到微任务时，正例第二次 HTTP 未到达（实际 1，期望 2）。临时只去掉修订相等条件、保留模型相等条件时，同模型异修订负例终态变成 <code>completed</code>（期望 <code>blocked</code>）。两类故障注入均退出 1。恢复后，<code>pnpm test tests/integration/native-model-selection-boundary.test.ts tests/integration/project-native-paths.test.ts tests/integration/native-queued-recovery.test.ts</code> 通过 3 文件、5 项。探针从合成映射取得原请求修订，生产接口保存、发送前持久快照、首写证明和派生门禁仍按后续方案推进。交付复审首轮发现原负例同时改变模型与修订，追加同模型异修订用例和单条件反例后复审 APPROVE。</p>
 
   <h4 id="t13-saved-session-model-plan-20261120">11.16.35 T13 保存本人会话选模并在发送时生效</h4>
+  <p>选模探针工作树的未提交初稿已完整保存在 <code>d2afb31</code> 并纳入主线历史。实施沿下方已复审的第三版。</p>
   <p>Change / R3，第三版归档基线 <code>cb2eb16</code>，完整领取探针基线 <code>22b7266</code>。依据 §11.16.7、§11.16.17 和 §11.16.34，首个纵向切片通过正式 BFF、隔离受管 PostgreSQL、锁定 Native 和回环 HTTPS 实现保存、读回及实际外发。本机测试用同一项目、同一供应商、同一精确地址的两个模型。多模型开关仅能从程序化测试装配启用，配置文件启动沿用单模型。三层策略、正式界面、固定切点的派生门禁和真实供应商按后续判据推进。</p>
   <ol>
     <li><strong>选项与保存。</strong>测试装配的有效列表是当前 Host 冻结的精确 Provider／Model 集合与 Native 目录的交集。启动前限制当前项目、锁定运行方式和 HTTPS 回环，在默认配置下继续走原路径。沿用受管 BFF 的需求会话访问与原观察登录。新读写入口只允许本人会话，响应为稳定字段及修订。保存前在事务外读取当前 Native 可路由目录，短事务锁当前登录、项目与需求范围和本人会话，确认同代有效列表，复用命令回执做原键与摘要核对，同一次提交更新当前选择。存储引用及修订，禁止存供应商或请求文本。选择读取、命令回读与实际发送分别核对。保存路径无 Native 选模命令、提示词或供应商传输。</li>

@@ -5,8 +5,12 @@ import { constants } from 'node:fs';
 import {
   copyFile,
   lstat,
+  mkdir,
   readFile,
   readdir,
+  rename,
+  rmdir,
+  unlink,
   writeFile,
 } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
@@ -173,6 +177,15 @@ test
     'bad-scope',
     'ack-lost',
     'output-failed',
+    'cold-pending',
+    'cold-rollback',
+    'cold-lost-commit',
+    'cold-restart',
+    'cold-revoked',
+    'cold-unknown',
+    'cold-no-location',
+    'cold-sync-failure',
+    'cold-race',
   ] as const)(
   'a crashed BFF leaves independently verifiable execution evidence (%s)',
   async (mode) => {
@@ -215,6 +228,15 @@ test
     const idleSession = randomUUID();
     const userId = randomUUID();
     const commandId = randomUUID();
+    const takeoverSession = randomUUID();
+    const takeoverId = randomUUID();
+    const pendingTakeover =
+      mode === 'cold-pending' ||
+      mode === 'cold-rollback' ||
+      mode === 'cold-lost-commit' ||
+      mode === 'cold-restart' ||
+      mode === 'cold-revoked' ||
+      mode === 'cold-sync-failure';
     const ticket = () => randomBytes(32).toString('hex');
     const digest = (value: string) =>
       createHash('sha256').update(value).digest('hex');
@@ -279,6 +301,11 @@ test
         );
       }
 
+      if (pendingTakeover)
+        await lab.owner.query(
+          'insert into native_session(id,requirement_id,owner_id) values($1,$2,$3)',
+          [takeoverSession, requirementId, userId],
+        );
       git = await httpsGitFixture(projectId);
       const root = git.root;
       const mirrors = new RepositoryMirrors(root);
@@ -365,6 +392,11 @@ test
           observeGo: true as const,
         }),
         ...(mode === 'ack-lost' && { dropStopAck: true as const }),
+        ...(mode === 'cold-unknown' && { dropStopAck: true as const }),
+        ...(pendingTakeover && {
+          fault: 'hold-takeover' as const,
+          faultCommand: takeoverId,
+        }),
         ...(mode === 'output-failed' && {
           outputFailure: true as const,
           fault: 'hold-armed' as const,
@@ -373,11 +405,53 @@ test
           encoding: 'utf8',
         }).trim(),
       };
-      const start = (startupTicket: string) => {
-        const run = isolatedOwner({ ...boot, ticket: startupTicket });
+      const start = (startupTicket: string, overrides?: Partial<OwnerBoot>) => {
+        const run = isolatedOwner({
+          ...boot,
+          ...overrides,
+          ticket: startupTicket,
+        });
         children.push(run);
         return run;
       };
+      async function replaceOwner(
+        previous: Awaited<ReturnType<typeof owner>>,
+        overrides?: Partial<OwnerBoot>,
+      ) {
+        const nextTicket = ticket();
+        const connection = await lab.owner.connect();
+        try {
+          await connection.query('begin');
+          await connection.query("set local synchronous_commit='on'");
+          expect(
+            (
+              await connection.query(
+                'update rdws_authority.owner set generation=null,proof_digest=null,ticket_digest=$1 where singleton and managed and generation=$2 and proof_digest=$3 and ticket_digest is null',
+                [
+                  digest(nextTicket),
+                  previous.generation,
+                  previous.proof_digest,
+                ],
+              )
+            ).rowCount,
+          ).toBe(1);
+          expect((await connection.query('commit')).command).toBe('COMMIT');
+        } catch (error) {
+          await connection.query('rollback');
+          throw error;
+        } finally {
+          connection.release();
+        }
+        const replacement = start(nextTicket, {
+          fault: undefined,
+          faultCommand: undefined,
+          dropStopAck: undefined,
+          ...overrides,
+        });
+        await replacement.address();
+        expect((await owner()).generation).not.toBe(previous.generation);
+        return replacement;
+      }
       old = start(initialTicket);
       const firstAddress = await old.address();
       const login = await fetch(firstAddress + '/api/auth/sign-in/username', {
@@ -464,7 +538,9 @@ test
         kind: 'execute',
         commandId,
         generation,
-        ...(mode === 'failed' && { exitCode: 7 as const }),
+        ...((mode === 'failed' || mode === 'cold-unknown') && {
+          exitCode: 7 as const,
+        }),
         scope: {
           projectId,
           requirementId,
@@ -563,6 +639,18 @@ test
           await expect(lstat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
           expect(await readFile(sample, 'utf8')).toBe('baseline');
           expect(await intact()).toEqual(before);
+          await replaceOwner(originalOwner);
+          await expect
+            .poll(async () => (await retained()).lease)
+            .toMatchObject({ generation, phase: 'released', run_id: null });
+          expect(
+            (await retained()).receipts.find(
+              ({ command_id }) => command_id === commandId,
+            )?.result,
+          ).toMatchObject({
+            status: 'reserved',
+            coldStop: { outcome: { stop: 'not-started', status: 'aborted' } },
+          });
           return;
         }
         if (mode === 'disconnect-before-go') {
@@ -746,6 +834,39 @@ test
         launcherPid: supervisor?.supervisorPid ?? oldPid,
         runId: binding?.runId ?? expect.any(String),
       });
+      const originalTakeover = {
+        type: 'takeover' as const,
+        commandId: takeoverId,
+      };
+      if (pendingTakeover) {
+        void command(
+          firstAddress,
+          requirementId,
+          takeoverSession,
+          originalTakeover,
+        )
+          .then((response) => response.text())
+          .catch(() => {});
+        await expect
+          .poll(() => old!.reports.some(({ kind }) => kind === 'fault-entered'))
+          .toBe(true);
+        expect((await retained()).lease).toMatchObject({
+          phase: 'draining',
+          run_id: binding?.runId,
+        });
+        expect(process.kill(-pid, 0)).toBe(true);
+      }
+      if (mode === 'cold-unknown') {
+        await writeFile(stopFile!, '', { mode: 0o600, flag: 'wx' });
+        await expect
+          .poll(
+            async () =>
+              (await retained()).receipts.find(
+                ({ command_id }) => command_id === commandId,
+              )?.result?.status,
+          )
+          .toBe('unknown');
+      }
       const persisted = await retained();
       if (binding) {
         const proofFile = join(
@@ -820,7 +941,7 @@ test
           expect((await owner()).generation).toBe(originalOwner.generation);
           return;
         }
-        if (mode === 'supervised') {
+        if (mode === 'supervised' || mode.startsWith('cold-')) {
           expect(old.child.kill('SIGKILL')).toBe(true);
           expect(await old.waitForExit()).toEqual([null, 'SIGKILL']);
         } else if (mode === 'rollback-go' || mode === 'lose-go') {
@@ -854,8 +975,11 @@ test
             supervisorPid: supervisor.supervisorPid,
             outcome: {
               stop: 'confirmed',
-              status: mode === 'failed' ? 'failed' : 'aborted',
-              exitCode: mode === 'failed' ? 7 : null,
+              status:
+                mode === 'failed' || mode === 'cold-unknown'
+                  ? 'failed'
+                  : 'aborted',
+              exitCode: mode === 'failed' || mode === 'cold-unknown' ? 7 : null,
             },
           });
         expect(disappeared(pid)).toBe(true);
@@ -899,9 +1023,406 @@ test
             }),
           ).toBeUndefined();
         }
-        if (mode === 'supervised') {
+        if (mode === 'supervised' || mode.startsWith('cold-')) {
           expect(await retained()).toEqual(persisted);
           expect((await owner()).generation).toBe(originalOwner.generation);
+          const originalRow = persisted.receipts.find(
+            ({ command_id }) => command_id === commandId,
+          )!;
+          const lookup = async (key: string) =>
+            (await retained()).receipts.find(
+              ({ command_id }) => command_id === key,
+            )?.result;
+          if (mode === 'cold-no-location') {
+            const migration = await lab.owner.connect();
+            try {
+              await migration.query('begin');
+              await migration.query(
+                'alter table command_receipt disable trigger rdws_authority_writer',
+              );
+              expect(
+                (
+                  await migration.query(
+                    "update command_receipt set result = result #- '{proof,location}' where actor_id=$1 and command_id=$2 and scope=$3 and operation='write.execute'",
+                    [userId, commandId, 'requirement:' + requirementId],
+                  )
+                ).rowCount,
+              ).toBe(1);
+              await migration.query(
+                'alter table command_receipt enable always trigger rdws_authority_writer',
+              );
+              await migration.query('commit');
+            } catch (error) {
+              await migration.query('rollback');
+              throw error;
+            } finally {
+              migration.release();
+            }
+          }
+          let restore: (() => Promise<void>) | undefined;
+          if (mode === 'cold-pending') {
+            const moved = execution.control + '-original';
+            await rename(execution.control, moved);
+            await mkdir(execution.control, { mode: 0o700 });
+            await copyFile(
+              join(moved, basename(proofFile)),
+              proofFile,
+              constants.COPYFILE_EXCL,
+            );
+            restore = async () => {
+              await unlink(proofFile);
+              await rmdir(execution.control);
+              await rename(moved, execution.control);
+            };
+          } else if (mode === 'cold-revoked') {
+            const moved = proofFile + '.waiting';
+            await rename(proofFile, moved);
+            restore = () => rename(moved, proofFile);
+          }
+          let current: ReturnType<typeof isolatedOwner>;
+          try {
+            current = await replaceOwner(
+              originalOwner,
+              mode === 'cold-rollback'
+                ? { fault: 'rollback-cold', faultCommand: commandId }
+                : mode === 'cold-lost-commit'
+                  ? { fault: 'lose-cold', faultCommand: commandId }
+                  : mode === 'cold-restart'
+                    ? { fault: 'hold-cold', faultCommand: commandId }
+                    : mode === 'cold-sync-failure'
+                      ? { denyProofSync: true }
+                      : mode === 'cold-race'
+                        ? {
+                            holdProofSync: true,
+                            fault: 'lose-cold',
+                            faultCommand: commandId,
+                            holdLogin: authSessionId,
+                          }
+                        : undefined,
+            );
+            if (restore || mode === 'cold-no-location') {
+              await expect
+                .poll(async () =>
+                  /command_receipt[^\n]*->>'runId'/.test(await lab.logs()),
+                )
+                .toBe(true);
+              expect((await retained()).lease).toEqual(persisted.lease);
+              const address = await current.address();
+              const idle = await command(
+                address,
+                idleRequirement,
+                idleSession,
+                { type: 'takeover', commandId: randomUUID() },
+              );
+              expect(idle.status).toBe(200);
+              const { generation: idleGeneration } = await idle.json();
+              expect(
+                (
+                  await command(address, idleRequirement, idleSession, {
+                    type: 'release',
+                    commandId: randomUUID(),
+                    generation: idleGeneration,
+                  })
+                ).status,
+              ).toBe(200);
+              if (mode === 'cold-no-location') {
+                expect(await lookup(commandId)).not.toHaveProperty('coldStop');
+                await current.send({ kind: 'stop' });
+                expect(await current.waitForExit()).toEqual([1, null]);
+                expect((await retained()).lease).toEqual(persisted.lease);
+                return;
+              }
+              if (mode === 'cold-revoked') {
+                const response = await fetch(address + '/api/auth/sign-out', {
+                  method: 'POST',
+                  headers,
+                  body: '{}',
+                });
+                expect(response.status).toBe(200);
+                await response.text();
+                expect(
+                  (
+                    await lab.owner.query(
+                      'select id from auth_session where id=$1',
+                      [authSessionId],
+                    )
+                  ).rowCount,
+                ).toBe(0);
+              }
+            }
+          } finally {
+            await restore?.();
+          }
+
+          if (mode === 'cold-race') {
+            const address = await current.address();
+            await expect
+              .poll(() =>
+                current.reports.some(({ kind }) => kind === 'proof-sync-held'),
+              )
+              .toBe(true);
+            const trying = command(address, requirementId, sessionId, {
+              type: 'takeover',
+              commandId: randomUUID(),
+            });
+            void trying.catch(() => {});
+            try {
+              await expect
+                .poll(() =>
+                  current.reports.some(({ kind }) => kind === 'login-held'),
+                )
+                .toBe(true);
+              await current.send({ kind: 'release-fault' });
+              await expect
+                .poll(
+                  () =>
+                    current.reports.filter(
+                      ({ kind }) => kind === 'proof-sync-completed',
+                    ).length,
+                )
+                .toBeGreaterThanOrEqual(1);
+              expect(
+                current.reports.some(({ kind }) => kind === 'fault-entered'),
+              ).toBe(false);
+              expect((await retained()).lease).toEqual(persisted.lease);
+            } finally {
+              await current.send({ kind: 'release-login' });
+            }
+            const rejected = await trying;
+            expect(rejected.status).toBe(409);
+            await rejected.text();
+          }
+          if (
+            mode === 'cold-rollback' ||
+            mode === 'cold-lost-commit' ||
+            mode === 'cold-race'
+          ) {
+            await expect
+              .poll(() =>
+                current.reports.some(({ kind }) => kind === 'fault-entered'),
+              )
+              .toBe(true);
+            expect((await retained()).lease).toEqual(persisted.lease);
+            if (mode === 'cold-race') {
+              const competing = await command(
+                await current.address(),
+                requirementId,
+                sessionId,
+                { type: 'takeover', commandId: randomUUID() },
+              );
+              expect(competing.status).toBe(409);
+              await competing.text();
+            }
+            await current.send({ kind: 'release-fault' });
+            await expect
+              .poll(() =>
+                current.reports.find(({ kind }) => kind === 'fault-completed'),
+              )
+              .toEqual({
+                kind: 'fault-completed',
+                command: mode === 'cold-rollback' ? 'ROLLBACK' : 'COMMIT',
+              });
+          }
+          if (mode === 'cold-sync-failure') {
+            await expect
+              .poll(() =>
+                current.reports.some(
+                  ({ kind }) => kind === 'proof-sync-denied',
+                ),
+              )
+              .toBe(true);
+            expect((await retained()).lease).toEqual(persisted.lease);
+            expect(await lookup(commandId)).not.toHaveProperty('coldStop');
+            await current.send({ kind: 'release-fault' });
+          }
+          const actualStop = await readSupervisedStop(
+            execution.runtimeRoot,
+            binding,
+          );
+          await expect
+            .poll(() => lookup(commandId))
+            .toEqual({
+              ...originalRow.result,
+              coldStop: {
+                runId: binding.runId,
+                generation,
+                ownerGeneration: originalOwner.generation,
+                outcome: actualStop!.outcome,
+              },
+            });
+          if (mode === 'cold-restart') {
+            await expect
+              .poll(() =>
+                current.reports.some(({ kind }) => kind === 'fault-entered'),
+              )
+              .toBe(true);
+            expect((await retained()).lease).toMatchObject({
+              generation,
+              phase: 'draining',
+              run_id: null,
+            });
+            const beforeResume = await owner();
+            expect(current.child.kill('SIGKILL')).toBe(true);
+            expect(await current.waitForExit()).toEqual([null, 'SIGKILL']);
+            current = await replaceOwner(beforeResume, {
+              fault: 'hold-grant',
+              faultCommand: takeoverId,
+            });
+            await expect
+              .poll(() =>
+                current.reports.some(({ kind }) => kind === 'fault-entered'),
+              )
+              .toBe(true);
+            const held = (await retained()).lease;
+            expect(held).toMatchObject({
+              phase: 'held',
+              native_session_id: takeoverSession,
+              run_id: null,
+            });
+            const issued = await owner();
+            expect(current.child.kill('SIGKILL')).toBe(true);
+            expect(await current.waitForExit()).toEqual([null, 'SIGKILL']);
+            current = await replaceOwner(issued);
+            await expect
+              .poll(async () => (await retained()).lease)
+              .toMatchObject({
+                generation: held.generation,
+                phase: 'released',
+                run_id: null,
+              });
+            const check = await command(
+              await current.address(),
+              requirementId,
+              takeoverSession,
+              originalTakeover,
+            );
+            expect(await check.json()).toMatchObject({
+              state: 'acquired',
+              generation: held.generation,
+            });
+            expect((await retained()).lease.phase).toBe('released');
+            return;
+          }
+          if (mode === 'cold-revoked') {
+            await expect
+              .poll(() => lookup(takeoverId))
+              .toEqual({ state: 'cancelled' });
+            expect((await retained()).lease).toMatchObject({
+              generation,
+              phase: 'released',
+              run_id: null,
+            });
+            return;
+          }
+          const address = await current.address();
+          const publicWriteStatus = async () => {
+            const response = await fetch(
+              `${address}/api/requirements/${requirementId}/write-authority`,
+              { headers, signal: AbortSignal.timeout(2500) },
+            );
+            expect(response.status).toBe(200);
+            return response.json();
+          };
+          if (pendingTakeover) {
+            await expect
+              .poll(() => lookup(takeoverId))
+              .toMatchObject({
+                state: 'acquired',
+                generation: expect.any(String),
+              });
+            const taken = (await retained()).lease;
+            expect(taken).toMatchObject({
+              phase: 'held',
+              native_session_id: takeoverSession,
+              run_id: null,
+            });
+            await expect.poll(publicWriteStatus).toMatchObject({
+              state: 'held',
+              holder: { generation: taken.generation },
+            });
+            const replay = await command(
+              address,
+              requirementId,
+              takeoverSession,
+              originalTakeover,
+            );
+            expect(await replay.json()).toMatchObject({
+              state: 'acquired',
+              generation: taken.generation,
+            });
+          } else {
+            await expect
+              .poll(async () => (await retained()).lease)
+              .toMatchObject({ generation, phase: 'released', run_id: null });
+            await expect
+              .poll(publicWriteStatus)
+              .toMatchObject({ state: 'idle', canTakeover: true });
+            const grant = await command(address, requirementId, sessionId, {
+              type: 'takeover',
+              commandId: randomUUID(),
+            });
+            expect(grant.status).toBe(200);
+            expect(await grant.json()).toMatchObject({ state: 'acquired' });
+          }
+          if (mode !== 'cold-unknown')
+            await writeFile(stopFile!, '', { mode: 0o600, flag: 'wx' });
+          const modern = (await retained()).lease;
+          expect(modern.generation).not.toBe(generation);
+          if (mode === 'supervised') {
+            const confirmed = randomUUID();
+            const repeat = await command(address, requirementId, sessionId, {
+              type: 'takeover',
+              commandId: confirmed,
+            });
+            expect(await repeat.json()).toMatchObject({
+              state: 'acquired',
+              generation: modern.generation,
+            });
+            expect(await lookup(confirmed)).not.toHaveProperty(
+              'ownerGeneration',
+            );
+            const completedProof = await lookup(commandId);
+            await current.send({
+              kind: 'execute',
+              generation,
+              commandId,
+              scope: {
+                projectId,
+                requirementId,
+                sessionId,
+                who: { userId, authSessionId },
+              },
+            });
+            await expect
+              .poll(() =>
+                current.reports.some(({ kind }) => kind === 'execution-ended'),
+              )
+              .toBe(true);
+            expect(await lookup(commandId)).toEqual(completedProof);
+            expect(await readFile(sample, 'utf8')).toBe('baseline|started');
+          }
+          const nextWrite = randomUUID();
+          await current.send({
+            kind: 'execute',
+            generation: modern.generation,
+            commandId: nextWrite,
+            scope: {
+              projectId,
+              requirementId,
+              sessionId: pendingTakeover ? takeoverSession : sessionId,
+              who: { userId, authSessionId },
+            },
+          });
+          await expect
+            .poll(() => lookup(nextWrite), { timeout: 4_000 })
+            .toMatchObject({
+              status: 'finished',
+              result: { status: 'ok', stop: 'confirmed' },
+            });
+          expect(await readFile(sample, 'utf8')).toBe(
+            'baseline|started|started',
+          );
+          expect(await intact()).toEqual(before);
         } else {
           const finalStatus =
             mode === 'rollback-go' || mode === 'lose-go'

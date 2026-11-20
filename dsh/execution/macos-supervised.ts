@@ -1,9 +1,17 @@
-import { fork } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { execFile, fork } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { constants } from 'node:fs';
-import { link, lstat, open, realpath, unlink } from 'node:fs/promises';
+import {
+  link,
+  lstat,
+  open,
+  realpath,
+  unlink,
+  type FileHandle,
+} from 'node:fs/promises';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import type { ExecutionRequest, runMacosWorktree } from './macos.ts';
 
 type Worktree = Awaited<ReturnType<Parameters<typeof runMacosWorktree>[0]>>;
@@ -23,6 +31,13 @@ export type ExecutionProofBinding = {
   actorId: string;
   commandId: string;
   receiptDigest: string;
+};
+export type ExecutionProofLocation = {
+  boot: string;
+  runtimeDevice: string;
+  runtimeInode: string;
+  controlDevice: string;
+  controlInode: string;
 };
 
 type StopOutcome = Pick<Result, 'exitCode' | 'status'> & {
@@ -44,13 +59,17 @@ export type SupervisorCommand =
   | { kind: 'go'; validBefore: number }
   | { kind: 'stop'; outputFailed?: true };
 export type SupervisorEvent =
-  | { kind: 'armed' }
+  | { kind: 'armed'; location: ExecutionProofLocation }
   | { kind: 'output'; event: Output }
   | { kind: 'finished'; result: Result };
 
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const safeId = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const maxRecordBytes = 4096;
+const executeLocal = promisify(execFile);
+const openDirectory = (path: string) =>
+  open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+let boot: Promise<string> | undefined;
 const terminalStatuses = new Set([
   'ok',
   'failed',
@@ -117,14 +136,88 @@ async function controlDirectory(root: string, binding: ExecutionProofBinding) {
 }
 
 async function syncDirectory(path: string) {
-  const file = await open(
-    path,
-    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-  );
+  const file = await openDirectory(path);
   try {
     await file.sync();
   } finally {
     await file.close();
+  }
+}
+
+function bootIdentity() {
+  return (boot ??= executeLocal(
+    '/usr/sbin/sysctl',
+    ['-n', 'kern.bootsessionuuid'],
+    {
+      env: { PATH: '/usr/bin:/bin', LC_ALL: 'C' },
+      encoding: 'utf8',
+      timeout: 1000,
+      maxBuffer: 256,
+    },
+  )
+    .then(({ stdout }) => {
+      const id = stdout.trim().toLowerCase();
+      if (!uuid.test(id))
+        throw new Error('Current execution boot identity is unavailable');
+      return createHash('sha256').update(id).digest('hex');
+    })
+    .catch((error: unknown) => {
+      boot = undefined;
+      throw error;
+    }));
+}
+
+async function proofLocation(
+  root: string,
+  control: string,
+  directory: FileHandle,
+): Promise<ExecutionProofLocation> {
+  const [currentBoot, runtime, resolved, opened] = await Promise.all([
+    bootIdentity(),
+    lstat(root, { bigint: true }),
+    lstat(control, { bigint: true }),
+    directory.stat({ bigint: true }),
+  ]);
+  if (
+    !runtime.isDirectory() ||
+    !resolved.isDirectory() ||
+    !opened.isDirectory() ||
+    runtime.uid !== BigInt(process.getuid!()) ||
+    opened.uid !== runtime.uid ||
+    (runtime.mode & 0o022n) !== 0n ||
+    (opened.mode & 0o022n) !== 0n ||
+    opened.dev !== resolved.dev ||
+    opened.ino !== resolved.ino
+  )
+    throw new Error('Execution proof control identity changed');
+  return {
+    boot: currentBoot,
+    runtimeDevice: String(runtime.dev),
+    runtimeInode: String(runtime.ino),
+    controlDevice: String(opened.dev),
+    controlInode: String(opened.ino),
+  };
+}
+
+function equalsLocation(
+  first: ExecutionProofLocation,
+  second: ExecutionProofLocation,
+) {
+  return (
+    Object.keys(second).length === Object.keys(first).length &&
+    Object.entries(first).every(
+      ([key, value]) => second[key as keyof ExecutionProofLocation] === value,
+    )
+  );
+}
+
+async function noExecutionMarker(control: string) {
+  try {
+    await lstat(join(control, 'isolated-execution'));
+    return false;
+  } catch (error) {
+    if (missing(error)) return true;
+    throw error;
   }
 }
 
@@ -159,10 +252,24 @@ export async function publishArmedProof(
   const control = await controlDirectory(scope.runtimeRoot, binding);
   if (control !== scope.control)
     throw new Error('Mismatched execution control directory');
-  await publish(control, proofPath(control, binding.runId, 'armed'), {
-    binding,
-    supervisorPid: process.pid,
-  });
+  const directory = await openDirectory(control);
+  try {
+    const location = await proofLocation(scope.runtimeRoot, control, directory);
+    await publish(control, proofPath(control, binding.runId, 'armed'), {
+      binding,
+      supervisorPid: process.pid,
+    });
+    if (
+      !equalsLocation(
+        location,
+        await proofLocation(scope.runtimeRoot, control, directory),
+      )
+    )
+      throw new Error('Execution proof control identity changed');
+    return location;
+  } finally {
+    await directory.close();
+  }
 }
 
 export async function publishStopProof(
@@ -178,13 +285,8 @@ export async function publishStopProof(
     result.marker === 'retained'
   )
     throw new Error('Execution stopping could not be confirmed');
-  const marker = await lstat(join(control, 'isolated-execution')).catch(
-    (error: unknown) => {
-      if (!missing(error)) throw error;
-      return undefined;
-    },
-  );
-  if (marker) throw new Error('Execution marker is still occupied');
+  if (!(await noExecutionMarker(control)))
+    throw new Error('Execution marker is still occupied');
   await syncDirectory(control);
   const { status, exitCode, stop } = result;
   await publish(control, proofPath(control, binding.runId, 'stopped'), {
@@ -197,11 +299,25 @@ export async function publishStopProof(
 export async function readSupervisedStop(
   root: string,
   binding: ExecutionProofBinding,
+  location?: ExecutionProofLocation,
 ): Promise<SupervisedStopProof | undefined> {
+  let directory: FileHandle | undefined;
   try {
     const control = await controlDirectory(root, binding);
+    if (location) {
+      directory = await openDirectory(control);
+      if (
+        !equalsLocation(
+          await proofLocation(root, control, directory),
+          location,
+        ) ||
+        !(await noExecutionMarker(control))
+      )
+        return;
+    }
+    const path = proofPath(control, binding.runId, 'stopped');
     const file = await open(
-      proofPath(control, binding.runId, 'stopped'),
+      path,
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
     );
     try {
@@ -244,7 +360,25 @@ export async function readSupervisedStop(
       )
         return;
       await file.sync();
-      await syncDirectory(control);
+      if (directory && location) {
+        await directory.sync();
+        const [opened, current] = await Promise.all([
+          file.stat({ bigint: true }),
+          lstat(path, { bigint: true }),
+        ]);
+        if (
+          !current.isFile() ||
+          opened.dev !== current.dev ||
+          opened.ino !== current.ino ||
+          current.nlink !== 1n ||
+          !equalsLocation(
+            await proofLocation(root, control, directory),
+            location,
+          ) ||
+          !(await noExecutionMarker(control))
+        )
+          return;
+      } else await syncDirectory(control);
       return proof;
     } finally {
       await file.close();
@@ -257,6 +391,8 @@ export async function readSupervisedStop(
     )
       return;
     throw error;
+  } finally {
+    await directory?.close();
   }
 }
 
@@ -268,7 +404,7 @@ export async function runSupervisedMacosWorktree(
   options: {
     signal: AbortSignal;
     onOutput?: (event: Output) => void;
-    arm: () => Promise<void>;
+    arm: (location: ExecutionProofLocation) => Promise<void>;
     authorizeStart: (go: (validBefore: number) => void) => Promise<void>;
   },
 ): Promise<Result> {
@@ -322,7 +458,7 @@ export async function runSupervisedMacosWorktree(
     if (event.kind === 'armed' && !activation) {
       activation = (async () => {
         options.signal.throwIfAborted();
-        await options.arm();
+        await options.arm(event.location);
         options.signal.throwIfAborted();
         await options.authorizeStart((validBefore) =>
           send({ kind: 'go', validBefore }),

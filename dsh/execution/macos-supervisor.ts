@@ -69,12 +69,12 @@ async function execute({
         signal: control.signal,
         onOutput: (event) => send({ kind: 'output', event }),
         async authorizeStart(start) {
-          await publishArmedProof(scope, binding);
+          const location = await publishArmedProof(scope, binding);
           control.signal.throwIfAborted();
           const validBefore = await new Promise<number | undefined>(
             (resolve) => {
               allow = resolve;
-              send({ kind: 'armed' });
+              send({ kind: 'armed', location });
             },
           );
           allow = undefined;

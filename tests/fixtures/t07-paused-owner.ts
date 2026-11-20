@@ -1,5 +1,6 @@
 import childProcesses from 'node:child_process';
 import { once } from 'node:events';
+import files from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { buildApp } from '@rdws/server';
 import { Pool, type PoolClient } from 'pg';
@@ -14,10 +15,23 @@ export type OwnerBoot = {
   ticket: string;
   gitPath: string;
   supervisedExecution?: true;
-  fault?: 'hold-armed' | 'rollback-go' | 'lose-go' | 'disconnect-before-go';
+  fault?:
+    | 'hold-armed'
+    | 'rollback-go'
+    | 'lose-go'
+    | 'disconnect-before-go'
+    | 'hold-takeover'
+    | 'hold-grant'
+    | 'hold-cold'
+    | 'rollback-cold'
+    | 'lose-cold';
+  faultCommand?: string;
   observeGo?: true;
   dropStopAck?: true;
   outputFailure?: true;
+  denyProofSync?: true;
+  holdProofSync?: true;
+  holdLogin?: string;
 };
 
 export type OwnerCommand =
@@ -28,7 +42,7 @@ export type OwnerCommand =
       commandId: string;
       exitCode?: 7;
     }
-  | { kind: 'stop' | 'release-fault' };
+  | { kind: 'stop' | 'release-fault' | 'release-login' };
 
 export type OwnerReport =
   | { kind: 'listening'; address: string }
@@ -43,7 +57,11 @@ export type OwnerReport =
         | 'stopped'
         | 'fault-entered'
         | 'backend-disconnected'
-        | 'stop-ack-dropped';
+        | 'stop-ack-dropped'
+        | 'proof-sync-denied'
+        | 'proof-sync-held'
+        | 'proof-sync-completed'
+        | 'login-held';
     };
 
 async function run() {
@@ -98,18 +116,59 @@ async function run() {
   }
   let watchedCommand: string | undefined;
   let releaseFault = () => {};
+  let releaseLogin = () => {};
+  let loginHeld = false;
+  let fixtureStopping = false;
+  if (boot.denyProofSync || boot.holdProofSync) {
+    let enabled = false;
+    let releaseProof = () => {};
+    releaseFault = () => {
+      enabled = true;
+      releaseProof();
+    };
+    const open = files.open;
+    files.open = (async (...args: unknown[]) => {
+      const file = (await Reflect.apply(open, files, args)) as Awaited<
+        ReturnType<typeof open>
+      >;
+      if (typeof args[0] === 'string' && args[0].endsWith('.stopped.json')) {
+        const sync = file.sync;
+        file.sync = async () => {
+          if (!enabled) {
+            if (boot.denyProofSync) {
+              send({ kind: 'proof-sync-denied' });
+              throw new Error('Synthetic independent proof fsync failure');
+            }
+            const gate = new Promise<void>((resolve) => {
+              releaseProof = resolve;
+            });
+            send({ kind: 'proof-sync-held' });
+            await gate;
+          }
+          await sync.call(file);
+          send({ kind: 'proof-sync-completed' });
+        };
+      }
+      return file;
+    }) as typeof open;
+    syncBuiltinESMExports();
+  }
   let faultFinished = false;
   let armedCommitted = false;
   if (boot.fault) {
     const connect = Pool.prototype.connect;
     Pool.prototype.connect = function (this: Pool, ...args: unknown[]) {
       const opened = Reflect.apply(connect, this, args);
-      if (args.length || !watchedCommand || faultFinished) return opened;
+      const faultCommand = boot.faultCommand ?? watchedCommand;
+      if (args.length || !faultCommand || faultFinished || fixtureStopping)
+        return opened;
       return opened.then((client: PoolClient) => {
         const query = client.query;
         let armed = false;
         let readsExecution = false;
         let writesExecution = false;
+        let writesCold = false;
+        let writesTakeover = false;
         client.query = ((...params: unknown[]) => {
           const input = params[0] as
             string | { text: string; values?: unknown[] };
@@ -119,13 +178,44 @@ async function run() {
             : typeof input === 'string'
               ? undefined
               : input.values;
-          if (values?.includes(watchedCommand)) {
+          if (
+            !fixtureStopping &&
+            !loginHeld &&
+            boot.holdLogin &&
+            values?.includes(boot.holdLogin) &&
+            sql.includes('from "auth_session"') &&
+            sql.endsWith('for share')
+          ) {
+            loginHeld = true;
+            const pause = new Promise<void>((resolve) => {
+              releaseLogin = resolve;
+            });
+            return Reflect.apply(query, client, params).then(
+              async (result: unknown) => {
+                send({ kind: 'login-held' });
+                await pause;
+                return result;
+              },
+            );
+          }
+          if (values?.includes(faultCommand)) {
             if (sql.startsWith('update "command_receipt"')) {
               writesExecution = true;
               armed = values.some(
                 (value) =>
                   typeof value === 'string' &&
                   value.includes('"stage":"armed"'),
+              );
+              writesCold = values.some(
+                (value) =>
+                  typeof value === 'string' && value.includes('"coldStop":'),
+              );
+              const takeoverState =
+                boot.fault === 'hold-grant' ? 'acquired' : 'pending';
+              writesTakeover = values.some(
+                (value) =>
+                  typeof value === 'string' &&
+                  value.includes(`"state":"${takeoverState}"`),
               );
             }
             if (
@@ -170,19 +260,31 @@ async function run() {
                 return result;
               },
             );
+          const hold =
+            boot.fault === 'hold-armed' ||
+            boot.fault === 'hold-takeover' ||
+            boot.fault === 'hold-grant' ||
+            boot.fault === 'hold-cold';
+          const watched =
+            boot.fault === 'hold-armed'
+              ? armed
+              : boot.fault === 'hold-takeover' || boot.fault === 'hold-grant'
+                ? writesTakeover
+                : boot.fault?.endsWith('-cold')
+                  ? writesCold
+                  : readsExecution && !writesExecution;
           if (
             sql === 'commit' &&
             boot.fault !== 'disconnect-before-go' &&
+            !fixtureStopping &&
             !faultFinished &&
-            (boot.fault === 'hold-armed'
-              ? armed
-              : readsExecution && !writesExecution)
+            watched
           ) {
             faultFinished = true;
             const pause = new Promise<void>((resolve) => {
               releaseFault = resolve;
             });
-            if (boot.fault === 'hold-armed')
+            if (hold)
               return Reflect.apply(query, client, params).then(
                 async (result: unknown) => {
                   send({ kind: 'fault-entered' });
@@ -195,7 +297,9 @@ async function run() {
               const result = (await Reflect.apply(
                 query,
                 client,
-                boot.fault === 'rollback-go' ? ['rollback'] : params,
+                boot.fault === 'rollback-go' || boot.fault === 'rollback-cold'
+                  ? ['rollback']
+                  : params,
               )) as { command: string };
               send({ kind: 'fault-completed', command: result.command });
               throw new Error('Synthetic execution commit reply lost');
@@ -222,7 +326,9 @@ async function run() {
   });
   let stopping: Promise<unknown> | undefined;
   function stop() {
+    fixtureStopping = true;
     releaseFault();
+    releaseLogin();
     return (stopping ??= app
       .stopRuntime()
       .then(
@@ -259,6 +365,7 @@ async function run() {
   process.on('message', (command: OwnerCommand) => {
     if (command.kind === 'stop') return void stop();
     if (command.kind === 'release-fault') return releaseFault();
+    if (command.kind === 'release-login') return releaseLogin();
     if (command.kind !== 'execute' || stopping || launched) return;
     launched = true;
     watchedCommand = command.commandId;
@@ -294,8 +401,14 @@ async function run() {
           : undefined,
       )
       .then(
-        () => send({ kind: 'execution-ended' }),
-        () => send({ kind: 'failed' }),
+        () => {
+          launched = false;
+          send({ kind: 'execution-ended' });
+        },
+        () => {
+          launched = false;
+          send({ kind: 'failed' });
+        },
       );
   });
   send({ kind: 'listening', address });

@@ -1824,6 +1824,21 @@
   <p>缺可验证证明或独立磁盘正证对应的监督者确认未达时，热路径保持 PostgreSQL 原占位、未知回执和所有者。错旧代、错命令及复制到另一运行的终态均不能用于读取。Seatbelt 执行体无法写入控制目录。定点与邻域命令 <code>pnpm test tests/integration/t07-owner-crash.test.ts tests/integration/write-handoff.test.ts tests/integration/local-execution.test.ts</code> 通过 3 文件、28 项。冷端消费耐久证明、独立验读刷盘出错以及旧请求接续继续按下一项验证。</p>
   <p>隔离库及运行根下 <code>pnpm test</code> 返回 0，58 文件、357 项通过、1 项平台条件跳过。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code>、<code>pnpm validate:baseline</code> 和暂存检查均通过，构建提示既有主包体积。受管监督协议本项没有页面改动，浏览器继续使用 §11.20.21 的受管编队证据。</p>
 
+  <h4 id="t07-cold-stop-recovery-plan-20261121">11.20.23 T07 接替实例消费停稳证明</h4>
+  <p>Change / R3，基线 <code>6f447c3</code>。仅在现有程序化受管 paused 装配中，让已经按既有授权流程接替数据库 owner 的 BFF 结算确切旧执行、续做原待接手及退休确定无运行的冷持有。保留 §11.20.18 无版本旧执行的只读反例及正常关停检查。核验运行在原受管主机，同 UID 的受信运行维护进程在核验期间保持运行根及控制目录稳定，目录维护在停机后执行。受限工具无法更换这些目录。用原 BFF、有真执行和 PostgreSQL 原回执的替代实例验证，无 Native 工具、真实供应商、部署、自动 owner 换票及既存未知记录的无依据清理。</p>
+  <ol>
+    <li><strong>发现及验证。</strong>owner 确认后按需求有界、单飞核验。原事务同写的租约提供会话与登录，以同一写代、runId、需求作用域和账号定位唯一 <code>write.execute</code> 回执。核对 v1 证明绑定、实际 commandId、回执已有摘要和原 owner generation；保持输入原文缺省和不重跑，冷端不凭不完整输入重算执行摘要。新增 armed 元数据记录签发时的冻结仓库已验证、真实运行根和需求控制目录的设备与 inode 及本机启动代，从固定原路径按同设备及目录身份做 no-follow 读／同一验证后的目录描述符刷盘及活动标记前后查证。范围依赖已具名的同机同本地运行根、受信同 UID，隔离工作树不能改动控制目录。当前本地已持有和同 owner 新执行跳过。本切片只消费持久 armed 及同 run 的耐久终态，已 armed 未发 GO 可凭实际未启动终态结算；未经 armed 的预留或只看到空目录则仍未知，防止迟到的旧监督者登记。证明错、缺失、来源设备、刷盘异常、活动标记仍存在和旧协议均维持原占位，不向记录 PID 发信号。</li>
+    <li><strong>精确补结算。</strong>需求级恢复栅栏盖住精确清 runId 及原接手接续，读和兄弟需求保持原权限。以 PostgreSQL 同需求序列锁核对前一轮结果。只在需求与租约锁内仍同一原代/runId、原回执及绑定完整，且已隔离旧 owner 后结算，物理证据的取得在锁外。对原 reserved 或热态已持久 unknown 的回执，在同一原 JSON 追加一次冷停稳标记，保留之前的状态、异常结果及确认是否未知，不把旧发送／启动或客户端失答改称成功。精确清 runId，有待接手保留引用及 <code>draining</code>，否则退休为 <code>released</code>。实际提交或回滚失答经独立 READ COMMITTED 事务在原需求和租约锁后重读原键、冷标记、租约和 pending 引用。确认仍在原态才允许重新核验，已提交不再推进原执行，已换代不回改，空读不冒称回滚。证明继续留在原目录。</li>
+    <li><strong>原接手、空持有与关停。</strong>从旧租约待接手引用和带确切旧代及记录时 owner 代的 <code>write.takeover</code> pending 回执重建同一命令。旧运行占位可信消除后，沿已有第二事务核对现在的原登录、角色、本人会话及最新上下文，授予或取消原命令。同旧代无 runId 且 pending 时也按同一绑定恢复，包括停稳结算与新代事务间再崩溃。新 <code>write.takeover</code> 实际授予新代时同一事务保存私有 owner 代，现行 <code>write.acquire</code> 保留已有 owner 代。空持有按原确切写代、账号、登录、本人会话及规范摘要定位真实授予来源；同代确认回执没有新来源，不推断历史字段。确认旧 owner 且无运行时只退休旧行，已授予原终态可读，不再次发代。启动核验与后续重查加入受管 operations，先停派发和定时器并等待在途核验；正常交还 owner 前扫持久引用、运行号和未确认冷持有。有界分批，单条证明错误不能饿死另一个需求。</li>
+    <li><strong>定点与回退。</strong>沿真旧 BFF 和隔离 T05 工作树取得替代实例仍不能消费同一已停稳证明的红灯。验证真实监督工作跨 SIGKILL，实际有 pending 的接手自动同键完成、新会话真实写、旧键不重跑。覆盖已 armed 未发 GO、热 unknown 保留后冷补停稳、盘证暂缺恢复后无 HTTP 仍自动完成、证据复制／错仓／同路径不同目录／独立刷盘失败、实际冷结算 COMMIT／ROLLBACK 丢答、停稳结算后接手前再崩溃、已授予未确认的空持有与同 owner 活持有、原申请人在冷接续前失权、独立需求不受影响、旧协议与正常关闭互斥。回退须明确没有未结引用及运行，不以替代实例正常启动或 PID 检查代替。运行隔离 PG、真实工作树与现有受限进程的定点、邻域、独立评审、整仓及静态基线。</li>
+  </ol>
+
+  <h5 id="t07-cold-stop-recovery-evidence-20261121">接替实例的精确补结算</h5>
+  <p>方案和交付均经双面全新上下文独立复审。改前 <code>pnpm test tests/integration/t07-owner-crash.test.ts -t '\(supervised\)'</code> 退出 1，耐久停稳证明已经实际发布，获准替代实例仍从 PostgreSQL 读到旧 <code>held</code> 和原 runId。改后真实替代 BFF 追加同一原回执的冷停稳信息，保留原授权确认状态，在确切作用域清原运行。原角色有效时 pending 接手自动续作，状态读回确认新代后实际写入；原执行与原接手键复查不重跑。</p>
+  <p>真实 SIGKILL 覆盖有执行、已 armed 未发 GO、冷结算提交后未续原接手、续接手已获新代但未确认。本机监督者退出后归属和实际终态由独立进程及原文件复核。原待接手损失登录则结算为取消。实际冷结算 COMMIT 和 ROLLBACK 失答以原锁复判。旧文件可见但验读刷盘失败时保持只读，恢复后无需新请求自动推进。将相同正文复制到同路径的其他目录身份时仍拒绝，恢复原受管目录后自动续作。缺新增目录元数据的历史 armed 不清占位，原未知回执冷补时保留原状态及真正非零退出。</p>
+  <p>受控并发用例在原证明读回和合格新接手锁定登录之间设真实 PostgreSQL／文件停点。旧执行仍占用时新接手被拒；冷结算失答期间竞争请求也被拒。只有公开状态读到空闲或确切已确认写代后才重新写入。独立需求仍可申请和释放。此项未接正式工具或真实供应商，冷核验沿 §11.20.23 的同主机及稳定控制目录边界。</p>
+  <p>定点邻域 <code>pnpm test tests/integration/t07-owner-crash.test.ts tests/integration/write-handoff.test.ts tests/integration/local-execution.test.ts</code> 通过 3 文件、37 项。隔离运行根中 <code>pnpm test</code> 返回 0，58 文件、366 项通过、1 项平台条件跳过。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code>、<code>pnpm validate:baseline</code>、暂存检查均通过，仍有既有构建主包提示。此项不涉及界面改动。</p>
+
   <h3 id="t11-maintenance-acceptance-20261119">11.21 T11 已确认的导入与人员维护</h3>
   <p>2026-11-19 用户确认需求批量导入采用同页的上传、预览、修正与整批提交。上传后动态显示解析和校验进度，下方逐条呈现需求明细、状态与可定位的问题。用户可在同页修正并重新校验。预览和校验阶段不写业务数据。全部通过后由用户显式整批提交入库，提交结果继续在同页逐条呈现。</p>
   <p>参与者和开发负责人维护按当前项目角色授权。移除参与者或更换负责人时，相关未完成子任务须显式交给当前具备资格的接手人，并保留原分派记录。验收覆盖无资格接手、已有分派记录保留，以及原有阶段与任务按钮权限。</p>

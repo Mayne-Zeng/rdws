@@ -80,6 +80,11 @@ export class DemandWorktrees {
     private readonly mirrors: RepositoryMirrors,
   ) {}
 
+  async executionRoot() {
+    await safeDirectory(this.root, []);
+    return realpath(this.root);
+  }
+
   private async paths(
     projectId: string,
     id: string,
@@ -127,8 +132,7 @@ export class DemandWorktrees {
       };
     });
     if (create) await mkdir(this.root, { recursive: true, mode: 0o700 });
-    await safeDirectory(this.root, []);
-    const root = await realpath(this.root);
+    const root = await this.executionRoot();
     const parent = await safeDirectory(
       root,
       ['projects', projectId, 'demands'],

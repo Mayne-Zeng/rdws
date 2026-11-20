@@ -274,7 +274,7 @@ export function buildApp(options: {
         throw new Error('Mediated Native database ownership was not confirmed');
       if (managedWork && closing)
         throw new Error('Write handoff closed during startup');
-      if (isolatedWrite && prepared && authority)
+      if (isolatedWrite && prepared && authority) {
         ownedWrite = createOwnedWriteHandoff(
           database,
           authority,
@@ -284,6 +284,8 @@ export function buildApp(options: {
           prepared.writeLoginClosed,
           isolatedWrite.supervisedExecution === true,
         );
+        ownedWrite.startStopRecovery();
+      }
     } catch (error) {
       if (managedWork) {
         try {

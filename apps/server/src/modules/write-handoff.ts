@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import {
   acquireAuthority,
@@ -9,8 +9,11 @@ import {
 } from '@rdws/db';
 import { runMacosWorktree, type ExecutionRequest } from '@rdws/dsh/execution';
 import {
+  readSupervisedStop,
   runSupervisedMacosWorktree,
   type ExecutionProofBinding,
+  type ExecutionProofLocation,
+  type SupervisedStopProof,
 } from '@rdws/dsh/execution/supervised';
 import type { DemandWorktrees } from '@rdws/orchestrator';
 import type {
@@ -45,10 +48,18 @@ type RunResult = Awaited<ReturnType<typeof runMacosWorktree>>;
 type ExecutionProof = {
   stage: 'reserved' | 'armed';
   binding: ExecutionProofBinding;
+  location?: ExecutionProofLocation;
 };
-type ExecutionReceipt =
+type ColdStop = {
+  runId: string;
+  generation: string;
+  ownerGeneration: string;
+  outcome: SupervisedStopProof['outcome'];
+};
+type ExecutionReceipt = (
   | { status: 'reserved'; runId: string; proof?: ExecutionProof }
-  | CompletedExecution;
+  | CompletedExecution
+) & { coldStop?: ColdStop };
 type CompletedExecution = {
   status: 'finished' | 'unknown';
   runId: string;
@@ -205,6 +216,7 @@ export function createOwnedWriteHandoff(
   const fences = new Set<symbol>();
   const releaseFences = new Map<string, PendingRelease>();
   const takeovers = new Map<string, Takeover>();
+  const coldFences = new Set<string>();
   const pendingCalls = new Set<string>();
   type AuthorityChange = {
     phase: 'changing' | 'unknown' | 'committed';
@@ -215,6 +227,17 @@ export function createOwnedWriteHandoff(
   const authorityChanges = new Map<string, AuthorityChange>();
   const operations = new Set<Promise<unknown>>();
   let stopping = false;
+  type ColdTransition = {
+    old: Lease;
+    result?: {
+      receipt: typeof schema.commandReceipt.$inferSelect;
+      stop: ColdStop;
+    };
+  };
+  const uncertainCold = new Map<string, ColdTransition>();
+  let recoveryTimer: NodeJS.Timeout | undefined;
+  let recoveryWork: Promise<void> | undefined;
+  let recoveryCursor: string | undefined;
 
   async function transaction<T>(
     work: (
@@ -222,6 +245,7 @@ export function createOwnedWriteHandoff(
       deadline: number,
       confirmConnection: () => void,
     ) => Promise<T>,
+    readCommitted = false,
   ) {
     const connection = await pool.connect();
     const deadline = Date.now() + 1800;
@@ -239,7 +263,9 @@ export function createOwnedWriteHandoff(
       return connection.query(config);
     };
     try {
-      await query('begin');
+      await query(
+        readCommitted ? 'begin isolation level read committed' : 'begin',
+      );
       await query(
         "set local synchronous_commit='on'; set local transaction_timeout='2400ms'; set local lock_timeout='650ms'; set local statement_timeout='950ms'",
       );
@@ -294,7 +320,8 @@ export function createOwnedWriteHandoff(
     return (
       fences.size > 0 ||
       releaseFences.has(requirementId) ||
-      takeovers.has(requirementId)
+      takeovers.has(requirementId) ||
+      coldFences.has(requirementId)
     );
   }
 
@@ -773,6 +800,7 @@ export function createOwnedWriteHandoff(
       stopping ||
       fences.size ||
       releaseFences.has(scope.requirementId) ||
+      coldFences.has(scope.requirementId) ||
       takeovers.get(scope.requirementId) !== request ||
       Math.min(expiresAt, deadline) <= Date.now()
     )
@@ -805,10 +833,18 @@ export function createOwnedWriteHandoff(
       state: 'acquired',
       generation: grant.generation,
     } as const;
-    await finish(tx, takeoverKey(scope, commandId), outcome);
+    await finish(tx, takeoverKey(scope, commandId), {
+      ...outcome,
+      ownerGeneration: authority,
+    });
     if (request.phase === 'initial') request.assertCurrent();
     requireLiveLogin(scope);
-    if (stopping || fences.size || Math.min(expiresAt, deadline) <= Date.now())
+    if (
+      stopping ||
+      fences.size ||
+      coldFences.has(scope.requirementId) ||
+      Math.min(expiresAt, deadline) <= Date.now()
+    )
       businessError(409, '写入授权正在变更或已到期');
     request.proposed = grant;
     propose(scope, grant, commandId);
@@ -834,6 +870,7 @@ export function createOwnedWriteHandoff(
         stopping ||
         fences.size ||
         releaseFences.has(scope.requirementId) ||
+        coldFences.has(scope.requirementId) ||
         takeovers.get(scope.requirementId) !== request ||
         Math.min(deadline, snapshot.validBefore) <= Date.now()
       )
@@ -890,6 +927,7 @@ export function createOwnedWriteHandoff(
       await finish(tx, takeoverKey(scope, commandId), {
         ...outcome,
         previousGeneration,
+        previousOwnerGeneration: authority,
       });
       request.assertCurrent();
       requireLiveLogin(scope);
@@ -1097,6 +1135,8 @@ export function createOwnedWriteHandoff(
       businessError(409, '原接手状态尚待确认');
     }
     if (prior && prior.state !== 'pending') return prior;
+    if (supervisedExecution && prior?.state === 'pending')
+      businessError(409, '原接手状态尚待确认');
     allowed(validBefore, scope);
     if (prior?.state === 'pending' && !matchesTakeover(old, request))
       businessError(409, '原接手状态尚待确认');
@@ -1123,6 +1163,367 @@ export function createOwnedWriteHandoff(
       }
     }
     return outcome;
+  }
+
+  function leaseScope(row: Lease): Scope {
+    return {
+      projectId: row.projectId,
+      requirementId: row.requirementId,
+      sessionId: row.nativeSessionId,
+      who: { userId: row.ownerId, authSessionId: row.authSessionId },
+    };
+  }
+
+  function exactColdLease(
+    row: Lease | undefined,
+    old: Lease,
+    runId = old.runId,
+    phase = old.phase,
+  ) {
+    return (
+      sameHolder(row, leaseScope(old), old.generation) &&
+      row.requirementId === old.requirementId &&
+      row.runId === runId &&
+      row.phase === phase &&
+      row.contextVersion === old.contextVersion &&
+      row.expiresAt.getTime() === old.expiresAt.getTime() &&
+      digestOf(row.takeover ?? null) === digestOf(old.takeover ?? null)
+    );
+  }
+
+  const ownerGenerationPattern =
+    /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+  function previousOwner(value: unknown): value is string {
+    return (
+      typeof value === 'string' &&
+      ownerGenerationPattern.test(value) &&
+      value !== authority
+    );
+  }
+
+  async function coldGrant(tx: Queries, old: Lease) {
+    const table = schema.commandReceipt;
+    const rows = await tx
+      .select()
+      .from(table)
+      .where(
+        and(
+          eq(table.actorId, old.ownerId),
+          eq(table.scope, 'requirement:' + old.requirementId),
+          eq(table.digest, digestOf(leaseScope(old))),
+          sql`${table.operation} in ('write.acquire','write.takeover')`,
+          sql`${table.result}->>'generation' = ${old.generation} and ${table.result}->>'ownerGeneration' is not null`,
+        ),
+      )
+      .limit(2);
+    const grant = rows[0]?.result as
+      { ownerGeneration?: unknown; state?: unknown } | undefined;
+    if (
+      rows.length === 1 &&
+      previousOwner(grant?.ownerGeneration) &&
+      (rows[0]?.operation === 'write.acquire' || grant.state === 'acquired')
+    )
+      return grant.ownerGeneration;
+  }
+
+  async function executionBeforeCold(old: Lease) {
+    const table = schema.commandReceipt;
+    const rows = await db
+      .select()
+      .from(table)
+      .where(
+        and(
+          eq(table.actorId, old.ownerId),
+          eq(table.scope, 'requirement:' + old.requirementId),
+          eq(table.operation, 'write.execute'),
+          sql`${table.result}->>'runId' = ${old.runId}`,
+        ),
+      )
+      .limit(2);
+    if (rows.length !== 1) return;
+    const receipt = rows[0]!;
+    const prior = receipt.result as ExecutionReceipt | undefined;
+    const proof = prior?.proof;
+    const binding = proof?.binding;
+    if (
+      (prior?.status !== 'reserved' && prior?.status !== 'unknown') ||
+      prior.coldStop ||
+      proof?.stage !== 'armed' ||
+      !proof.location ||
+      !binding ||
+      binding.version !== 1 ||
+      binding.runId !== old.runId ||
+      binding.generation !== old.generation ||
+      !previousOwner(binding.ownerGeneration) ||
+      binding.projectId !== old.projectId ||
+      binding.requirementId !== old.requirementId ||
+      binding.actorId !== old.ownerId ||
+      binding.commandId !== receipt.commandId ||
+      binding.receiptDigest !== receipt.digest
+    )
+      return;
+    const [plan] = await db
+      .select({ repositories: schema.requirementWorktreePlan.repositories })
+      .from(schema.requirementWorktreePlan)
+      .where(
+        eq(schema.requirementWorktreePlan.requirementId, old.requirementId),
+      );
+    if (
+      !plan?.repositories.some(
+        ({ repositoryId }) => repositoryId === binding.repositoryId,
+      )
+    )
+      return;
+    const proofResult = await readSupervisedStop(
+      await worktrees.executionRoot(),
+      binding,
+      proof.location,
+    );
+    if (!proofResult) return;
+    const stop: ColdStop = {
+      runId: binding.runId,
+      generation: old.generation,
+      ownerGeneration: binding.ownerGeneration,
+      outcome: proofResult.outcome,
+    };
+    return { receipt, stop };
+  }
+
+  async function settleCold({ old, result }: ColdTransition) {
+    return transaction(async (tx) => {
+      await lockRequirement(tx, leaseScope(old));
+      const row = await lockedLease(tx, old.requirementId);
+      if (
+        stopping ||
+        !row ||
+        !exactColdLease(row, old) ||
+        holdings.has(old.requirementId) ||
+        takeovers.has(old.requirementId)
+      )
+        return false;
+      if (result) {
+        const { receipt, stop } = result;
+        if ((await coldGrant(tx, old)) !== stop.ownerGeneration) return false;
+        const exact = await readReceipt(tx, receipt);
+        if (!exact || digestOf(exact.result) !== digestOf(receipt.result))
+          return false;
+        const repositoryId = (exact.result as ExecutionReceipt).proof?.binding
+          .repositoryId;
+        const [plan] = await tx
+          .select({ repositories: schema.requirementWorktreePlan.repositories })
+          .from(schema.requirementWorktreePlan)
+          .where(
+            eq(schema.requirementWorktreePlan.requirementId, old.requirementId),
+          );
+        if (
+          !repositoryId ||
+          !plan?.repositories.some(
+            (repository) => repository.repositoryId === repositoryId,
+          )
+        )
+          return false;
+        await finish(tx, receipt, {
+          ...(receipt.result as ExecutionReceipt),
+          coldStop: stop,
+        });
+      } else if (
+        old.runId ||
+        old.takeover ||
+        old.phase !== 'held' ||
+        !(await coldGrant(tx, old))
+      )
+        return false;
+      await tx
+        .update(leases)
+        .set({
+          runId: null,
+          phase: row.takeover ? 'draining' : 'released',
+          updatedAt: new Date(),
+        })
+        .where(eq(leases.requirementId, old.requirementId));
+      return true;
+    }, true);
+  }
+
+  async function verifyCold({ old, result }: ColdTransition) {
+    return transaction(async (tx) => {
+      await lockRequirement(tx, leaseScope(old));
+      const row = await lockedLease(tx, old.requirementId);
+      const original = exactColdLease(row, old);
+      const settled = exactColdLease(
+        row,
+        old,
+        null,
+        old.takeover ? 'draining' : 'released',
+      );
+      if (result) {
+        const receipt = await readReceipt(tx, result.receipt);
+        if (!receipt) return;
+        const saved = receipt.result as ExecutionReceipt;
+        if (
+          digestOf(saved) ===
+          digestOf({
+            ...(result.receipt.result as ExecutionReceipt),
+            coldStop: result.stop,
+          })
+        ) {
+          if (settled) return 'committed' as const;
+          if (row && row.generation !== old.generation)
+            return 'superseded' as const;
+        }
+        if (original && digestOf(saved) === digestOf(result.receipt.result))
+          return 'original' as const;
+      } else if (await coldGrant(tx, old)) {
+        if (settled) return 'committed' as const;
+        if (original) return 'original' as const;
+      }
+    }, true);
+  }
+
+  async function adoptColdTakeover(old: Lease) {
+    if (
+      !old.takeover ||
+      old.runId ||
+      old.phase !== 'draining' ||
+      stopping ||
+      takeovers.has(old.requirementId)
+    )
+      return;
+    const { userId, authSessionId, sessionId, commandId } = old.takeover;
+    const scope: Scope = {
+      projectId: old.projectId,
+      requirementId: old.requirementId,
+      sessionId,
+      who: { userId, authSessionId },
+    };
+    const request: Takeover = {
+      scope,
+      commandId,
+      previousGeneration: old.generation,
+      assertCurrent: () => {},
+      phase: 'draining',
+      failures: 0,
+    };
+    const valid = await transaction(async (tx) => {
+      await lockRequirement(tx, scope);
+      const lease = await lockedLease(tx, scope.requirementId);
+      if (!exactColdLease(lease, old) || !matchesTakeover(lease, request))
+        return false;
+      const receipt = await readReceipt(tx, takeoverKey(scope, commandId));
+      const saved = receipt?.result as
+        | {
+            state?: unknown;
+            previousGeneration?: unknown;
+            previousOwnerGeneration?: unknown;
+          }
+        | undefined;
+      return (
+        saved?.state === 'pending' &&
+        saved.previousGeneration === old.generation &&
+        previousOwner(saved.previousOwnerGeneration) &&
+        (await coldGrant(tx, old)) === saved.previousOwnerGeneration
+      );
+    }, true);
+    if (valid && !stopping && !takeovers.has(old.requirementId)) {
+      takeovers.set(old.requirementId, request);
+      return request;
+    }
+  }
+
+  async function finishColdTransition(
+    transition: ColdTransition,
+    settled: boolean,
+  ) {
+    const { old } = transition;
+    const request =
+      settled && old.takeover
+        ? await adoptColdTakeover({ ...old, runId: null, phase: 'draining' })
+        : undefined;
+    uncertainCold.delete(old.requirementId);
+    coldFences.delete(old.requirementId);
+    if (request) void reconcileTakeover(request);
+  }
+
+  function canBeginCold(requirementId: string) {
+    return (
+      !stopping &&
+      !holdings.has(requirementId) &&
+      !takeovers.has(requirementId) &&
+      !coldFences.has(requirementId)
+    );
+  }
+
+  async function recoverColdRow(old: Lease) {
+    if (!canBeginCold(old.requirementId)) return;
+    if (!old.runId && old.takeover) {
+      const request = await adoptColdTakeover(old);
+      if (request) void reconcileTakeover(request);
+      return;
+    }
+    if (!old.runId && old.phase !== 'held') return;
+    const result = old.runId ? await executionBeforeCold(old) : undefined;
+    if (!canBeginCold(old.requirementId) || (old.runId && !result)) return;
+    const transition = { old, result };
+    coldFences.add(old.requirementId);
+    try {
+      await finishColdTransition(transition, await settleCold(transition));
+    } catch (error) {
+      if (error instanceof UnknownWriteCommit)
+        uncertainCold.set(old.requirementId, transition);
+      else coldFences.delete(old.requirementId);
+    }
+  }
+
+  async function scanCold() {
+    const attempts = Math.min(uncertainCold.size, 8);
+    for (let index = 0; index < attempts; index++) {
+      if (stopping) return;
+      const [requirementId, transition] = uncertainCold.entries().next().value!;
+      uncertainCold.delete(requirementId);
+      uncertainCold.set(requirementId, transition);
+      await verifyCold(transition)
+        .then(async (settled) => {
+          if (settled !== undefined)
+            await finishColdTransition(transition, settled === 'committed');
+        })
+        .catch(() => {});
+    }
+    const rows = await db
+      .select()
+      .from(leases)
+      .where(
+        and(
+          recoveryCursor ? gt(leases.requirementId, recoveryCursor) : undefined,
+          or(
+            isNotNull(leases.runId),
+            isNotNull(leases.takeover),
+            eq(leases.phase, 'held'),
+          ),
+        ),
+      )
+      .orderBy(leases.requirementId)
+      .limit(24);
+    for (const row of rows) {
+      if (stopping) return;
+      await recoverColdRow(row).catch(() => {});
+    }
+    recoveryCursor =
+      rows.length === 24 ? rows.at(-1)?.requirementId : undefined;
+  }
+
+  function startStopRecovery() {
+    if (!supervisedExecution || stopping || recoveryWork || recoveryTimer)
+      return;
+    recoveryWork = track(scanCold())
+      .catch(() => {})
+      .finally(() => {
+        recoveryWork = undefined;
+        if (!stopping)
+          recoveryTimer = setTimeout(() => {
+            recoveryTimer = undefined;
+            startStopRecovery();
+          }, 400).unref();
+      });
   }
 
   async function recordRelease(request: PendingRelease, recovering: boolean) {
@@ -1479,6 +1880,13 @@ export function createOwnedWriteHandoff(
         digestOf(current.proof.binding) !== digestOf(proof.binding)
       )
         businessError(409, '原执行证明尚未确认');
+      if (
+        stage === 'armed' &&
+        (!proof.location ||
+          !current.proof.location ||
+          digestOf(current.proof.location) !== digestOf(proof.location))
+      )
+        businessError(409, '原执行证明目录尚未确认');
     }
     async function authorizeStart(start: (validBefore: number) => void) {
       await transaction(async (tx, deadline, confirmConnection) => {
@@ -1504,19 +1912,20 @@ export function createOwnedWriteHandoff(
             signal,
             onOutput,
             authorizeStart,
-            async arm() {
+            async arm(location) {
               await transaction(async (tx, deadline) => {
                 const { validBefore } = await liveRun(tx, deadline);
                 await assertProof(tx, 'reserved');
                 await finish(tx, value, {
                   status: 'reserved',
                   runId,
-                  proof: { ...proof, stage: 'armed' },
+                  proof: { ...proof, stage: 'armed', location },
                 });
                 allowed(validBefore, scope);
                 signal.throwIfAborted();
               });
               proof.stage = 'armed';
+              proof.location = location;
             },
           },
         )
@@ -1673,6 +2082,7 @@ export function createOwnedWriteHandoff(
 
   async function stop() {
     stopping = true;
+    clearTimeout(recoveryTimer);
     try {
       for (const execution of executions.values()) execution.controller.abort();
       await Promise.allSettled(operations);
@@ -1687,12 +2097,17 @@ export function createOwnedWriteHandoff(
       if (
         releaseFences.size > 0 ||
         takeovers.size > 0 ||
+        coldFences.size > 0 ||
         (
           await db
             .select({ id: leases.requirementId })
             .from(leases)
             .where(
-              sql`${leases.takeover} is not null or ${leases.runId} is not null`,
+              or(
+                isNotNull(leases.takeover),
+                isNotNull(leases.runId),
+                supervisedExecution ? eq(leases.phase, 'held') : undefined,
+              ),
             )
             .limit(1)
         ).length > 0 ||
@@ -1905,6 +2320,7 @@ export function createOwnedWriteHandoff(
   }
 
   return {
+    startStopRecovery,
     readStatus,
     confirmCommandScope: (scope: Scope, assertCurrent: () => void) =>
       admit(() =>

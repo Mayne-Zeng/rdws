@@ -159,6 +159,7 @@
   - 已本地交付联测：[独立 BFF 异常退出与冷启动](02-directory-and-engineering-design.html#t07-owner-crash-evidence-20261120)。受限进程在原 BFF 收到 SIGKILL 后继续运行，原票被拒。实查进程组停稳并换票后，冷启动对原需求保留未结占位，拒绝旧键重放和新申请，空闲需求可循环申请与释放。整仓 341 项、隔离聚焦和基线通过。
   - 已本地交付联测：[原会话恢复与重新验权](02-directory-and-engineering-design.html#t07-recovered-session-evidence-20261120)。纯文本历史的同一本人会话在停稳换代后以新登录恢复，拒绝旧登录、原申请键重放及无分派的写申请。实际阶段和任务分派变化后，新代使用最新上下文完成一次 Native 固定工具写入。历史带工具记录的出站按当前闸门拒绝。整仓 341 项、普通浏览器 51 项、受管浏览器 1 项及基线通过。
   - 已本地交付子项：[受管主动接手与新资格](02-directory-and-engineering-design.html#t07-writable-takeover-evidence-20261121)。真实 PostgreSQL 0017、编队浏览器和受限工作树验证无任务开发成员可接手、排空后换代、双阶段失答、并发、异常退出、迟到原回执及旧会话拒写。双面独立复审，整仓 343 项与 1 条件跳过、受管 Chromium 1 项、静态及基线通过。遗留执行缺可信进程身份时持久保持只读。完整 T07 和 T08 仍按联合验收前置推进。
+  - 已本地交付子项：[受管监督执行与停稳取证](02-directory-and-engineering-design.html#t07-supervised-stop-evidence-20261121)。真实受管 paused BFF、PG 原执行回执和同一 runId 绑定。两个真实崩溃停点分别证实零起跑与受信监督者独立停稳。保留非零退出和热回执缺确认时的原占位。双面复审、定点邻域 28 项、整仓 357 项与 1 条件跳过、静态和基线通过；正式工具与冷端消费继续推进。
   - 来源：I2-AUTH、I3-WRITE、I3-CONTEXT。
 
 - [ ] **T08 · 变更查看与交付快照**

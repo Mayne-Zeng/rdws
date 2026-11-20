@@ -50,6 +50,7 @@ type Result = {
   stderr: string;
 };
 type Options = {
+  runId?: string;
   signal?: AbortSignal;
   onOutput?: (event: Event) => void;
   timeoutMs?: number;
@@ -498,7 +499,7 @@ export async function runMacosWorktree(
   request: ExecutionRequest,
   options: Options = {},
 ): Promise<Result> {
-  const runId = randomUUID();
+  const runId = options.runId ?? randomUUID();
   if (options.signal?.aborted) return result(runId, 'aborted');
   if (!allowedRequest(request)) return result(runId, 'rejected');
   if (process.platform !== 'darwin') return result(runId, 'unavailable');

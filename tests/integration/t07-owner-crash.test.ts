@@ -1,13 +1,25 @@
 import { execFileSync, fork } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { readFile, readdir, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import {
+  copyFile,
+  lstat,
+  readFile,
+  readdir,
+  writeFile,
+} from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 import type { WriteAuthorityCommand } from '@rdws/contracts';
+import {
+  readSupervisedStop,
+  type ExecutionProofBinding,
+} from '@rdws/dsh/execution/supervised';
 import { DemandWorktrees } from '@rdws/orchestrator';
 import { RepositoryMirrors } from '@rdws/syncer/mirror';
+import { buildApp } from '@rdws/server';
 import { hashPassword } from 'better-auth/crypto';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import type {
   OwnerBoot,
   OwnerCommand,
@@ -120,8 +132,50 @@ async function fingerprint(root: string) {
 }
 
 test.skipIf(process.platform !== 'darwin')(
-  'a crashed BFF leaves an active write unconfirmed to the replacement owner',
-  async () => {
+  'supervised proof mode rejects the mediated Native tool assembly',
+  () => {
+    vi.stubEnv('RDWS_MODE', 'test');
+    vi.stubEnv('RDWS_NATIVE_MODEL_EGRESS', 'mediated');
+    try {
+      expect(() =>
+        buildApp({
+          databaseUrl: 'postgresql://127.0.0.1/rdws_test',
+          origin: 'http://127.0.0.1:5317',
+          secret: randomBytes(32).toString('hex'),
+          authorityTicket: randomBytes(32).toString('hex'),
+          isolatedWrite: {
+            gitPath: '/usr/bin/git',
+            fixtureTool: true,
+            supervisedExecution: true,
+          },
+        }),
+      ).toThrow('Isolated write handoff requires a managed macOS test BFF');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  },
+);
+
+test
+  .skipIf(process.platform !== 'darwin')
+  .each([
+    'legacy',
+    'supervised',
+    'armed',
+    'rollback-go',
+    'lose-go',
+    'failed',
+    'shutdown',
+    'no-proof',
+    'expired-go',
+    'queued-go',
+    'disconnect-before-go',
+    'bad-scope',
+    'ack-lost',
+    'output-failed',
+  ] as const)(
+  'a crashed BFF leaves independently verifiable execution evidence (%s)',
+  async (mode) => {
     const endpoint = execFileSync(
       'docker',
       [
@@ -146,6 +200,14 @@ test.skipIf(process.platform !== 'darwin')(
     let requested = false;
     let executionPid: number | undefined;
     let executionStopped = false;
+    let pausedSupervisor: { pid: number; started: string } | undefined;
+    function resumeSupervisor() {
+      if (!pausedSupervisor) return;
+      const { pid, started } = pausedSupervisor;
+      expect(processIdentity(pid)).toMatchObject({ group: pid, started });
+      expect(process.kill(pid, 'SIGCONT')).toBe(true);
+      pausedSupervisor = undefined;
+    }
     const projectId = 'poc';
     const requirementId = randomUUID();
     const sessionId = randomUUID();
@@ -286,11 +348,27 @@ test.skipIf(process.platform !== 'darwin')(
       ).toBe(1);
 
       const origin = lab.childEnv.RDWS_ORIGIN;
-      const boot = {
+      const boot: Omit<OwnerBoot, 'ticket'> = {
         root,
         origin,
         databaseUrl: lab.databaseUrl,
         secret: lab.childEnv.BETTER_AUTH_SECRET,
+        ...(mode !== 'legacy' && { supervisedExecution: true as const }),
+        ...(mode === 'armed' && { fault: 'hold-armed' as const }),
+        ...((mode === 'expired-go' || mode === 'queued-go') && {
+          fault: 'hold-armed' as const,
+          observeGo: true as const,
+        }),
+        ...((mode === 'rollback-go' || mode === 'lose-go') && { fault: mode }),
+        ...(mode === 'disconnect-before-go' && {
+          fault: mode,
+          observeGo: true as const,
+        }),
+        ...(mode === 'ack-lost' && { dropStopAck: true as const }),
+        ...(mode === 'output-failed' && {
+          outputFailure: true as const,
+          fault: 'hold-armed' as const,
+        }),
         gitPath: execFileSync('/usr/bin/which', ['git'], {
           encoding: 'utf8',
         }).trim(),
@@ -376,11 +454,17 @@ test.skipIf(process.platform !== 'darwin')(
       );
       const oldPid = old.child.pid!;
       const issuedAt = performance.now();
+      const ready = join(execution.control, 'ready');
+      const readyBefore =
+        mode === 'bad-scope' ? await readFile(ready) : undefined;
+      if (readyBefore)
+        await writeFile(ready, 'synthetic unverified worktree readiness');
       requested = true;
       await old.send({
         kind: 'execute',
         commandId,
         generation,
+        ...(mode === 'failed' && { exitCode: 7 as const }),
         scope: {
           projectId,
           requirementId,
@@ -388,6 +472,235 @@ test.skipIf(process.platform !== 'darwin')(
           who: { userId, authSessionId },
         },
       });
+      if (readyBefore) {
+        try {
+          await expect
+            .poll(
+              async () =>
+                (await retained()).receipts.find(
+                  ({ command_id }) => command_id === commandId,
+                )?.result,
+            )
+            .toMatchObject({
+              status: 'finished',
+              proof: { stage: 'reserved' },
+              result: {
+                stop: 'not-started',
+                status: 'rejected',
+                marker: 'none',
+              },
+            });
+          expect((await retained()).lease).toMatchObject({
+            phase: 'held',
+            run_id: null,
+          });
+          expect(await readFile(sample, 'utf8')).toBe('baseline');
+          await expect(lstat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+          executionStopped = true;
+        } finally {
+          await writeFile(ready, readyBefore);
+        }
+        await old.send({ kind: 'stop' });
+        expect(await old.waitForExit()).toEqual([0, null]);
+        return;
+      }
+      let binding: ExecutionProofBinding | undefined;
+      if (mode !== 'legacy') {
+        await expect
+          .poll(
+            async () =>
+              (await retained()).receipts.find(
+                ({ command_id }) => command_id === commandId,
+              )?.result?.proof,
+            { timeout: 1800 },
+          )
+          .toMatchObject({
+            stage: 'armed',
+            binding: {
+              commandId,
+              generation,
+              requirementId,
+              ownerGeneration: originalOwner.generation,
+            },
+          });
+        const saved = await retained();
+        const receipt = saved.receipts.find(
+          ({ command_id }) => command_id === commandId,
+        )!;
+        binding = receipt.result.proof.binding as ExecutionProofBinding;
+        expect(binding).toEqual({
+          version: 1,
+          runId: saved.lease.run_id,
+          generation,
+          ownerGeneration: originalOwner.generation,
+          projectId,
+          requirementId,
+          repositoryId: 'app',
+          actorId: userId,
+          commandId,
+          receiptDigest: receipt.digest,
+        });
+        if (mode === 'armed') {
+          await expect
+            .poll(() =>
+              old!.reports.some(({ kind }) => kind === 'fault-entered'),
+            )
+            .toBe(true);
+          expect(await readFile(sample, 'utf8')).toBe('baseline');
+          await expect(
+            readFile(join(execution.tree, 'fixture-running')),
+          ).rejects.toMatchObject({ code: 'ENOENT' });
+          expect(old.child.kill('SIGKILL')).toBe(true);
+          expect(await old.waitForExit()).toEqual([null, 'SIGKILL']);
+          await expect
+            .poll(() => readSupervisedStop(execution.runtimeRoot, binding!))
+            .toMatchObject({
+              binding,
+              outcome: { stop: 'not-started', status: 'aborted' },
+            });
+          executionStopped = true;
+          expect(await retained()).toEqual(saved);
+          await expect(lstat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+          expect(await readFile(sample, 'utf8')).toBe('baseline');
+          expect(await intact()).toEqual(before);
+          return;
+        }
+        if (mode === 'disconnect-before-go') {
+          await expect
+            .poll(() =>
+              old!.reports.some(({ kind }) => kind === 'backend-held'),
+            )
+            .toBe(true);
+          const held = old.reports.find(({ kind }) => kind === 'backend-held');
+          if (held?.kind !== 'backend-held')
+            throw new Error('Execution backend is not held');
+          const { pid } = held;
+          expect(
+            (
+              await lab.admin.query<{ terminated: boolean }>(
+                'select pg_terminate_backend($1) as terminated',
+                [pid],
+              )
+            ).rows,
+          ).toEqual([{ terminated: true }]);
+          await expect
+            .poll(() =>
+              old!.reports.some(({ kind }) => kind === 'backend-disconnected'),
+            )
+            .toBe(true);
+          await old.send({ kind: 'release-fault' });
+          await expect
+            .poll(() => readSupervisedStop(execution.runtimeRoot, binding!))
+            .toMatchObject({
+              binding,
+              outcome: { stop: 'not-started', status: 'aborted' },
+            });
+          expect(old.reports.some(({ kind }) => kind === 'go-sent')).toBe(
+            false,
+          );
+          await expect
+            .poll(async () => (await retained()).lease.run_id)
+            .toBeNull();
+          executionStopped = true;
+          await expect(lstat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+          expect(await readFile(sample, 'utf8')).toBe('baseline');
+          await expect(
+            readFile(join(execution.tree, 'fixture-running')),
+          ).rejects.toMatchObject({ code: 'ENOENT' });
+          expect(await intact()).toEqual(before);
+          return;
+        }
+        if (mode === 'expired-go' || mode === 'queued-go') {
+          await expect
+            .poll(() =>
+              old!.reports.some(({ kind }) => kind === 'fault-entered'),
+            )
+            .toBe(true);
+          const { supervisorPid } = JSON.parse(
+            await readFile(
+              join(execution.control, `execution-${binding.runId}.armed.json`),
+              'utf8',
+            ),
+          ) as { supervisorPid: number };
+          const identity = processIdentity(supervisorPid);
+          expect(identity).toMatchObject({
+            parent: oldPid,
+            group: supervisorPid,
+          });
+          expect(process.kill(supervisorPid, 'SIGSTOP')).toBe(true);
+          pausedSupervisor = { pid: supervisorPid, started: identity.started };
+          await old.send({ kind: 'release-fault' });
+          await expect
+            .poll(() => old!.reports.some(({ kind }) => kind === 'go-sent'))
+            .toBe(true);
+          const go = old.reports.find(({ kind }) => kind === 'go-sent');
+          if (go?.kind !== 'go-sent')
+            throw new Error('Execution GO was not observed');
+          expect(await readFile(sample, 'utf8')).toBe('baseline');
+          if (mode === 'queued-go') {
+            expect(old.child.kill('SIGKILL')).toBe(true);
+            expect(await old.waitForExit()).toEqual([null, 'SIGKILL']);
+          } else {
+            await new Promise((resolve) =>
+              setTimeout(
+                resolve,
+                Math.max(0, go.validBefore - Date.now() + 25),
+              ),
+            );
+          }
+          resumeSupervisor();
+          await expect
+            .poll(() => readSupervisedStop(execution.runtimeRoot, binding!), {
+              timeout: 4000,
+            })
+            .toMatchObject({ binding, supervisorPid });
+          const stopped = (await readSupervisedStop(
+            execution.runtimeRoot,
+            binding,
+          ))!;
+          if (mode === 'expired-go') {
+            expect(stopped.outcome).toEqual({
+              stop: 'not-started',
+              status: 'rejected',
+              exitCode: null,
+            });
+            expect(await readFile(sample, 'utf8')).toBe('baseline');
+            await expect
+              .poll(async () => (await retained()).lease.run_id)
+              .toBeNull();
+          } else {
+            expect(await retained()).toEqual(saved);
+            const written = await readFile(sample, 'utf8');
+            if (stopped.outcome.stop === 'not-started')
+              expect(written).toBe('baseline');
+            else expect(['baseline', 'baseline|started']).toContain(written);
+          }
+          executionStopped = true;
+          await expect(lstat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+          expect(await intact()).toEqual(before);
+          return;
+        }
+        if (mode === 'output-failed') {
+          await expect
+            .poll(() =>
+              old!.reports.some(({ kind }) => kind === 'fault-entered'),
+            )
+            .toBe(true);
+          await old.send({ kind: 'release-fault' });
+          await expect
+            .poll(() => readSupervisedStop(execution.runtimeRoot, binding!))
+            .toMatchObject({
+              outcome: { stop: 'confirmed', status: 'failed' },
+            });
+          await expect
+            .poll(async () => (await retained()).lease.run_id)
+            .toBeNull();
+          expect(old.child.exitCode).toBeNull();
+          executionStopped = true;
+          expect(await readFile(sample, 'utf8')).toBe('baseline|started');
+          return;
+        }
+      }
       let observedPid: number | undefined;
       await expect
         .poll(
@@ -409,15 +722,207 @@ test.skipIf(process.platform !== 'darwin')(
         .toBe(true);
       const pid = observedPid!;
       const identity = processIdentity(pid);
-      expect(identity).toMatchObject({ parent: oldPid, group: pid });
+      const supervisor = binding
+        ? JSON.parse(
+            await readFile(
+              join(execution.control, `execution-${binding.runId}.armed.json`),
+              'utf8',
+            ),
+          )
+        : undefined;
+      if (binding)
+        expect(supervisor).toEqual({
+          binding,
+          supervisorPid: expect.any(Number),
+        });
+      expect(identity).toMatchObject({
+        parent: supervisor?.supervisorPid ?? oldPid,
+        group: pid,
+      });
       executionPid = pid;
       expect(await readFile(sample, 'utf8')).toBe('baseline|started');
       const markerBytes = await readFile(marker, 'utf8');
       expect(JSON.parse(markerBytes)).toEqual({
-        launcherPid: oldPid,
-        runId: expect.any(String),
+        launcherPid: supervisor?.supervisorPid ?? oldPid,
+        runId: binding?.runId ?? expect.any(String),
       });
       const persisted = await retained();
+      if (binding) {
+        const proofFile = join(
+          execution.control,
+          `execution-${binding.runId}.stopped.json`,
+        );
+        if (mode === 'no-proof') {
+          const collision = 'synthetic unmatched record';
+          await writeFile(proofFile, collision, { mode: 0o600, flag: 'wx' });
+          await writeFile(stopFile!, '', { mode: 0o600, flag: 'wx' });
+          await expect
+            .poll(
+              async () =>
+                (await retained()).receipts.find(
+                  ({ command_id }) => command_id === commandId,
+                )?.result,
+            )
+            .toMatchObject({
+              status: 'unknown',
+              result: { stop: 'unconfirmed' },
+            });
+          expect(disappeared(pid)).toBe(true);
+          expect(disappeared(-pid)).toBe(true);
+          executionStopped = true;
+          expect((await retained()).lease).toMatchObject({
+            run_id: binding.runId,
+            phase: 'draining',
+          });
+          expect(await readFile(proofFile, 'utf8')).toBe(collision);
+          expect(
+            await readSupervisedStop(execution.runtimeRoot, binding),
+          ).toBeUndefined();
+          await old.send({ kind: 'stop' });
+          expect(await old.waitForExit()).toEqual([1, null]);
+          expect((await owner()).generation).toBe(originalOwner.generation);
+          expect(await intact()).toEqual(before);
+          return;
+        }
+        if (mode === 'ack-lost') {
+          await writeFile(stopFile!, '', { mode: 0o600, flag: 'wx' });
+          await expect
+            .poll(() =>
+              old!.reports.some(({ kind }) => kind === 'stop-ack-dropped'),
+            )
+            .toBe(true);
+          await expect
+            .poll(() => readSupervisedStop(execution.runtimeRoot, binding!))
+            .toMatchObject({
+              binding,
+              outcome: { stop: 'confirmed', status: 'ok' },
+            });
+          await expect
+            .poll(
+              async () =>
+                (await retained()).receipts.find(
+                  ({ command_id }) => command_id === commandId,
+                )?.result,
+            )
+            .toMatchObject({
+              status: 'unknown',
+              result: { stop: 'unconfirmed' },
+            });
+          expect((await retained()).lease).toMatchObject({
+            run_id: binding.runId,
+            phase: 'draining',
+          });
+          expect((await owner()).generation).toBe(originalOwner.generation);
+          expect(disappeared(pid) && disappeared(-pid)).toBe(true);
+          executionStopped = true;
+          await old.send({ kind: 'stop' });
+          expect(await old.waitForExit()).toEqual([1, null]);
+          expect((await owner()).generation).toBe(originalOwner.generation);
+          return;
+        }
+        if (mode === 'supervised') {
+          expect(old.child.kill('SIGKILL')).toBe(true);
+          expect(await old.waitForExit()).toEqual([null, 'SIGKILL']);
+        } else if (mode === 'rollback-go' || mode === 'lose-go') {
+          await expect
+            .poll(() =>
+              old!.reports.some(({ kind }) => kind === 'fault-entered'),
+            )
+            .toBe(true);
+          expect(processIdentity(pid)).toEqual(identity);
+          await old.send({ kind: 'release-fault' });
+          await expect
+            .poll(() =>
+              old!.reports.find(({ kind }) => kind === 'fault-completed'),
+            )
+            .toEqual({
+              kind: 'fault-completed',
+              command: mode === 'rollback-go' ? 'ROLLBACK' : 'COMMIT',
+            });
+        } else if (mode === 'failed') {
+          await writeFile(stopFile!, '', { mode: 0o600, flag: 'wx' });
+        } else {
+          await old.send({ kind: 'stop' });
+          expect(await old.waitForExit()).toEqual([0, null]);
+        }
+        await expect
+          .poll(() => readSupervisedStop(execution.runtimeRoot, binding!), {
+            timeout: 4_000,
+          })
+          .toMatchObject({
+            binding,
+            supervisorPid: supervisor.supervisorPid,
+            outcome: {
+              stop: 'confirmed',
+              status: mode === 'failed' ? 'failed' : 'aborted',
+              exitCode: mode === 'failed' ? 7 : null,
+            },
+          });
+        expect(disappeared(pid)).toBe(true);
+        expect(disappeared(-pid)).toBe(true);
+        executionStopped = true;
+        await expect(lstat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+        expect(await readFile(sample, 'utf8')).toBe('baseline|started');
+        await expect(
+          lstat(join(execution.control, 'forbidden-proof-write')),
+        ).rejects.toMatchObject({ code: 'ENOENT' });
+        expect(await intact()).toEqual(before);
+        expect(
+          await readSupervisedStop(execution.runtimeRoot, {
+            ...binding,
+            generation: randomUUID(),
+          }),
+        ).toBeUndefined();
+        expect(
+          await readSupervisedStop(execution.runtimeRoot, {
+            ...binding,
+            commandId: randomUUID(),
+          }),
+        ).toBeUndefined();
+        if (mode === 'supervised') {
+          const otherRun = randomUUID();
+          expect(
+            await readSupervisedStop(execution.runtimeRoot, {
+              ...binding,
+              runId: otherRun,
+            }),
+          ).toBeUndefined();
+          await copyFile(
+            proofFile,
+            join(execution.control, `execution-${otherRun}.stopped.json`),
+            constants.COPYFILE_EXCL,
+          );
+          expect(
+            await readSupervisedStop(execution.runtimeRoot, {
+              ...binding,
+              runId: otherRun,
+            }),
+          ).toBeUndefined();
+        }
+        if (mode === 'supervised') {
+          expect(await retained()).toEqual(persisted);
+          expect((await owner()).generation).toBe(originalOwner.generation);
+        } else {
+          const finalStatus =
+            mode === 'rollback-go' || mode === 'lose-go'
+              ? 'unknown'
+              : 'finished';
+          await expect
+            .poll(
+              async () =>
+                (await retained()).receipts.find(
+                  ({ command_id }) => command_id === commandId,
+                )?.result,
+            )
+            .toMatchObject({
+              status: finalStatus,
+              proof: { binding, stage: 'armed' },
+              result: { stop: 'confirmed' },
+            });
+          expect((await retained()).lease.run_id).toBeNull();
+        }
+        return;
+      }
       expect(persisted.lease).toMatchObject({
         generation,
         phase: 'held',
@@ -649,6 +1154,7 @@ test.skipIf(process.platform !== 'darwin')(
       expect(await readFile(sample, 'utf8')).toBe('baseline|started');
       expect(await intact()).toEqual(before);
     } finally {
+      resumeSupervisor();
       let stopped = false;
       const fixtureLabel = `${basename(lab.root)} / ${git ? basename(git.root) : 'no Git fixture'}`;
       try {

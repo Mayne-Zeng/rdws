@@ -41,7 +41,12 @@ export function buildApp(options: {
   authorityTicket?: string;
   mainModelPolicy?: unknown;
   sessionModelPilot?: { alternateModel: string; databaseFixture: string };
-  isolatedWrite?: { gitPath: string; fixtureTool?: true; fleetCommands?: true };
+  isolatedWrite?: {
+    gitPath: string;
+    fixtureTool?: true;
+    fleetCommands?: true;
+    supervisedExecution?: true;
+  };
 }) {
   const modelEgress = resolveNativeModelEgress(
     process.env.RDWS_NATIVE_MODEL_EGRESS,
@@ -58,6 +63,7 @@ export function buildApp(options: {
     (process.env.RDWS_MODE !== 'test' ||
       process.platform !== 'darwin' ||
       !ticket ||
+      (isolatedWrite.supervisedExecution && fixtureTool) ||
       modelEgress !== (fixtureTool ? 'mediated' : 'paused') ||
       options.nativeHost ||
       !isAbsolute(isolatedWrite.gitPath))
@@ -276,6 +282,7 @@ export function buildApp(options: {
           isolatedWrite.gitPath,
           undefined,
           prepared.writeLoginClosed,
+          isolatedWrite.supervisedExecution === true,
         );
     } catch (error) {
       if (managedWork) {

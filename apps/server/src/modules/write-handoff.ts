@@ -8,6 +8,10 @@ import {
   connectDatabase,
 } from '@rdws/db';
 import { runMacosWorktree, type ExecutionRequest } from '@rdws/dsh/execution';
+import {
+  runSupervisedMacosWorktree,
+  type ExecutionProofBinding,
+} from '@rdws/dsh/execution/supervised';
 import type { DemandWorktrees } from '@rdws/orchestrator';
 import type {
   RequirementWriteAuthority,
@@ -38,11 +42,17 @@ type Invocation = {
   request: ExecutionRequest;
 };
 type RunResult = Awaited<ReturnType<typeof runMacosWorktree>>;
+type ExecutionProof = {
+  stage: 'reserved' | 'armed';
+  binding: ExecutionProofBinding;
+};
 type ExecutionReceipt =
-  { status: 'reserved'; runId: string } | CompletedExecution;
+  | { status: 'reserved'; runId: string; proof?: ExecutionProof }
+  | CompletedExecution;
 type CompletedExecution = {
   status: 'finished' | 'unknown';
   runId: string;
+  proof?: ExecutionProof;
   result: Pick<RunResult, 'stop' | 'marker' | 'status' | 'exitCode'>;
 };
 type ReceiptValue = typeof schema.commandReceipt.$inferInsert;
@@ -181,6 +191,7 @@ export function createOwnedWriteHandoff(
   gitPath: string,
   leaseMs = leaseDuration,
   loginClosed: (id: string) => boolean = () => false,
+  supervisedExecution = false,
 ) {
   checkLocalExecution(leaseMs);
   if (!authority)
@@ -430,7 +441,17 @@ export function createOwnedWriteHandoff(
             eq(leases.phase, old.phase),
           ),
         );
-      await finish(tx, receipt, outcome);
+      if (
+        outcome.proof &&
+        (!prior.proof ||
+          digestOf(prior.proof.binding) !== digestOf(outcome.proof.binding))
+      )
+        businessError(409, '原执行证明尚未确认');
+      await finish(
+        tx,
+        receipt,
+        prior.proof ? { ...outcome, proof: prior.proof } : outcome,
+      );
       return phase === 'released';
     });
     if (released) forget(scope.requirementId, generation);
@@ -1295,7 +1316,9 @@ export function createOwnedWriteHandoff(
         businessError(409, '操作标识已用于不同内容，请重新发起');
       return persistSettlement(saved);
     }
-    let candidate: { runId: string; receipt: ReceiptValue } | undefined;
+    let candidate:
+      | { runId: string; receipt: ReceiptValue; proof?: ExecutionProof }
+      | undefined;
     const reservation = await transaction(async (tx, deadline) => {
       const snapshot = await context(tx, scope);
       const row = await lockedLease(tx, scope.requirementId);
@@ -1339,6 +1362,23 @@ export function createOwnedWriteHandoff(
         scope,
       );
       const runId = randomUUID();
+      const proof: ExecutionProof | undefined = supervisedExecution
+        ? {
+            stage: 'reserved',
+            binding: {
+              version: 1,
+              runId,
+              generation: input.generation,
+              ownerGeneration: authority,
+              projectId: scope.projectId,
+              requirementId: scope.requirementId,
+              repositoryId: input.repositoryId,
+              actorId: scope.who.userId,
+              commandId: input.commandId,
+              receiptDigest: receipt.value.digest,
+            },
+          }
+        : undefined;
       await tx
         .update(leases)
         .set({ runId, updatedAt: new Date() })
@@ -1349,17 +1389,22 @@ export function createOwnedWriteHandoff(
             isNull(leases.runId),
           ),
         );
-      await finish(tx, receipt.value, { status: 'reserved', runId });
-      candidate = { runId, receipt: receipt.value };
+      await finish(tx, receipt.value, {
+        status: 'reserved',
+        runId,
+        ...(proof && { proof }),
+      });
+      candidate = { runId, receipt: receipt.value, proof };
       return {
         kind: 'launch',
         runId,
         value: receipt.value,
         plan: plan.repositories,
+        proof,
       } as const;
     }).catch(async (error: unknown) => {
       if (error instanceof UnknownWriteCommit && candidate) {
-        const { runId, receipt } = candidate;
+        const { runId, receipt, proof } = candidate;
         const settlement: Settlement = {
           scope,
           generation: input.generation,
@@ -1368,6 +1413,7 @@ export function createOwnedWriteHandoff(
           outcome: {
             status: 'finished',
             runId,
+            ...(proof && { proof }),
             result: {
               status: 'aborted',
               stop: 'not-started',
@@ -1387,51 +1433,99 @@ export function createOwnedWriteHandoff(
       return settlement ? persistSettlement(settlement) : prior;
     }
 
-    const { runId, value, plan } = reservation;
+    const { runId, value, plan, proof } = reservation;
     const controller = new AbortController();
     const signal = callSignal
       ? AbortSignal.any([controller.signal, callSignal])
       : controller.signal;
     let started = false;
     let confirmed = false;
-    const done = runMacosWorktree(
-      () =>
-        worktrees.executionScope(
-          scope.projectId,
-          scope.requirementId,
-          plan,
-          input.repositoryId,
-        ),
-      gitPath,
-      input.request,
-      {
-        signal,
-        onOutput,
-        async authorizeStart(start) {
-          await transaction(async (tx, deadline, confirmConnection) => {
-            const snapshot = await context(tx, scope);
-            const row = await lockedLease(tx, scope.requirementId);
-            if (
-              !sameHolder(row, scope, input.generation) ||
-              row.runId !== runId ||
-              row.phase !== 'held' ||
-              row.contextVersion !== snapshot.requirement.contextVersion
-            )
-              businessError(409, '当前执行的写入资格已失效');
-            allowed(
-              Math.min(deadline, snapshot.validBefore, row.expiresAt.getTime()),
-              scope,
-            );
-            confirmConnection();
-            beforeCallStart?.(snapshot.requirement.contextVersion);
-            signal.throwIfAborted();
-            start();
-            started = true;
-          });
-          confirmed = true;
-        },
-      },
-    )
+    const verifyScope = () =>
+      worktrees.executionScope(
+        scope.projectId,
+        scope.requirementId,
+        plan,
+        input.repositoryId,
+      );
+    async function liveRun(tx: Queries, deadline: number) {
+      const snapshot = await context(tx, scope);
+      const row = await lockedLease(tx, scope.requirementId);
+      if (
+        !sameHolder(row, scope, input.generation) ||
+        row.runId !== runId ||
+        row.phase !== 'held' ||
+        row.contextVersion !== snapshot.requirement.contextVersion
+      )
+        businessError(409, '当前执行的写入资格已失效');
+      const validBefore = Math.min(
+        deadline,
+        snapshot.validBefore,
+        row.expiresAt.getTime(),
+      );
+      allowed(validBefore, scope);
+      return {
+        contextVersion: snapshot.requirement.contextVersion,
+        validBefore,
+      };
+    }
+    async function assertProof(tx: Queries, stage: ExecutionProof['stage']) {
+      const receipt = await readReceipt(tx, value);
+      const current = receipt?.result as ExecutionReceipt | undefined;
+      if (
+        !proof ||
+        current?.status !== 'reserved' ||
+        current.runId !== runId ||
+        current.proof?.stage !== stage ||
+        digestOf(current.proof.binding) !== digestOf(proof.binding)
+      )
+        businessError(409, '原执行证明尚未确认');
+    }
+    async function authorizeStart(start: (validBefore: number) => void) {
+      await transaction(async (tx, deadline, confirmConnection) => {
+        const { contextVersion, validBefore } = await liveRun(tx, deadline);
+        if (proof) await assertProof(tx, 'armed');
+        confirmConnection();
+        allowed(validBefore, scope);
+        beforeCallStart?.(contextVersion);
+        signal.throwIfAborted();
+        if (proof) started = true;
+        start(validBefore);
+        started = true;
+      });
+      confirmed = true;
+    }
+    const running = proof
+      ? runSupervisedMacosWorktree(
+          verifyScope,
+          gitPath,
+          input.request,
+          proof.binding,
+          {
+            signal,
+            onOutput,
+            authorizeStart,
+            async arm() {
+              await transaction(async (tx, deadline) => {
+                const { validBefore } = await liveRun(tx, deadline);
+                await assertProof(tx, 'reserved');
+                await finish(tx, value, {
+                  status: 'reserved',
+                  runId,
+                  proof: { ...proof, stage: 'armed' },
+                });
+                allowed(validBefore, scope);
+                signal.throwIfAborted();
+              });
+              proof.stage = 'armed';
+            },
+          },
+        )
+      : runMacosWorktree(verifyScope, gitPath, input.request, {
+          signal,
+          onOutput,
+          authorizeStart,
+        });
+    const done = running
       .then(
         async ({
           stop,
@@ -1443,6 +1537,7 @@ export function createOwnedWriteHandoff(
           const outcome: CompletedExecution = {
             status: safe && (!started || confirmed) ? 'finished' : 'unknown',
             runId,
+            ...(proof && { proof }),
             result: { stop, marker, status, exitCode },
           };
           const settlement = {

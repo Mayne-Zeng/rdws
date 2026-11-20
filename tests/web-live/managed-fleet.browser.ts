@@ -1,10 +1,13 @@
 import { expect, test, type Route } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { createServer as createHttpsServer } from 'node:https';
+import { once } from 'node:events';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
+import { getCACertificates, setDefaultCACertificates } from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { hashPassword } from 'better-auth/crypto';
 import { Pool, type PoolClient } from 'pg';
@@ -12,8 +15,14 @@ import { DemandWorktrees } from '@rdws/orchestrator';
 import { RepositoryMirrors } from '@rdws/syncer/mirror';
 import { buildApp } from '@rdws/server';
 import type { OwnedWriteHandoff } from '../../apps/server/src/modules/workbench-write-authority.ts';
+import {
+  NativeFixtureToolJob,
+  type FixtureToolArm,
+} from '../../apps/server/src/modules/native-fixture-tool-job.ts';
 import { authorityDatabase } from '../helpers/authority-database.ts';
 import { fixtureGit, httpsGitFixture } from '../helpers/https-git.ts';
+import { journal } from '../helpers/native-journal.ts';
+import { modelTlsCertificate } from '../helpers/model-tls.ts';
 
 function releaseCommitGate() {
   let open!: () => void;
@@ -64,12 +73,32 @@ test.skip(
   'The managed write fixture uses macOS Seatbelt.',
 );
 
-test('two real fleet logins recover commands and hand over after physical stop', async ({
+async function fingerprint(root: string) {
+  const entries = await readdir(root, { recursive: true, withFileTypes: true });
+  const files = entries
+    .filter((file) => file.isFile())
+    .map((file) => join(file.parentPath, file.name))
+    .sort();
+  const digest = createHash('sha256');
+  for (const file of files) {
+    digest.update(relative(root, file)).update('\0');
+    digest.update(
+      createHash('sha256')
+        .update(await readFile(file))
+        .digest(),
+    );
+  }
+  return digest.digest('hex');
+}
+
+test('two real fleet logins hand over after physical stop and write through Native chat', async ({
   browser,
 }) => {
   process.env.RDWS_MODE = 'test';
-  process.env.RDWS_NATIVE_MODEL_EGRESS = 'paused';
+  process.env.RDWS_NATIVE_MODEL_EGRESS = 'mediated';
   const lab = await authorityDatabase();
+  const originalCAs = getCACertificates('default');
+  let supplier: ReturnType<typeof createHttpsServer> | undefined;
   let source: Awaited<ReturnType<typeof httpsGitFixture>> | undefined;
   let app: ReturnType<typeof buildApp> | undefined;
   let web: { close(): Promise<void> } | undefined;
@@ -82,19 +111,52 @@ test('two real fleet logins recover commands and hand over after physical stop',
   const demand = randomUUID();
   const owner = randomUUID();
   const successor = randomUUID();
-  const aSession = randomUUID();
-  const bSession = randomUUID();
-  const viewerSession = randomUUID();
   const viewer = randomUUID();
   const ticket = randomBytes(32).toString('hex');
   const password = randomBytes(18).toString('hex');
+  const provider = 'rdws-glm';
+  const model = 'browser-fleet-fixture';
+  const callId = 'rdws-browser-fleet-tool';
+  const reply = 'Native handoff fixture finished';
+  const received: {
+    model?: string;
+    tools?: unknown[];
+    messages: { role: string; tool_call_id?: string; content?: unknown }[];
+  }[] = [];
+  const control = NativeFixtureToolJob.prototype.control;
+  const controls: {
+    operation: string;
+    commandId: string;
+    sessionId: unknown;
+    requestId: unknown;
+    callId: unknown;
+    callSeq: unknown;
+    state?: string;
+  }[] = [];
+  NativeFixtureToolJob.prototype.control = async function (
+    operation,
+    input,
+    canRead,
+  ) {
+    const result = await control.call(this, operation, input, canRead);
+    controls.push({
+      operation,
+      commandId: this.commandId,
+      sessionId: input.sessionId,
+      requestId: input.requestId,
+      callId: input.toolCallId,
+      callSeq: input.toolCallSeq,
+      state: 'state' in result ? result.state : undefined,
+    });
+    return result;
+  };
   const commandPath = (sessionId: string) =>
     `/api/requirements/${demand}/sessions/${sessionId}/write-authority/commands`;
   const statusPath = `/api/requirements/${demand}/write-authority`;
   const originalStatus = async () =>
     (
       await lab.owner.query(
-        'select generation,phase,native_session_id,run_id from requirement_write_lease where requirement_id=$1',
+        'select generation,phase,native_session_id,run_id,owner_id,auth_session_id,context_version from requirement_write_lease where requirement_id=$1',
         [demand],
       )
     ).rows[0];
@@ -129,6 +191,107 @@ test('two real fleet logins recover commands and hand over after physical stop',
     await trees.prepare(projectId, demand, plan);
     const checkout = await trees.executionScope(projectId, demand, plan, 'app');
     const sample = join(checkout.tree, 'sample.txt');
+    const sources = join(root, 'projects', projectId, 'sources');
+    const sourcesBefore = await fingerprint(sources);
+    const keys = await modelTlsCertificate(lab.root);
+    setDefaultCACertificates([...originalCAs, keys.cert.toString()]);
+    supplier = createHttpsServer(
+      { ...keys, minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3' },
+      async (request, response) => {
+        try {
+          if (
+            request.method !== 'POST' ||
+            request.url !== '/v1/chat/completions'
+          ) {
+            response.writeHead(404).end();
+            return;
+          }
+          const chunks: Buffer[] = [];
+          for await (const chunk of request) chunks.push(chunk);
+          const body = JSON.parse(
+            Buffer.concat(chunks).toString(),
+          ) as (typeof received)[number];
+          received.push(body);
+          const invoke = received.length === 1 && body.tools?.length === 1;
+          const delta = invoke
+            ? {
+                role: 'assistant',
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: callId,
+                    type: 'function',
+                    function: { name: 'rdws_authority_probe', arguments: '{}' },
+                  },
+                ],
+              }
+            : { role: 'assistant', content: reply };
+          const frame = {
+            id: 'fleet-handoff-synthetic',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model,
+          };
+          response.writeHead(200, { 'content-type': 'text/event-stream' }).end(
+            [
+              { index: 0, delta, finish_reason: null },
+              {
+                index: 0,
+                delta: {},
+                finish_reason: invoke ? 'tool_calls' : 'stop',
+              },
+            ]
+              .map(
+                (choice) =>
+                  'data: ' +
+                  JSON.stringify({ ...frame, choices: [choice] }) +
+                  '\n\n',
+              )
+              .join('') + 'data: [DONE]\n\n',
+          );
+        } catch {
+          response.destroy();
+        }
+      },
+    );
+    supplier.listen(0, '127.0.0.1');
+    await once(supplier, 'listening');
+    const baseURL =
+      'https://127.0.0.1:' +
+      (supplier.address() as { port: number }).port +
+      '/v1';
+    const configuration = join(root, 'config', 'projects', projectId, 'dsh');
+    const profile = join(configuration, 'profiles', 'rdws');
+    await mkdir(profile, { recursive: true, mode: 0o700 });
+    await writeFile(
+      join(configuration, '.credentials.yaml'),
+      JSON.stringify({
+        version: 1,
+        refs: { FIXTURE_MODEL: randomBytes(24).toString('hex') },
+      }),
+      { mode: 0o600 },
+    );
+    await writeFile(
+      join(profile, 'cordis.patch.yml'),
+      JSON.stringify([
+        { id: 'session-title-llm', disabled: true },
+        {
+          id: 'llm-pi-ai',
+          config: {
+            providers: {
+              [provider]: {
+                api: 'openai-completions',
+                baseURL,
+                apiKeyEnv: 'FIXTURE_MODEL',
+                models: [{ id: model }],
+                retryPolicy: { mode: 'normal', maxRetries: 0 },
+              },
+            },
+          },
+        },
+      ]),
+      { mode: 0o600 },
+    );
     await lab.owner.query(
       "insert into project(id,name) values ($1,'Synthetic fleet')",
       [projectId],
@@ -162,10 +325,6 @@ test('two real fleet logins recover commands and hand over after physical stop',
       [demand, owner, successor, viewer],
     );
     await lab.owner.query(
-      'insert into native_session(id,requirement_id,owner_id) values($1,$2,$3),($4,$2,$5),($6,$2,$7)',
-      [aSession, demand, owner, bSession, successor, viewerSession, viewer],
-    );
-    await lab.owner.query(
       "insert into task(id,requirement_id,title,assignee_id,created_by) values($1,$2,'Handover task',$3,$4)",
       [randomUUID(), demand, successor, owner],
     );
@@ -192,11 +351,18 @@ test('two real fleet logins recover commands and hand over after physical stop',
       authorityTicket: ticket,
       repositoryHome: root,
       nativeRuntimeRoot: root,
+      mainModelPolicy: {
+        projectId,
+        provider,
+        model,
+        destination: baseURL + '/chat/completions',
+      },
       isolatedWrite: {
         gitPath: execFileSync('/usr/bin/which', ['git'], {
           encoding: 'utf8',
         }).trim(),
         fleetCommands: true,
+        fixtureTool: true,
       },
     });
     const api = await app.listen({ port: 0, host: '127.0.0.1' });
@@ -224,6 +390,9 @@ test('two real fleet logins recover commands and hand over after physical stop',
     const broker = app.getDecorator<() => OwnedWriteHandoff>(
       'isolatedWriteHandoff',
     )();
+    const arm = app.getDecorator<
+      (input: Omit<FixtureToolArm, 'broker'>) => void
+    >('armIsolatedNativeTool');
     function startLoop(
       scope: Parameters<OwnedWriteHandoff['execute']>[0],
       generation: string,
@@ -248,6 +417,7 @@ test('two real fleet logins recover commands and hand over after physical stop',
       return { execution, pid: () => pid };
     }
     const fleetUrl = '/?project=poc&view=fleet&requirement=' + demand;
+    const chatUrl = '/?project=poc&view=chat&requirement=' + demand;
 
     async function login(username: string) {
       const ctx = await browser.newContext({ baseURL: origin });
@@ -256,19 +426,43 @@ test('two real fleet logins recover commands and hand over after physical stop',
         data: { username, password },
       });
       expect(logged.status()).toBe(200);
-      const { session } = await (
+      const { session, user } = await (
         await ctx.request.get('/api/auth/get-session')
       ).json();
       const page = await ctx.newPage();
-      await page.goto(fleetUrl);
+      page.setDefaultTimeout(15000);
+      await page.goto(chatUrl);
+      const created = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname ===
+            `/api/requirements/${demand}/sessions`,
+      );
+      await page.getByRole('button', { name: '新建会话', exact: true }).click();
+      const mapped = await created;
+      expect(mapped.status()).toBe(200);
+      const { sessionId } = (await mapped.json()) as { sessionId: string };
+      expect(sessionId).toBeTruthy();
+      expect(
+        (
+          await lab.owner.query(
+            'select requirement_id, owner_id from native_session where id=$1',
+            [sessionId],
+          )
+        ).rows,
+      ).toEqual([{ requirement_id: demand, owner_id: user.id }]);
+      await page.getByRole('tab', { name: '编队', exact: true }).click();
       await expect(
         page.getByRole('heading', { name: '编队', exact: true }),
       ).toBeVisible();
-      return { ctx, page, loginId: session.id as string };
+      return { ctx, page, loginId: session.id as string, sessionId };
     }
     const a = await login('fleet_a');
     const b = await login('fleet_b');
     const tester = await login('fleet_viewer');
+    const { sessionId: aSession } = a;
+    const { sessionId: bSession } = b;
+    const { sessionId: viewerSession } = tester;
     const status = (side: typeof a) =>
       side.page.getByRole('status', { name: '写权状态' });
     const message = (side: typeof a) =>
@@ -531,6 +725,7 @@ test('two real fleet logins recover commands and hand over after physical stop',
       status: 'finished',
       result: { stop: 'confirmed' },
     });
+    expect(() => process.kill(-pid, 0)).toThrow(/ESRCH/);
     await expect
       .poll(originalStatus)
       .toMatchObject({ phase: 'released', run_id: null });
@@ -549,23 +744,121 @@ test('two real fleet logins recover commands and hand over after physical stop',
       requirementId: demand,
       sessionId: bSession,
     };
-    expect(
-      await broker.execute(bScope, {
-        generation: next.generation,
-        commandId: randomUUID(),
-        repositoryId: 'app',
-        request: {
-          tool: 'file',
-          operation: 'write',
-          path: 'sample.txt',
-          text: 'next writer',
-        },
-      }),
-    ).toMatchObject({
-      status: 'finished',
-      result: { status: 'ok', stop: 'confirmed' },
+    const promptPath = `/api/dsh/${demand}/native/api/session/prompt`;
+    const text = 'Synthetic browser prompt after the writer handoff';
+    let requestId: string | undefined;
+    await b.page.route(
+      '**' + promptPath,
+      async (route) => {
+        const input = route.request().postDataJSON().payload.args.request as {
+          sessionId: string;
+          requestId: string;
+          content: unknown;
+        };
+        expect(input).toMatchObject({
+          sessionId: bSession,
+          requestId: expect.any(String),
+          content: [{ type: 'text', text }],
+        });
+        const current = await originalStatus();
+        expect(current).toMatchObject({
+          generation: next.generation,
+          phase: 'held',
+          owner_id: successor,
+          auth_session_id: b.loginId,
+          native_session_id: bSession,
+          run_id: null,
+          context_version: next.context_version,
+        });
+        requestId = input.requestId;
+        arm({
+          scope: bScope,
+          requestId,
+          grant: {
+            generation: current.generation,
+            contextVersion: current.context_version,
+          },
+        });
+        await route.continue();
+      },
+      { times: 1 },
+    );
+    await b.page.getByRole('tab', { name: '对话', exact: true }).click();
+    await b.page
+      .getByRole('navigation', { name: '需求会话列表' })
+      .getByRole('button', { name: /^会话 \d+ · 本人$/ })
+      .click();
+    await b.page.getByLabel('消息', { exact: true }).fill(text);
+    const submitted = b.page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname === promptPath,
+    );
+    await b.page.getByRole('button', { name: '发送消息', exact: true }).click();
+    const promptResponse = await submitted;
+    expect(promptResponse.status()).toBe(200);
+    expect((await promptResponse.json()).result).toMatchObject({
+      ok: true,
+      value: { accepted: true },
     });
-    expect(await readFile(sample, 'utf8')).toBe('next writer');
+    await expect(b.page.getByText(reply, { exact: true })).toBeVisible();
+    expect(requestId).toEqual(expect.any(String));
+    expect(received).toHaveLength(2);
+    expect(received[0]).toMatchObject({
+      model,
+      tools: [{ type: 'function', function: { name: 'rdws_authority_probe' } }],
+    });
+    expect(received[1]?.model).toBe(model);
+    expect(received[1]?.tools ?? []).toEqual([]);
+    expect(received[1]?.messages.filter(({ role }) => role === 'tool')).toEqual(
+      [
+        {
+          role: 'tool',
+          tool_call_id: callId,
+          content: 'RDWS fixture worktree state: ok',
+        },
+      ],
+    );
+    const begins = controls.filter(({ operation }) => operation === 'begin');
+    expect(begins).toEqual([
+      expect.objectContaining({
+        sessionId: bSession,
+        requestId,
+        callId,
+        callSeq: expect.any(Number),
+      }),
+    ]);
+    const begun = begins[0]!;
+    expect(controls).toContainEqual(
+      expect.objectContaining({
+        operation: 'status',
+        commandId: begun.commandId,
+        sessionId: bSession,
+        requestId,
+        callId,
+        state: 'ok',
+      }),
+    );
+    const writes = await lab.owner.query(
+      "select command_id, result from command_receipt where scope=$1 and actor_id=$2 and operation='write.execute'",
+      ['requirement:' + demand, successor],
+    );
+    expect(writes.rows).toEqual([
+      {
+        command_id: begun.commandId,
+        result: expect.objectContaining({
+          status: 'finished',
+          result: {
+            status: 'ok',
+            stop: 'confirmed',
+            marker: 'released',
+            exitCode: 0,
+          },
+        }),
+      },
+    ]);
+    expect(await readFile(sample, 'utf8')).toBe('baseline|workbench-tool');
+    await b.page.getByRole('tab', { name: '编队', exact: true }).click();
     const replay = await a.ctx.request.post(commandPath(aSession), {
       headers: { origin, 'x-rdws-edit-session': a.loginId },
       data: releaseBody,
@@ -630,6 +923,83 @@ test('two real fleet logins recover commands and hand over after physical stop',
       result: { stop: 'confirmed' },
     });
     expect(await databaseOwner()).toBeNull();
+    expect(received).toHaveLength(2);
+    expect(await fingerprint(sources)).toBe(sourcesBefore);
+    expect(await readFile(sample, 'utf8')).toBe('baseline|workbench-tool');
+    const { events } = await journal(root, bSession);
+    const inserted = events
+      .filter((event) => event.type === 'agent/inbox/spliced')
+      .flatMap((event) => event.data.inserted ?? [])
+      .filter((message) => message.source?.rpcId === requestId);
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0]?.source?.principal?.userId).toBe(successor);
+    const calls = events.filter((event) => event.type === 'tool/call');
+    const results = events.filter((event) => event.type === 'tool/result');
+    expect(calls).toEqual([
+      expect.objectContaining({
+        seq: begun.callSeq,
+        data: expect.objectContaining({ callId, turn: 1, step: 1 }),
+      }),
+    ]);
+    expect(results).toEqual([
+      expect.objectContaining({
+        sourceEventSeqs: [begun.callSeq],
+        data: expect.objectContaining({
+          turn: 1,
+          step: 1,
+          message: expect.objectContaining({ toolCallId: callId }),
+        }),
+      }),
+    ]);
+    const evidence = (
+      await readFile(join(root, 'runtime', 'context-evidence.jsonl'), 'utf8')
+    )
+      .trim()
+      .split('\n')
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            sessionId: string;
+            phase: string;
+            contextVersion: number;
+            contentHash: string;
+            turn: number;
+            step: number;
+          },
+      )
+      .filter(
+        ({ sessionId, phase }) => sessionId === bSession && phase === 'request',
+      );
+    expect(
+      evidence.map(({ turn, step, contextVersion }) => ({
+        turn,
+        step,
+        contextVersion,
+      })),
+    ).toEqual([
+      { turn: 1, step: 1, contextVersion: next.context_version },
+      { turn: 1, step: 2, contextVersion: next.context_version },
+    ]);
+    for (const [index, proof] of evidence.entries()) {
+      const parts = received[index]!.messages.filter(
+        ({ role }) => role === 'user',
+      ).flatMap(({ content }) =>
+        Array.isArray(content)
+          ? content.map((part: { text?: unknown }) => part.text)
+          : [content],
+      );
+      expect(
+        parts.some(
+          (part) =>
+            typeof part === 'string' &&
+            createHash('sha256').update(part).digest('hex') ===
+              proof.contentHash,
+        ),
+      ).toBe(true);
+    }
+    expect(events.find((event) => event.type === 'turn/end')).toMatchObject({
+      data: { reason: { kind: 'completed' } },
+    });
   } finally {
     releaseGate?.release();
     closingGate?.release();
@@ -638,6 +1008,15 @@ test('two real fleet logins recover commands and hand over after physical stop',
       if (closing) await closing;
       else await app?.close();
     } finally {
+      NativeFixtureToolJob.prototype.control = control;
+      setDefaultCACertificates(originalCAs);
+      if (supplier) {
+        const listener = supplier;
+        await new Promise<void>((resolve) => {
+          listener.close(() => resolve());
+          listener.closeAllConnections();
+        });
+      }
       await trees?.close();
       await mirrors?.close();
       await source?.close();

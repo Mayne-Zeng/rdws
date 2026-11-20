@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { runtimeHome } from '@rdws/runtime-config';
 import { signGrant } from '@rdws/dsh/access';
-import { zstdDecompressSync, zstdCompressSync } from 'node:zlib';
+import { zstdCompressSync } from 'node:zlib';
+import { decodeJournal, journal } from '../helpers/native-journal.ts';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { buildApp } from '@rdws/server';
 import { createServer as createNetServer } from 'node:net';
@@ -15,38 +16,6 @@ import { fileURLToPath } from 'node:url';
 import { prepareSession } from '../helpers/auth-session.ts';
 import { readTestAccounts } from '../helpers/test-accounts.ts';
 import { createTestPool } from '../helpers/test-pool.ts';
-function decodeJournal(bytes: Buffer) {
-  let offset = 0,
-    text = '';
-  while (offset < bytes.length) {
-    const result = zstdDecompressSync(bytes.subarray(offset), {
-      info: true,
-    }) as unknown as { buffer: Buffer; engine: { bytesWritten: number } };
-    if (result.engine.bytesWritten <= 0)
-      throw new Error('Journal decoder made no progress');
-    offset += result.engine.bytesWritten;
-    text += result.buffer.toString();
-  }
-  return text
-    .trim()
-    .split('\n')
-    .map((s) => JSON.parse(s));
-}
-async function journal(root: string, sessionId: string) {
-  const base = join(root, 'runtime/dsh/project-poc/sessions');
-  const files = await readdir(base, { recursive: true });
-  const file = files.find(
-    (p) => p.split('/').includes(sessionId) && p.endsWith('.jsonl.zstd'),
-  );
-  if (!file) throw new Error('Native journal not persisted');
-  const bytes = await readFile(join(base, file));
-  const rows = decodeJournal(bytes);
-  return {
-    bytes,
-    header: rows[0],
-    events: rows.filter((r) => Number.isSafeInteger(r.seq)),
-  };
-}
 async function requestCount(root: string, ids: string[]) {
   return (await readFile(join(root, 'runtime/context-evidence.jsonl'), 'utf8'))
     .trim()

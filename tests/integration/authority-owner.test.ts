@@ -27,6 +27,8 @@ const protectedTables = [
   'task',
   'command_receipt',
   'requirement_write_lease',
+  'session_model_selection',
+  'session_prompt_dispatch',
 ];
 let lab: Awaited<ReturnType<typeof authorityDatabase>>;
 const password = secret();

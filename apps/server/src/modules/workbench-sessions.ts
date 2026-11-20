@@ -11,6 +11,7 @@ import {
 import { schema } from '@rdws/db';
 import { and, eq, sql } from 'drizzle-orm';
 import { projectSessionExecution, sessionPage } from '@rdws/dsh/sessions';
+import { readPilotModelOptions } from './native-projects.ts';
 import { isDemandPreset } from '@rdws/dsh/web';
 import { isRecord, onlyKeys } from '@rdws/dsh/access';
 import {
@@ -20,6 +21,7 @@ import {
   sessionTemplatePath,
   sessionAnchorsPath,
   sessionExecutionPath,
+  sessionModelSelectionPath,
 } from './workbench-paths.ts';
 import { fail, type WorkbenchRuntime } from './workbench-runtime.ts';
 import { isMicrosecondTimestamp } from './workbench-audit.ts';
@@ -48,14 +50,91 @@ export function registerSessions(
     confirmAccess,
     db,
     grant,
+    modelSelection,
     prepared,
     projects,
     ready,
+    readyAccess,
     requestDemandScope,
     revoke,
     stale,
+    verifyEditLogin,
     worktreeReady,
   } = workbench;
+
+  if (modelSelection) {
+    const { policy, store } = modelSelection;
+    async function selectionScope(request: FastifyRequest) {
+      const { id, sessionId } = request.params as {
+        id: string;
+        sessionId: string;
+      };
+      const original = await access(request.headers, id);
+      if (original.item.projectId !== policy.projectId)
+        fail(404, '会话选模暂不可用');
+      verifyEditLogin(request, original.who.authSessionId, true);
+      const current = () => {
+        if (stale(original)) fail(401, '授权已变化');
+      };
+      return {
+        original,
+        current,
+        scope: {
+          who: original.who,
+          projectId: policy.projectId,
+          requirementId: id,
+          sessionId,
+        },
+      };
+    }
+    app.get(
+      sessionModelSelectionPath,
+      { exposeHeadRoute: false },
+      async (request, reply) => {
+        reply.header('cache-control', 'no-store');
+        const { original, current, scope } = await selectionScope(request);
+        const saved = await store.read(scope, current);
+        await confirmAccess(request.headers, original);
+        return { selection: saved };
+      },
+    );
+    app.post(sessionModelSelectionPath, async (request, reply) => {
+      reply.header('cache-control', 'no-store');
+      const data = request.body;
+      if (
+        !isRecord(data) ||
+        !onlyKeys(data, ['commandId', 'provider', 'model']) ||
+        typeof data.commandId !== 'string' ||
+        !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(data.commandId) ||
+        typeof data.provider !== 'string' ||
+        !data.provider ||
+        data.provider.length > 160 ||
+        typeof data.model !== 'string' ||
+        !data.model ||
+        data.model.length > 160
+      )
+        fail(400, '会话选模命令格式不正确');
+      const { original, current, scope } = await selectionScope(request);
+      const saved = await store.save(
+        scope,
+        {
+          commandId: data.commandId,
+          provider: data.provider,
+          model: data.model,
+        },
+        current,
+        async () => {
+          const preparedScope = await readyAccess(request.headers, original);
+          return readPilotModelOptions(
+            preparedScope.runtime,
+            grant(preparedScope),
+          );
+        },
+      );
+      await confirmAccess(request.headers, original);
+      return { selection: saved };
+    });
+  }
 
   app.get(sessionsPath, async (request) => {
     const scope = await access(
@@ -286,6 +365,11 @@ export function registerSessions(
   ) {
     const requirementId = (request.params as { id: string }).id;
     const scope = await access(request.headers, requirementId);
+    if (
+      sourceSessionId &&
+      modelSelection?.policy.projectId === scope.item.projectId
+    )
+      fail(403, '隔离选模暂不支持派生会话');
     const assertOpen = () => {
       if (stale(scope)) fail(401, '授权已变化');
     };

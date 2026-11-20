@@ -11,6 +11,10 @@ import {
 } from '@rdws/dsh/web';
 import { registerWorkbench } from './modules/workbench.ts';
 import { mainModelPolicy } from './modules/model-egress-policy.ts';
+import {
+  validateSessionModelStorage,
+  type SessionModelPilot,
+} from './modules/session-model-selection.ts';
 import type {
   FixtureToolArm,
   FixtureToolAssembly,
@@ -36,6 +40,7 @@ export function buildApp(options: {
   nativeProfiles?: ReadonlyMap<string, string>;
   authorityTicket?: string;
   mainModelPolicy?: unknown;
+  sessionModelPilot?: { alternateModel: string; databaseFixture: string };
   isolatedWrite?: { gitPath: string; fixtureTool?: true; fleetCommands?: true };
 }) {
   const modelEgress = resolveNativeModelEgress(
@@ -73,6 +78,55 @@ export function buildApp(options: {
   const policy = mediated
     ? mainModelPolicy(options.mainModelPolicy)
     : undefined;
+  let sessionModelPilot: SessionModelPilot | undefined;
+  const requestedPilot = options.sessionModelPilot;
+  if (requestedPilot !== undefined) {
+    const alternate = requestedPilot?.alternateModel;
+    let database: URL | undefined;
+    try {
+      database = new URL(options.databaseUrl);
+    } catch {
+      database = undefined;
+    }
+    if (
+      process.env.RDWS_MODE !== 'test' ||
+      process.platform !== 'darwin' ||
+      !policy ||
+      !ticket ||
+      isolatedWrite ||
+      policy.firstMessageTitle ||
+      new URL(policy.destination).hostname !== '127.0.0.1' ||
+      !database ||
+      !['postgres:', 'postgresql:'].includes(database.protocol) ||
+      database.hostname !== '127.0.0.1' ||
+      database.pathname !== '/rdws_test' ||
+      database.username !== 'rdws_test_app' ||
+      !database.port ||
+      !!database.search ||
+      !!database.hash ||
+      !options.nativeRuntimeRoot ||
+      !isAbsolute(options.nativeRuntimeRoot) ||
+      !options.repositoryHome ||
+      !isAbsolute(options.repositoryHome) ||
+      typeof requestedPilot?.databaseFixture !== 'string' ||
+      !requestedPilot.databaseFixture ||
+      requestedPilot.databaseFixture.length > 128 ||
+      typeof alternate !== 'string' ||
+      alternate.length < 1 ||
+      alternate.length > 160 ||
+      alternate === policy.model
+    )
+      throw new Error(
+        'Session model pilot requires an isolated mediated test runtime',
+      );
+    sessionModelPilot = {
+      projectId: policy.projectId,
+      provider: policy.provider,
+      defaultModel: policy.model,
+      models: new Set([policy.model, alternate]),
+    };
+  }
+  const managedWork = !!isolatedWrite || !!sessionModelPilot;
   if (
     fixtureTool &&
     (!policy ||
@@ -99,8 +153,8 @@ export function buildApp(options: {
   const database = connectDatabase(
     options.databaseUrl,
     proof,
-    isolatedWrite ? 3_000 : undefined,
-    !!isolatedWrite,
+    managedWork ? 3_000 : undefined,
+    managedWork,
   );
   let ownedWrite: ReturnType<typeof createOwnedWriteHandoff> | undefined;
   const fixture: FixtureToolAssembly | undefined = fixtureTool ? {} : undefined;
@@ -113,6 +167,7 @@ export function buildApp(options: {
   const app = Fastify({
     bodyLimit: 64 * 1024,
     logger: false,
+    ...(sessionModelPilot && { forceCloseConnections: true }),
   }).withTypeProvider<TypeBoxTypeProvider>();
   let authority: string | null = null;
   let stopping: Promise<undefined> | undefined;
@@ -127,10 +182,10 @@ export function buildApp(options: {
     void pending.then(remove, remove);
     return pending;
   }
-  const checked = isolatedWrite
+  const checked = managedWork
     ? checkedWriteTransaction(database.pool)
     : undefined;
-  if (isolatedWrite)
+  if (managedWork)
     app.addHook('onRoute', (route) => {
       if (route.websocket) return;
       const handler = route.handler;
@@ -195,6 +250,15 @@ export function buildApp(options: {
           throw new Error('Write handoff workbench could not be assembled');
         await validateWriteHandoffDatabase(database);
       }
+      if (sessionModelPilot) {
+        if (closing || !prepared)
+          throw new Error('Session model pilot closed before startup');
+        await validateWriteHandoffDatabase(database);
+        await validateSessionModelStorage(
+          database,
+          requestedPilot!.databaseFixture,
+        );
+      }
       authority = await acquireAuthority(
         database.pool,
         modelEgress !== 'direct',
@@ -202,7 +266,7 @@ export function buildApp(options: {
       );
       if ((mediated || isolatedWrite) && !authority)
         throw new Error('Mediated Native database ownership was not confirmed');
-      if (isolatedWrite && closing)
+      if (managedWork && closing)
         throw new Error('Write handoff closed during startup');
       if (isolatedWrite && prepared && authority)
         ownedWrite = createOwnedWriteHandoff(
@@ -214,7 +278,7 @@ export function buildApp(options: {
           prepared.writeLoginClosed,
         );
     } catch (error) {
-      if (isolatedWrite) {
+      if (managedWork) {
         try {
           await workbench?.closeWorkflows();
         } finally {
@@ -225,11 +289,11 @@ export function buildApp(options: {
       throw error;
     }
   });
-  if (!isolatedWrite) app.addHook('onClose', closeDatabase);
+  if (!managedWork) app.addHook('onClose', closeDatabase);
   app.addHook('onRequest', async (request, reply) => {
     if (isWriteAuthorityCommand(request))
       reply.header('cache-control', 'no-store');
-    if (isolatedWrite && closing)
+    if (managedWork && closing)
       return reply.code(503).send({ error: '共享运行正在关闭' });
     if (request.method === 'POST' && request.headers.origin !== options.origin)
       return reply.code(403).send({ error: '请求来源不受信任' });
@@ -302,9 +366,10 @@ export function buildApp(options: {
       policy,
       () => ownedWrite,
       checked,
-      isolatedWrite ? trackWork : undefined,
+      managedWork ? trackWork : undefined,
       fixture,
       isolatedWrite?.fleetCommands === true,
+      sessionModelPilot,
     );
   });
   app.setErrorHandler((error: FastifyError, _request, reply) => {
@@ -330,7 +395,7 @@ export function buildApp(options: {
     return (stopping ??= (async () => {
       closing = true;
       ownedWrite?.stopAdmission();
-      if (isolatedWrite) {
+      if (managedWork) {
         const results = await Promise.allSettled([
           workbench?.closeWorkflows(),
           closeFastify(),

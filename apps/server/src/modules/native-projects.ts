@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { sessionRpc } from '@rdws/dsh/sessions';
+import { publicModelCatalogValue } from '@rdws/dsh/wire';
 import {
   LEGACY_POC_PROJECT_ID,
   NativeWebHost,
@@ -20,6 +22,11 @@ import {
   type FixtureToolAssembly,
 } from './native-fixture-tool-job.ts';
 import { createSessionOperations } from './session-operations.ts';
+import type {
+  SessionModelOptions,
+  SessionModelPilot,
+} from './session-model-selection.ts';
+import type { CheckedWriteTransaction } from './checked-write-transaction.ts';
 import {
   prepareMainModelBody,
   prepareTitleModelBody,
@@ -29,6 +36,36 @@ import {
 type Business = ReturnType<typeof createBusiness>;
 type Database = Parameters<typeof createSessionOperations>[0];
 const MAX_CONTEXT_READS = 4;
+
+export async function readPilotModelOptions(
+  runtime: ProjectRuntime,
+  grant: Parameters<typeof sessionRpc>[1],
+): Promise<SessionModelOptions> {
+  const { native, modelPilot: policy } = runtime;
+  if (!policy || native.signal.aborted)
+    businessError(503, '会话模型目录暂不可用');
+  const catalog = await sessionRpc(
+    native,
+    grant,
+    'session/modelCatalog',
+    undefined,
+    AbortSignal.any([native.signal, AbortSignal.timeout(2000)]),
+  )
+    .then(publicModelCatalogValue)
+    .catch(() => undefined);
+  if (!catalog) businessError(503, '会话模型目录暂不可用');
+  const models = catalog.routableProviders.includes(policy.provider)
+    ? (catalog.groups
+        .find(({ id }) => id === policy.provider)
+        ?.models.filter(({ id }) => policy.models.has(id))
+        .map(({ id }) => id) ?? [])
+    : [];
+  return {
+    provider: policy.provider,
+    models: new Set(models),
+    isCurrent: () => !native.signal.aborted,
+  };
+}
 
 export function createProjectContextReader(
   business: Pick<Business, 'readWithDeadline'>,
@@ -68,21 +105,30 @@ export function createProjectRuntimes(
   modelEgress: NativeModelEgress = 'direct',
   mainPolicy?: MainModelPolicy,
   fixture?: FixtureToolAssembly,
+  sessionModelPilot?: SessionModelPilot,
+  pilotTransaction?: CheckedWriteTransaction,
 ) {
+  if (sessionModelPilot && !pilotTransaction)
+    throw new Error('Session model pilot requires a checked model authority');
   const pending = new Map<string, Promise<ProjectRuntime>>();
   const live = new Map<string, ProjectRuntime>();
   let closing = false;
   const readContext = createProjectContextReader(business);
   function register(native: NativeWebHost, policy?: MainModelPolicy) {
     const project = native.projectId;
+    const pilot =
+      policy && sessionModelPilot?.projectId === project
+        ? sessionModelPilot
+        : undefined;
     let offered: { run: RunBinding; job: NativeFixtureToolJob } | undefined;
     if (fixture && policy) native.enableFixtureToolProbe();
     const runtime: ProjectRuntime = {
       native,
       catalogModel: policy && {
         provider: policy.provider,
-        model: policy.model,
+        models: pilot?.models ?? new Set([policy.model]),
       },
+      modelPilot: pilot,
       sessions: createSessionOperations(db, business, native),
       runs: new ContextRuns(
         native.contextGeneration,
@@ -112,6 +158,32 @@ export function createProjectRuntimes(
               )
           : undefined,
         policy?.firstMessageTitle === true,
+        undefined,
+        pilot && policy
+          ? {
+              ...pilot,
+              destination: policy.destination,
+              isCurrent: () => !closing && !native.signal.aborted,
+              lock: (rows, write) => {
+                const [first, ...related] = rows;
+                if (!first) businessError(403, '原消息的模型派发绑定已失效');
+                const who = (row: typeof first) => ({
+                  userId: row.actorId,
+                  authSessionId: row.authSessionId,
+                });
+                return business.withModelAuthority(
+                  who(first),
+                  project,
+                  first.requirementId,
+                  first.nativeSessionId,
+                  related.map(who),
+                  write,
+                  undefined,
+                  { checked: pilotTransaction!, dispatches: rows },
+                );
+              },
+            }
+          : undefined,
       ),
       inFlightPrompts: new Set<string>(),
       acceptedPrompts: new Map<string, number>(),
@@ -202,9 +274,13 @@ export function createProjectRuntimes(
           undefined,
           (body, request) => {
             const proof = runtime.runs.fixtureWire(request);
+            const model = runtime.modelPilot
+              ? runtime.runs.pilotWireModel(request)
+              : mainPolicy.model;
+            if (!model) return;
             const normalized = prepareMainModelBody(
               body,
-              mainPolicy.model,
+              model,
               proof?.projection,
             );
             if (normalized && proof)
@@ -232,6 +308,7 @@ export function createProjectRuntimes(
           {
             routes: { main: mainPolicy.destination },
             firstMessageTitle: mainPolicy.firstMessageTitle,
+            sessionModelPilot: sessionModelPilot?.projectId === project,
             handle: (request) =>
               (request.call.purpose === 'session-title' && titleRelay
                 ? titleRelay
@@ -306,7 +383,8 @@ export function createProjectRuntimes(
 }
 export interface ProjectRuntime {
   native: NativeWebHost;
-  catalogModel?: Pick<MainModelPolicy, 'provider' | 'model'>;
+  catalogModel?: { provider: string; models: ReadonlySet<string> };
+  modelPilot?: SessionModelPilot;
   sessions: ReturnType<typeof createSessionOperations>;
   runs: ContextRuns;
   inFlightPrompts: Set<string>;

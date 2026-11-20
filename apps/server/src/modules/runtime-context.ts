@@ -18,6 +18,10 @@ import {
 import type { FixtureToolProjection } from './model-egress-policy.ts';
 import type { AttachmentManifest } from './model-attachment-egress.ts';
 import { readWorkingDirectoryEdits } from './model-attachment-evidence.ts';
+import type {
+  PromptDispatch,
+  SessionModelPilot,
+} from './session-model-selection.ts';
 type Detail = Awaited<ReturnType<ReturnType<typeof createBusiness>['read']>>;
 export function contextSnapshot(data: Detail) {
   const r = data.requirement;
@@ -125,6 +129,7 @@ type Run = RunBinding & {
   turn?: number;
   submitted?: boolean;
   titleCancelled?: true;
+  dispatch?: PromptDispatch;
 };
 type EffectiveModel = {
   provider: string;
@@ -132,6 +137,14 @@ type EffectiveModel = {
   revision: string;
   routes: Readonly<Record<string, string>>;
   isCurrent(): boolean;
+};
+type PilotAuthority = SessionModelPilot & {
+  destination: string;
+  isCurrent(): boolean;
+  lock<T>(
+    dispatch: readonly PromptDispatch[],
+    write: (validBefore: number) => T,
+  ): Promise<T>;
 };
 type StepMarker = {
   sequence: number;
@@ -247,6 +260,7 @@ export class ContextRuns {
       AttachmentManifest,
       'projectId' | 'credentialGeneration'
     >,
+    private modelPilot?: PilotAuthority,
   ) {
     if (attachmentPolicy)
       this.attachmentPolicy = Object.freeze({ ...attachmentPolicy });
@@ -257,6 +271,7 @@ export class ContextRuns {
     sessionId: string,
     requestId: string,
     peerNonce: string,
+    dispatch?: PromptDispatch,
   ): RunBinding {
     if (
       this.closing(who.authSessionId, who.userId, requirementId) ||
@@ -264,6 +279,21 @@ export class ContextRuns {
       requestId.length > 128
     )
       businessError(403, '当前运行身份无效');
+    if (
+      !!this.modelPilot !== !!dispatch ||
+      (dispatch &&
+        (dispatch.state !== 'pending' ||
+          dispatch.hostGeneration !== this.generation ||
+          dispatch.nativeSessionId !== sessionId ||
+          dispatch.requestId !== requestId ||
+          dispatch.requirementId !== requirementId ||
+          dispatch.projectId !== this.modelPilot?.projectId ||
+          dispatch.actorId !== who.userId ||
+          dispatch.authSessionId !== who.authSessionId ||
+          dispatch.peerNonce !== peerNonce ||
+          (dispatch.leaseExpiresAt?.getTime() ?? 0) <= Date.now()))
+    )
+      return invalidModel();
     const now = Date.now();
     for (const [id, run] of this.runs)
       if (run.expiresAt <= now) this.discard(id);
@@ -290,6 +320,7 @@ export class ContextRuns {
       peerNonce,
       who,
       expiresAt: now + 30 * 60 * 1000,
+      dispatch,
     };
     this.runs.set(run.runId, run);
     return this.binding(run);
@@ -647,6 +678,22 @@ export class ContextRuns {
     if (step && !step.closed && request.call.bindingId === step.id)
       return step.fixtureWire;
   }
+  pilotWireModel(request: ModelAttempt) {
+    if (
+      !this.modelPilot ||
+      request.routeId !== 'main' ||
+      request.call.purpose !== undefined
+    )
+      return;
+    const step = this.modelSteps.get(request.call.sessionId ?? '');
+    if (
+      step &&
+      !step.closed &&
+      request.call.bindingId === step.id &&
+      step.selection?.isCurrent()
+    )
+      return step.selection.model;
+  }
   private async authorizeTitleWire(
     request: ModelAttempt,
     write: (validBefore: number) => ModelWireOutcome,
@@ -810,7 +857,7 @@ export class ContextRuns {
       step.fixtureWire !== fixtureWire ||
       (fixtureWire && !this.lockModelAuthority) ||
       !selection ||
-      !this.selectModel ||
+      (!this.selectModel && !this.modelPilot) ||
       !request.isCurrent() ||
       signal.aborted ||
       call.purpose !== undefined ||
@@ -829,18 +876,17 @@ export class ContextRuns {
     step.attempts.add(attemptId);
     const run = step.batch[0]!;
     const related = step.batch.slice(1).map(({ who }) => who);
-    const shared = this.lockModelAuthority
-      ? undefined
-      : await this.read(run.who, run.requirementId, run.sessionId, related);
-    const fresh = await this.selectModel(
-      run.who,
-      run.requirementId,
-      run.sessionId,
-    );
+    const shared =
+      this.lockModelAuthority || this.modelPilot
+        ? undefined
+        : await this.read(run.who, run.requirementId, run.sessionId, related);
+    const fresh = this.modelPilot
+      ? selection
+      : await this.selectModel!(run.who, run.requirementId, run.sessionId);
     const finalize = (validBefore: number) => {
       const deadline = Math.min(
         validBefore,
-        fixtureWire ? (step.validBefore ?? 0) : Infinity,
+        fixtureWire || this.modelPilot ? (step.validBefore ?? 0) : Infinity,
         attachmentDeadline,
         ...step.batch.map(({ expiresAt }) => expiresAt),
       );
@@ -867,6 +913,11 @@ export class ContextRuns {
       fixtureWire?.job.assertWireLease();
       return send(step, deadline);
     };
+    if (this.modelPilot)
+      return this.modelPilot.lock(
+        step.batch.map(({ dispatch }) => dispatch!),
+        finalize,
+      );
     if (this.lockModelAuthority)
       return this.lockModelAuthority(
         run.who,
@@ -877,6 +928,67 @@ export class ContextRuns {
         fixtureWire?.job.wireLease,
       );
     return finalize(shared!.validBefore);
+  }
+  private selectedPilotStep(
+    input: Record<string, unknown>,
+    step: ModelStep,
+    previous?: ModelStep,
+  ) {
+    const pilot = this.modelPilot!;
+    const claimed = input.modelNewRunIds;
+    if (
+      !Array.isArray(claimed) ||
+      claimed.length > 16 ||
+      claimed.some((id) => typeof id !== 'string') ||
+      new Set(claimed).size !== claimed.length
+    )
+      return invalidModel();
+    const ordered = [...step.batch.slice(1), step.batch[0]!];
+    const continues =
+      previous &&
+      previous.agentGeneration === step.agentGeneration &&
+      previous.turn === step.turn;
+    if (
+      continues
+        ? !previous.selection || step.stamp.step !== previous.stamp.step + 1
+        : step.stamp.step !== 1 || !claimed.length
+    )
+      return invalidModel();
+    const prefix = continues
+      ? [...previous.batch.slice(1), previous.batch[0]!].map(
+          ({ runId }) => runId,
+        )
+      : [];
+    const expected = [...prefix, ...claimed];
+    if (
+      expected.length !== ordered.length ||
+      new Set(expected).size !== expected.length ||
+      ordered.some(({ runId }, index) => runId !== expected[index])
+    )
+      return invalidModel();
+    const added = ordered.slice(prefix.length);
+    if (!added.length) return previous!.selection!;
+    const selected = added[0]!.dispatch;
+    if (
+      !selected ||
+      selected.provider !== pilot.provider ||
+      !pilot.models.has(selected.model) ||
+      added.some(
+        ({ dispatch }) =>
+          !dispatch ||
+          dispatch.provider !== selected.provider ||
+          dispatch.model !== selected.model ||
+          dispatch.selectionRevision !== selected.selectionRevision,
+      )
+    )
+      return invalidModel();
+    return {
+      provider: selected.provider,
+      model: selected.model,
+      revision: selected.selectionRevision,
+      routes: { main: pilot.destination },
+      isCurrent: pilot.isCurrent,
+    };
   }
   async handle(
     input: unknown,
@@ -1058,7 +1170,7 @@ export class ContextRuns {
       const stamp = parseStepMarker(input.modelStep);
       previous = this.modelSteps.get(run.sessionId);
       if (
-        !this.selectModel ||
+        (!this.selectModel && !this.modelPilot) ||
         new Set(batch).size !== batch.length ||
         (previous &&
           (stamp.sequence <= previous.stamp.sequence ||
@@ -1097,7 +1209,9 @@ export class ContextRuns {
     );
     const selected =
       modelStep &&
-      (await this.selectModel!(run.who, run.requirementId, run.sessionId));
+      (this.modelPilot
+        ? this.selectedPilotStep(input, modelStep, previous)
+        : await this.selectModel!(run.who, run.requirementId, run.sessionId));
     if (!(validBefore > Date.now()) || !this.current(batch))
       businessError(403, '当前运行绑定已失效');
     let result = value;

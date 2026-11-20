@@ -112,7 +112,7 @@ export async function sessionRpc(
   host: NativeWebHost,
   grant: string | Omit<Grant, 'aud' | 'issuedAt' | 'expiresAt' | 'nonce'>,
   action: string,
-  request: Record<string, unknown>,
+  request: Record<string, unknown> | undefined,
   signal?: AbortSignal,
 ) {
   const rpcId = randomUUID();
@@ -124,7 +124,7 @@ export async function sessionRpc(
       type: 'client-request',
       rpcId,
       method: action,
-      payload: { args: { request } },
+      payload: { args: request === undefined ? {} : { request } },
     }),
   });
   const value: unknown = await response.json();

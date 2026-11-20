@@ -196,7 +196,7 @@
   - 已本地交付子项：[需求背景维护](02-directory-and-engineering-design.html#t12-background-evidence-20261120)。当前有权编辑者在上下文页单独保存，Native 下一步读取当前背景，旧冻结快照保持原样。双面复审、真实 PostgreSQL 旧行迁移和整仓 309 项通过；浏览器 46 项首轮通过，两项超时复跑通过，另有 Native 拒绝及超时用例 2 项通过。
   - 来源：I3-CONTEXT、D21；已有上下文同步契约。
 
-- [ ] **T13 · 模型与供应商管理**（进行中：文本主推理、受管目录及首消息标题通过本机验证，待选模、附件与具名部署）
+- [ ] **T13 · 模型与供应商管理**（进行中：本人会话选模已通过隔离验证，待正式界面、分层策略、派生、附件与具名部署）
   - 说明：适配 DSH 原生配置界面和授权作用域，支持平台、项目和个人的分层选择。
   - 可验收目标：配置使用原生 Provider／Profile／Credentials；项目只使用允许集合；个人只在允许范围选择本次会话模型；平台锁定项不能被下级覆盖；普通 DTO、日志与页面不暴露凭据；不另建模型调用权威。
   - 已确认的选模验收：本人可在同一会话反复选择允许的模型，在下次本人有权发送时重验并应用。已选模型被停用或移出允许集合时，保留待发送输入，提示重新选择可用模型，由用户再次发送，无自动默认回退。验收分别核对保存、实际 Native 生效、撤权和其他会话隔离。详见[时点和验收](02-directory-and-engineering-design.html#t13-send-time-acceptance-20261118)。
@@ -247,7 +247,8 @@
   - 实现前核对：[Native 首消息标题的来源](02-directory-and-engineering-design.html#t13-title-origin-evidence-20261120)。独立技术裁决及安装包内存探针确认标题插件作用域内的实际调用可与原始消息序列关联。
   - 实现前核对：[完整领取后的原生选模时点](02-directory-and-engineering-design.html#t13-selection-boundary-evidence-20261120)。锁定 Native 在同一轮的下一步按完整同修订批次命中目标模型。不同修订同批终态为阻止，即使模型相同，供应商第二次 HTTP 仍为零。独立复审、反例和 5 项原生邻域通过。该探针为保存、发送授权和派生提供实现依据。
   - 实现前核对：[原提示词接纳的原生只读证据](02-directory-and-engineering-design.html#t13-prompt-observation-evidence-20261120)。活动会话显式刷盘后核对物理序号，冷启查证无 Agent 创建、零日志变动、供应商零新增，并排除继承的输入和换 Peer。两项故障反例和原生邻域 5 项通过。
-  - 已复审方案：[保存本人会话选模并在发送时生效](02-directory-and-engineering-design.html#t13-saved-session-model-plan-20261120)。第三轮 A/B 均通过，明确持久原票据、只读原键查证、当步新增和同轮累计原登录，以及试点派生和回退。共享 PG 池完成独立复审与同库整仓后启动实施。
+  - 已复审方案：[保存本人会话选模并在发送时生效](02-directory-and-engineering-design.html#t13-saved-session-model-plan-20261120)。第三轮 A/B 均通过，明确持久原票据、只读原键查证、当步新增和同轮累计原登录，以及试点派生和回退。共享 PG 池已完成独立复审与同库验证。
+  - 已本地交付隔离子项：[本人会话选模](02-directory-and-engineering-design.html#t13-session-model-pilot-evidence-20261120)。真实 BFF 保存与读回、0014 升级至 0015、锁版 Native 按原提示词选择修订发送至两个回环模型。已验证原键失答、实际退避、撤权和关停。定点两项、整仓 343 项（1 项既有条件跳过）、Chromium 51 项、双面复审及静态校验通过。固定切点派生仍需持久首写证据。
   - 已整合工程子项：[附件清单与图片准入分支](02-directory-and-engineering-design.html#t13-local-branch-consolidation-20261120)。附件来源证明、SDK 图片说明投影、工作目录投影及新选图片原登录准入已合入 `main`。双面复审、88 项邻域及静态检查通过。正式图片入口、历史复用、选模和具名部署仍待继续验收。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）

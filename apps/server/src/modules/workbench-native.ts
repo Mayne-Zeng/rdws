@@ -1,8 +1,15 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import websocket from '@fastify/websocket';
 import WebSocket from 'ws';
-import { businessError } from './business.ts';
-import { type ProjectRuntime } from './native-projects.ts';
+import { businessError, digestOf } from './business.ts';
+import {
+  readPilotModelOptions,
+  type ProjectRuntime,
+} from './native-projects.ts';
+import type {
+  PromptDispatch,
+  SessionModelOptions,
+} from './session-model-selection.ts';
 import { type RunBinding } from './runtime-context.ts';
 import { actionAllowed, isRecord, targetSession } from '@rdws/dsh/access';
 import {
@@ -51,7 +58,7 @@ function publicModelCatalog(
           !catalog.routableProviders.includes(group.id)
         )
           return [];
-        const models = group.models.filter(({ id }) => id === allowed.model);
+        const models = group.models.filter(({ id }) => allowed.models.has(id));
         return models.length ? [{ ...group, models }] : [];
       });
       return {
@@ -70,6 +77,14 @@ function publicModelCatalog(
   );
 }
 
+function activatesFollow(action: string, args: Record<string, unknown>) {
+  return (
+    action === 'session/follow' &&
+    isRecord(args.request) &&
+    args.request.activate === true
+  );
+}
+
 export async function registerNativeTransport(
   app: FastifyInstance,
   workbench: WorkbenchRuntime,
@@ -84,7 +99,9 @@ export async function registerNativeTransport(
     isStopping,
     lease,
     loginBinding,
+    modelSelection,
     nativeCarrier,
+    projects,
     readyAccess,
     revoke,
     stale,
@@ -137,6 +154,269 @@ export async function registerNativeTransport(
       await confirmRunCancellation(runtime, runId);
     } catch {
       return;
+    }
+  }
+
+  async function pilotPrompt(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    original: Access,
+    carrier: ReturnType<WorkbenchRuntime['nativeCarrier']>,
+  ) {
+    const mode = modelSelection!;
+    reply.header('cache-control', 'no-store');
+    const body = request.body;
+    if (
+      !isRecord(body) ||
+      body.type !== 'client-request' ||
+      body.method !== 'session/prompt' ||
+      typeof body.rpcId !== 'string' ||
+      !body.rpcId ||
+      body.rpcId.length > 128 ||
+      !isRecord(body.payload) ||
+      !isRecord(body.payload.args) ||
+      !isRecord(body.payload.args.request)
+    )
+      fail(400, '会话请求身份无效');
+    const input = body.payload.args.request;
+    if (
+      typeof input.sessionId !== 'string' ||
+      !input.sessionId ||
+      typeof input.requestId !== 'string' ||
+      !input.requestId ||
+      input.requestId.length > 128 ||
+      !Array.isArray(input.content) ||
+      !input.content.length ||
+      !input.content.every(
+        (part) =>
+          isRecord(part) &&
+          part.type === 'text' &&
+          typeof part.text === 'string',
+      )
+    )
+      fail(400, '隔离选模仅支持文本消息');
+    const { sessionId, requestId } = input;
+    const actionScope = {
+      who: original.who,
+      projectId: original.item.projectId,
+      requirementId: original.item.id,
+      sessionId,
+    };
+    const current = () => {
+      if (stale(original) || isStopping()) fail(401, '授权已变化');
+    };
+    const accepted = () => ({
+      type: 'server-response',
+      rpcId: body.rpcId,
+      result: { ok: true, value: { accepted: true } },
+    });
+    const promptKey = { requestId, inputDigest: digestOf(input) };
+    const prior = await mode.store.readPrompt(actionScope, promptKey, current);
+    if (prior?.state === 'accepted') {
+      await confirmAccess(request.headers, original);
+      current();
+      return reply.send(accepted());
+    }
+    const runtime = await projects
+      .get(actionScope.projectId)
+      .catch((error: unknown) => {
+        if (prior?.state === 'pending') fail(409, '原消息接纳状态尚待核对');
+        throw error;
+      });
+    const { native, runs, abandonedRuns, inFlightPrompts } = runtime;
+    if (runtime.modelPilot !== mode.policy || !original.item.nativeWorkspaceId)
+      fail(403, '当前会话选模范围无效');
+    if (
+      !actionAllowed(
+        {
+          ...grant({ ...original, runtime }),
+          aud: native.audience,
+          issuedAt: Date.now(),
+          expiresAt: Date.now() + 20000,
+          nonce: 'bff',
+        },
+        'session/prompt',
+        body.payload.args,
+      )
+    )
+      fail(403, '无权执行该会话操作');
+    const key = JSON.stringify([sessionId, requestId]);
+    if (inFlightPrompts.has(key)) fail(409, '原消息正在提交，请稍后核对');
+    inFlightPrompts.add(key);
+    const canSend = () => {
+      current();
+      if (native.signal.aborted) fail(503, '原生会话暂不可用');
+    };
+    const transfer = {
+      ...original.who,
+      requirementId: actionScope.requirementId,
+      projectId: actionScope.projectId,
+      controller: new AbortController(),
+      revoked: false,
+    };
+    transfers.add(transfer);
+    let pendingRun: RunBinding | undefined;
+    async function observe(dispatch: PromptDispatch) {
+      if (
+        !(await native.start().then(
+          () => true,
+          () => false,
+        ))
+      )
+        return false;
+      const value = await native
+        .control('session.prompt-observation', {
+          requirementId: dispatch.requirementId,
+          sessionId: dispatch.nativeSessionId,
+          workspaceId: original.item.nativeWorkspaceId,
+          userId: dispatch.actorId,
+          requestId: dispatch.requestId,
+          peerNonce: dispatch.peerNonce,
+        })
+        .catch(() => undefined);
+      if (
+        !isRecord(value) ||
+        value.accepted !== true ||
+        !Number.isSafeInteger(value.sequence) ||
+        Number(value.sequence) < 0 ||
+        typeof value.messageId !== 'string' ||
+        !value.messageId ||
+        value.messageId.length > 128
+      )
+        return false;
+      await mode.store.confirmPrompt(
+        actionScope,
+        dispatch,
+        { sequence: Number(value.sequence), messageId: value.messageId },
+        current,
+      );
+      return true;
+    }
+    try {
+      let options: SessionModelOptions | undefined;
+      const readOptions = async () =>
+        (options ??= await readPilotModelOptions(
+          runtime,
+          grant({ ...original, runtime }),
+        ));
+      const intent = await mode.store.reservePrompt(
+        actionScope,
+        promptKey,
+        current,
+        readOptions,
+        {
+          provider: mode.policy.provider,
+          model: mode.policy.defaultModel,
+          revision: native.contextGeneration,
+        },
+      );
+      if (intent.state !== 'reserved') {
+        if (intent.state !== 'accepted' && !(await observe(intent)))
+          fail(409, '原消息接纳状态尚待核对');
+        await confirmAccess(request.headers, original);
+        current();
+        return reply.send(accepted());
+      }
+      if (intent.authSessionId !== original.who.authSessionId)
+        fail(409, '原消息只能核对，不能再次派发');
+      canSend();
+      const ready = await readyAccess(request.headers, original);
+      if (ready.runtime.native !== native) fail(409, '原生会话代次已变化');
+      await reconcileRuns(runtime);
+      for (const runId of abandonedRuns)
+        await confirmRunCancellation(runtime, runId);
+      const token = lease(ready, carrier.generation);
+      const claims = native.claims(String(token));
+      if (!claims) fail(403, '会话请求身份无效');
+      const frozen = await mode.store
+        .freezePrompt(
+          actionScope,
+          requestId,
+          {
+            hostGeneration: native.contextGeneration,
+            peerNonce: claims.nonce,
+            expiresAt: claims.expiresAt,
+          },
+          await readOptions(),
+          canSend,
+        )
+        .catch((error: unknown) => {
+          if (isRecord(error) && typeof error.statusCode === 'number')
+            throw error;
+          fail(503, '原消息派发状态尚待核对');
+        });
+      await confirmAccess(request.headers, original);
+      canSend();
+      if (claims.expiresAt <= Date.now() || transfer.revoked)
+        fail(409, '原生派发票据已失效');
+      pendingRun = runs.admit(
+        original.who,
+        actionScope.requirementId,
+        sessionId,
+        requestId,
+        claims.nonce,
+        frozen,
+      );
+      await native.control('run', {
+        ...pendingRun,
+        authSessionId: original.who.authSessionId,
+        selection: {
+          provider: frozen.provider,
+          model: frozen.model,
+          revision: frozen.selectionRevision,
+        },
+      });
+      await confirmAccess(request.headers, original);
+      canSend();
+      if (claims.expiresAt <= Date.now() || transfer.revoked)
+        fail(409, '原生派发票据已失效');
+      const response = await native
+        .fetch('/api/session/prompt', token, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: AbortSignal.any([
+            transfer.controller.signal,
+            native.signal,
+            AbortSignal.timeout(3_000),
+          ]),
+        })
+        .catch(() => fail(503, '原消息接纳状态尚待核对'));
+      const projected = await publicNativeSessionResponse(
+        response,
+        body.rpcId,
+        '/api/session/prompt',
+      );
+      const outcome: unknown = await projected.json().catch(() => undefined);
+      if (
+        !projected.ok ||
+        !isRecord(outcome) ||
+        !isRecord(outcome.result) ||
+        outcome.result.ok !== true ||
+        !isRecord(outcome.result.value) ||
+        outcome.result.value.accepted !== true
+      )
+        fail(409, '原消息接纳状态尚待核对');
+      runs.submitted(pendingRun.runId);
+      const persisted = await observe(frozen);
+      if (!persisted) {
+        const seen = await native
+          .control('run.status', { runId: pendingRun.runId })
+          .catch(() => undefined);
+        if (isRecord(seen) && seen.seen === true) pendingRun = undefined;
+        fail(409, '原消息接纳状态尚待核对');
+      }
+      pendingRun = undefined;
+      await confirmAccess(request.headers, original);
+      current();
+      return reply.send(accepted());
+    } finally {
+      try {
+        if (pendingRun) await retireRun(runtime, pendingRun.runId);
+      } finally {
+        inFlightPrompts.delete(key);
+        transfers.delete(transfer);
+      }
     }
   }
 
@@ -200,6 +480,12 @@ export async function registerNativeTransport(
       const carrier =
         request.method === 'POST' ? nativeCarrier(request, false) : undefined;
       if (carrier) verifyNativeLogin(original, carrier.binding);
+      if (
+        carrier &&
+        tail === 'api/session/prompt' &&
+        modelSelection?.policy.projectId === original.item.projectId
+      )
+        return pilotPrompt(request, reply, original, carrier);
       const scope = await readyAccess(request.headers, original);
       const { native, runs, inFlightPrompts, acceptedPrompts, abandonedRuns } =
         scope.runtime;
@@ -233,6 +519,11 @@ export async function registerNativeTransport(
           )
         )
           fail(403, '无权执行该会话操作');
+        if (
+          scope.runtime.modelPilot &&
+          activatesFollow(action, body.payload.args)
+        )
+          fail(403, '隔离选模暂不支持通过跟随激活会话');
         if (action === 'session/cancel') {
           const session = targetSession(body.payload.args);
           if (session) runs.cancelTitle(session);
@@ -586,9 +877,14 @@ export async function registerNativeTransport(
             );
             if (frame === undefined) return;
             if (
-              runtime.native.modelEgress === 'paused' &&
               frame.type === 'open' &&
-              frame.endpoint === 'session/prompt'
+              ((frame.endpoint === 'session/prompt' &&
+                (runtime.native.modelEgress === 'paused' ||
+                  runtime.modelPilot)) ||
+                (runtime.modelPilot &&
+                  isRecord(frame.payload) &&
+                  isRecord(frame.payload.args) &&
+                  activatesFollow(frame.endpoint, frame.payload.args)))
             ) {
               close();
               return;

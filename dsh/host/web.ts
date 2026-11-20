@@ -166,6 +166,7 @@ export class NativeWebHost {
     if (
       process.env.RDWS_MODE !== 'test' ||
       this.modelEgress !== 'mediated' ||
+      this.modelTransport?.sessionModelPilot ||
       this.starting ||
       this.process ||
       this.closing
@@ -210,6 +211,7 @@ export class NativeWebHost {
     signal?: AbortSignal;
     firstMessageTitle?: boolean;
     attachmentManifests?: boolean;
+    sessionModelPilot?: boolean;
   };
   private closeCarrier?: () => Promise<void>;
   get signal() {
@@ -236,6 +238,17 @@ export class NativeWebHost {
       if (!modelTransport)
         throw new Error('Mediated Native requires a model carrier');
       const routes = snapshotModelRoutes(modelTransport.routes);
+      if (
+        modelTransport.sessionModelPilot &&
+        (process.env.RDWS_MODE !== 'test' ||
+          routes.size !== 1 ||
+          !routes.get('main') ||
+          new URL(routes.get('main')!).hostname !== '127.0.0.1' ||
+          modelTransport.firstMessageTitle ||
+          modelTransport.attachmentManifests ||
+          imageIntake)
+      )
+        throw new Error('Session model pilot requires a loopback text carrier');
       if (modelTransport.attachmentManifests) {
         const fileRoute = routes.get('files');
         const files = fileRoute && new URL(fileRoute);
@@ -257,6 +270,7 @@ export class NativeWebHost {
         signal: modelTransport.signal,
         firstMessageTitle: modelTransport.firstMessageTitle,
         attachmentManifests: modelTransport.attachmentManifests,
+        sessionModelPilot: modelTransport.sessionModelPilot,
       };
     } else {
       resolveNativeModelEgress(modelEgress);
@@ -485,6 +499,8 @@ export class NativeWebHost {
                       ),
                       firstMessageTitle:
                         this.modelTransport.firstMessageTitle === true,
+                      sessionModelPilot:
+                        this.modelTransport.sessionModelPilot === true,
                       attachmentManifests:
                         this.modelTransport.attachmentManifests === true,
                     }

@@ -20,6 +20,7 @@ import { installImageIntake } from './image-intake.mjs';
 import { openContextIpc } from '../../bridge/context-ipc.ts';
 import { installModelCarrier } from './model-carrier.mjs';
 import { installPresets } from './presets.mjs';
+import { observePrompt } from './prompt-observation.mjs';
 import { isDemandPreset } from '../../host/presets.ts';
 export const name = 'rdws-access';
 export const inject = [
@@ -230,7 +231,7 @@ export function apply(ctx, config) {
       return () => clearInterval(timer);
     });
   }
-  async function inspectSession(input, withPreset = false) {
+  function sessionWorkspace(input) {
     const workspace = ctx.workspaceRegistry
       .list()
       .find(
@@ -239,6 +240,10 @@ export function apply(ctx, config) {
           w.sessionIds.includes(input.sessionId),
       );
     if (!workspace) throw new Error('Session workspace mismatch');
+    return workspace;
+  }
+  async function inspectSession(input, withPreset = false) {
+    const workspace = sessionWorkspace(input);
     const observation = await ctx.sessionQuery.observeSession(input.sessionId);
     try {
       if (observation.header.cwd !== workspace.path)
@@ -258,6 +263,12 @@ export function apply(ctx, config) {
   }
   route('session.inspect', (input) => inspectSession(input));
   route('session.preset', (input) => inspectSession(input, true));
+  if (config.sessionModelPilot === true)
+    ctx.inject(['sessions', 'agents'], (scope) => {
+      route('session.prompt-observation', (input) =>
+        observePrompt(scope, input, sessionWorkspace(input)),
+      );
+    });
   function assertActivation(record, signal) {
     if (
       signal.aborted ||

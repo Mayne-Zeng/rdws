@@ -180,6 +180,79 @@ export const nativeSession = pgTable('native_session', {
   sourceThroughSeq: integer('source_through_seq'),
   ...timestamps,
 });
+export const sessionModelSelection = pgTable(
+  'session_model_selection',
+  {
+    nativeSessionId: text('native_session_id')
+      .primaryKey()
+      .references(() => nativeSession.id),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    revision: uuid('revision').notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    check(
+      'session_model_selection_reference',
+      sql`char_length(${t.provider}) between 1 and 160 and char_length(${t.model}) between 1 and 160`,
+    ),
+  ],
+);
+export const sessionPromptDispatch = pgTable(
+  'session_prompt_dispatch',
+  {
+    nativeSessionId: text('native_session_id')
+      .notNull()
+      .references(() => nativeSession.id),
+    requestId: text('request_id').notNull(),
+    projectId: text('project_id').notNull(),
+    requirementId: text('requirement_id').notNull(),
+    actorId: text('actor_id')
+      .notNull()
+      .references(() => user.id),
+    authSessionId: text('auth_session_id').notNull(),
+    inputDigest: text('input_digest').notNull(),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    selectionRevision: uuid('selection_revision').notNull(),
+    state: text('state', { enum: ['reserved', 'pending', 'accepted'] })
+      .default('reserved')
+      .notNull(),
+    hostGeneration: uuid('host_generation'),
+    peerNonce: text('peer_nonce'),
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+    acceptedSeq: bigint('accepted_seq', { mode: 'number' }),
+    acceptedMessageId: text('accepted_message_id'),
+    ...timestamps,
+  },
+  (t) => [
+    primaryKey({ columns: [t.nativeSessionId, t.requestId] }),
+    foreignKey({
+      columns: [t.requirementId, t.projectId],
+      foreignColumns: [requirement.id, requirement.projectId],
+      name: 'session_prompt_dispatch_requirement_project_fk',
+    }),
+    check(
+      'session_prompt_dispatch_input',
+      sql`char_length(${t.requestId}) between 1 and 128 and
+          ${t.inputDigest} ~ '^[a-f0-9]{64}$' and
+          char_length(${t.provider}) between 1 and 160 and
+          char_length(${t.model}) between 1 and 160`,
+    ),
+    check(
+      'session_prompt_dispatch_ticket',
+      sql`(${t.state} = 'reserved' and ${t.hostGeneration} is null and ${t.peerNonce} is null and ${t.leaseExpiresAt} is null)
+          or (${t.state} in ('pending', 'accepted') and ${t.hostGeneration} is not null and
+              ${t.peerNonce} is not null and char_length(${t.peerNonce}) between 1 and 128 and ${t.leaseExpiresAt} is not null)`,
+    ),
+    check(
+      'session_prompt_dispatch_observation',
+      sql`(${t.state} in ('reserved', 'pending') and ${t.acceptedSeq} is null and ${t.acceptedMessageId} is null)
+          or (${t.state} = 'accepted' and ${t.acceptedSeq} is not null and ${t.acceptedSeq} between 0 and 9007199254740991 and
+              ${t.acceptedMessageId} is not null and char_length(${t.acceptedMessageId}) between 1 and 128)`,
+    ),
+  ],
+);
 export const requirementWriteLease = pgTable(
   'requirement_write_lease',
   {

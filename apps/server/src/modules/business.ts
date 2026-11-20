@@ -32,6 +32,7 @@ import type {
   CheckedWriteTransaction,
   WriteTransaction,
 } from './checked-write-transaction.ts';
+import type { PromptDispatch } from './session-model-selection.ts';
 type Database = ReturnType<typeof connectDatabase>['db'];
 type Transaction = WriteTransaction;
 type Reads = Pick<Transaction, 'select'>;
@@ -1470,81 +1471,138 @@ export function createBusiness(db: Database) {
     relatedActors: Actor[],
     write: (validBefore: number) => T,
     writeLease?: { generation: string; contextVersion: number },
+    pilot?: {
+      checked: CheckedWriteTransaction;
+      dispatches: readonly PromptDispatch[];
+    },
   ): Promise<T> {
     const deadline = Date.now() + 1800;
-    return db.transaction(
-      async (tx) => {
-        await tx.execute(sql`set local transaction_timeout='2400ms'`);
-        await tx.execute(sql`set local statement_timeout='950ms'`);
-        await tx.execute(sql`set local lock_timeout='650ms'`);
-        await tx.execute(sql`update ${schema.session} set id = id where false`);
-        let validBefore = deadline;
-        if (writeLease) {
-          if (relatedActors.length) businessError(403, '批次身份不匹配');
-          const snapshot = await writeContext(
-            tx,
-            who,
-            projectId,
-            requirementId,
-            sessionId,
-          );
-          const leases = schema.requirementWriteLease;
-          const [lease] = await tx
-            .select()
-            .from(leases)
-            .where(
-              and(
-                eq(leases.requirementId, requirementId),
-                eq(leases.projectId, projectId),
-                eq(leases.nativeSessionId, sessionId),
-                eq(leases.ownerId, who.userId),
-                eq(leases.authSessionId, who.authSessionId),
-                eq(leases.generation, writeLease.generation),
-              ),
-            )
-            .for('share');
-          if (
-            lease?.phase !== 'held' ||
-            lease.runId ||
-            lease.contextVersion !== writeLease.contextVersion ||
-            lease.contextVersion !== snapshot.requirement.contextVersion
-          )
-            businessError(403, '当前写会话资格已失效');
-          validBefore = Math.min(
-            validBefore,
-            snapshot.validBefore,
-            lease.expiresAt.getTime(),
-          );
-          if (validBefore <= Date.now())
-            businessError(403, '当前写会话资格已失效');
-          return write(validBefore);
-        }
-        const actors = [who, ...relatedActors].sort((a, b) =>
-          a.authSessionId.localeCompare(b.authSessionId),
+    const authorize = async (tx: Transaction, assertConnection = () => {}) => {
+      await tx.execute(sql`set local transaction_timeout='2400ms'`);
+      await tx.execute(sql`set local statement_timeout='950ms'`);
+      await tx.execute(sql`set local lock_timeout='650ms'`);
+      await tx.execute(sql`update ${schema.session} set id = id where false`);
+      let validBefore = deadline;
+      if (writeLease) {
+        if (relatedActors.length) businessError(403, '批次身份不匹配');
+        const snapshot = await writeContext(
+          tx,
+          who,
+          projectId,
+          requirementId,
+          sessionId,
         );
-        for (const actor of actors) {
-          if (actor.userId !== who.userId) businessError(403, '批次身份不匹配');
-          const { session } = await identity(tx, actor, projectId, [], true);
-          validBefore = Math.min(validBefore, session.expiresAt.getTime());
-        }
-        await scope(tx, who, requirementId, true, projectId);
-        const [owned] = await tx
-          .select({ id: schema.nativeSession.id })
-          .from(schema.nativeSession)
+        const leases = schema.requirementWriteLease;
+        const [lease] = await tx
+          .select()
+          .from(leases)
           .where(
             and(
-              eq(schema.nativeSession.id, sessionId),
-              eq(schema.nativeSession.requirementId, requirementId),
-              eq(schema.nativeSession.ownerId, who.userId),
+              eq(leases.requirementId, requirementId),
+              eq(leases.projectId, projectId),
+              eq(leases.nativeSessionId, sessionId),
+              eq(leases.ownerId, who.userId),
+              eq(leases.authSessionId, who.authSessionId),
+              eq(leases.generation, writeLease.generation),
             ),
           )
           .for('share');
-        if (!owned || validBefore <= Date.now())
-          businessError(403, '当前运行身份无效');
+        if (
+          lease?.phase !== 'held' ||
+          lease.runId ||
+          lease.contextVersion !== writeLease.contextVersion ||
+          lease.contextVersion !== snapshot.requirement.contextVersion
+        )
+          businessError(403, '当前写会话资格已失效');
+        validBefore = Math.min(
+          validBefore,
+          snapshot.validBefore,
+          lease.expiresAt.getTime(),
+        );
+        if (validBefore <= Date.now())
+          businessError(403, '当前写会话资格已失效');
         return write(validBefore);
-      },
-      { isolationLevel: 'read committed' },
-    );
+      }
+      const actors = [who, ...relatedActors].sort((a, b) =>
+        a.authSessionId.localeCompare(b.authSessionId),
+      );
+      for (const actor of actors) {
+        if (actor.userId !== who.userId) businessError(403, '批次身份不匹配');
+        const { session } = await identity(tx, actor, projectId, [], true);
+        validBefore = Math.min(validBefore, session.expiresAt.getTime());
+      }
+      await scope(tx, who, requirementId, true, projectId);
+      const [owned] = await tx
+        .select({
+          id: schema.nativeSession.id,
+          sourceSessionId: schema.nativeSession.sourceSessionId,
+        })
+        .from(schema.nativeSession)
+        .where(
+          and(
+            eq(schema.nativeSession.id, sessionId),
+            eq(schema.nativeSession.requirementId, requirementId),
+            eq(schema.nativeSession.ownerId, who.userId),
+          ),
+        )
+        .for('share');
+      if (!owned || validBefore <= Date.now())
+        businessError(403, '当前运行身份无效');
+      if (pilot) {
+        if (
+          owned.sourceSessionId !== null ||
+          pilot.dispatches.length !== actors.length
+        )
+          businessError(403, '原消息的模型派发绑定已失效');
+        const ledger = schema.sessionPromptDispatch;
+        for (const dispatch of pilot.dispatches) {
+          if (
+            dispatch.nativeSessionId !== sessionId ||
+            dispatch.requirementId !== requirementId ||
+            dispatch.projectId !== projectId ||
+            dispatch.actorId !== who.userId ||
+            !dispatch.hostGeneration ||
+            !dispatch.peerNonce ||
+            !dispatch.leaseExpiresAt ||
+            !actors.some(
+              ({ authSessionId }) => authSessionId === dispatch.authSessionId,
+            )
+          )
+            businessError(403, '原消息的模型派发绑定已失效');
+          const [row] = await tx
+            .select({ state: ledger.state })
+            .from(ledger)
+            .where(
+              and(
+                eq(ledger.nativeSessionId, sessionId),
+                eq(ledger.requestId, dispatch.requestId),
+                eq(ledger.projectId, projectId),
+                eq(ledger.requirementId, requirementId),
+                eq(ledger.actorId, dispatch.actorId),
+                eq(ledger.authSessionId, dispatch.authSessionId),
+                eq(ledger.provider, dispatch.provider),
+                eq(ledger.model, dispatch.model),
+                eq(ledger.selectionRevision, dispatch.selectionRevision),
+                eq(ledger.inputDigest, dispatch.inputDigest),
+                eq(ledger.hostGeneration, dispatch.hostGeneration),
+                eq(ledger.peerNonce, dispatch.peerNonce),
+                eq(ledger.leaseExpiresAt, dispatch.leaseExpiresAt),
+              ),
+            )
+            .for('share');
+          if (row?.state !== 'pending' && row?.state !== 'accepted')
+            businessError(403, '原消息的模型派发绑定已失效');
+        }
+        if (validBefore <= Date.now()) businessError(403, '当前运行身份无效');
+        assertConnection();
+      }
+      return write(validBefore);
+    };
+    return pilot
+      ? pilot.checked(authorize)
+      : db.transaction((tx) => authorize(tx), {
+          isolationLevel: 'read committed',
+        });
   }
   async function writeContext(
     tx: Reads,
@@ -1825,6 +1883,31 @@ export function createBusiness(db: Database) {
       if (expiresAt <= Date.now()) businessError(401, '登录已失效，请重新登录');
       return result;
     });
+  }
+  async function lockModelSession(
+    tx: Transaction,
+    who: Actor,
+    projectId: string,
+    requirementId: string,
+    sessionId: string,
+  ) {
+    const { session } = await identity(tx, who, projectId, [], true);
+    await scope(tx, who, requirementId, true, projectId);
+    const [owned] = await tx
+      .select({ sourceSessionId: schema.nativeSession.sourceSessionId })
+      .from(schema.nativeSession)
+      .where(
+        and(
+          eq(schema.nativeSession.id, sessionId),
+          eq(schema.nativeSession.requirementId, requirementId),
+          eq(schema.nativeSession.ownerId, who.userId),
+        ),
+      )
+      .for('share');
+    if (!owned) businessError(403, '只能管理本人在当前需求中的会话模型');
+    if (owned.sourceSessionId !== null)
+      businessError(403, '隔离选模暂不支持派生会话');
+    return session.expiresAt.getTime();
   }
   async function authorizeRequirement(
     who: Actor,
@@ -2580,6 +2663,7 @@ export function createBusiness(db: Database) {
     writeContext,
     writeReceipts: { reserve, finish, receiptKey, readReceipt },
     sessionTransaction,
+    lockModelSession,
     sessionTemplate,
     approvedTemplateReferences,
     authorizeRequirement,

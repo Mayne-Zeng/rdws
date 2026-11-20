@@ -29,6 +29,10 @@ import {
 } from './workbench-write-authority.ts';
 import type { CheckedWriteTransaction } from './checked-write-transaction.ts';
 import {
+  createSessionModelSelection,
+  type SessionModelPilot,
+} from './session-model-selection.ts';
+import {
   templateBindingPath,
   personnelPath,
   nativeBootstrapPath,
@@ -37,6 +41,7 @@ import {
   nativeBindingHeader,
   nativeGenerationHeader,
   isImportRequest,
+  isModelSelectionRequest,
   isTemplateBindingRequest,
   isPassiveRequirementRead,
   isWriteAuthorityStatus,
@@ -90,6 +95,7 @@ export function createWorkbenchRuntime(
   trackWork = <T>(work: () => Promise<T>) => work(),
   fixture?: import('./native-fixture-tool-job.ts').FixtureToolAssembly,
   fleetCommands = false,
+  sessionModelPilot?: SessionModelPilot,
 ) {
   const instanceRoot =
     process.env.RDWS_MODE === 'test'
@@ -97,6 +103,15 @@ export function createWorkbenchRuntime(
       : runtimeHome;
 
   const business = createBusiness(db);
+  const modelSelection =
+    sessionModelPilot && writeTransaction
+      ? {
+          policy: sessionModelPilot,
+          store: createSessionModelSelection(business, writeTransaction),
+        }
+      : undefined;
+  if (sessionModelPilot && !modelSelection)
+    throw new Error('Session model pilot requires a checked transaction');
 
   const mirrors = new RepositoryMirrors(repositoryHome ?? instanceRoot);
 
@@ -208,6 +223,8 @@ export function createWorkbenchRuntime(
     modelEgress,
     mainPolicy,
     fixture,
+    sessionModelPilot,
+    writeTransaction,
   );
 
   const revokedEpoch = new Map<string, number>();
@@ -636,9 +653,10 @@ export function createWorkbenchRuntime(
       isProjectAccessAuditRead(request) ||
       isPlatformAccountAuditRead(request);
     const sessionWrite = isSessionWrite(request);
+    const modelRoute = !!modelSelection && isModelSelectionRequest(request);
     const writeRoute =
       isWriteAuthorityStatus(request) || isWriteAuthorityCommand(request);
-    if (passiveRead || auditRead || sessionWrite || writeRoute)
+    if (passiveRead || auditRead || sessionWrite || writeRoute || modelRoute)
       reply.header('cache-control', 'no-store');
     if (
       Object.keys(request.headers).some(
@@ -657,6 +675,7 @@ export function createWorkbenchRuntime(
               auditRead ||
               sessionWrite ||
               writeRoute ||
+              modelRoute ||
               (request.method === 'GET' &&
                 request.routeOptions.url === nativeBootstrapPath) ||
               (request.routeOptions.url === personnelPath &&
@@ -741,6 +760,7 @@ export function createWorkbenchRuntime(
       if (path !== '/api/projects' && !project && !demand) return;
       const templateBinding = isTemplateBindingRequest(request);
       const passiveRead = isPassiveRequirementRead(request);
+      const modelRoute = !!modelSelection && isModelSelectionRequest(request);
       const writeRoute =
         isWriteAuthorityStatus(request) || isWriteAuthorityCommand(request);
       const exactSessionRead =
@@ -750,14 +770,21 @@ export function createWorkbenchRuntime(
       const projectAudit = isProjectAuditRead(request);
       const accessAudit = isProjectAccessAuditRead(request);
       const epoch = authorizationEpoch;
-      const who = writeRoute
-        ? await auth.api.readObservedLogin({
-            headers: fromNodeHeaders(request.headers),
-          })
-        : await actor(request.headers);
+      const who =
+        writeRoute || modelRoute
+          ? await auth.api.readObservedLogin({
+              headers: fromNodeHeaders(request.headers),
+            })
+          : await actor(request.headers);
       if (!who) fail(401, '请先登录');
       if (templateBinding) verifyEditLogin(request, who.authSessionId);
-      if (projectAudit || accessAudit || exactSessionRead || writeRoute)
+      if (
+        projectAudit ||
+        accessAudit ||
+        exactSessionRead ||
+        writeRoute ||
+        modelRoute
+      )
         verifyEditLogin(request, who.authSessionId, true);
       if ((passiveRead && !exactSessionRead) || isSessionWrite(request))
         verifyEditLogin(request, who.authSessionId, false);
@@ -777,7 +804,12 @@ export function createWorkbenchRuntime(
         projectAudit ||
         (request.routeOptions.url === '/api/projects/:projectId/requirements' &&
           (request.method === 'GET' || request.method === 'HEAD'));
-      if (!writeRoute && projectId && (requirementId || demandList))
+      if (
+        !writeRoute &&
+        !modelRoute &&
+        projectId &&
+        (requirementId || demandList)
+      )
         await recoverPersonnelFences(
           who.userId,
           projectId,
@@ -1137,7 +1169,7 @@ export function createWorkbenchRuntime(
       const openBridges = [...bridges];
       for (const bridge of openBridges) bridge.close();
       for (const transfer of transfers) transfer.controller.abort();
-      const isolated = writeAuthority.enabled();
+      const isolated = writeAuthority.enabled() || !!modelSelection;
       const drained = isolated
         ? await Promise.allSettled([writeAuthority.close(), projects.close()])
         : [];
@@ -1176,6 +1208,7 @@ export function createWorkbenchRuntime(
     lease,
     loginBinding,
     mirrors,
+    modelSelection,
     nativeCarrier,
     pendingNotifications,
     personnelFences,

@@ -57,6 +57,19 @@ export async function grantApplication(
       await client.query(
         `revoke delete, truncate on requirement_write_lease from ${application}`,
       );
+    for (const table of [
+      'session_model_selection',
+      'session_prompt_dispatch',
+    ] as const) {
+      const relation = await client.query<{ present: boolean }>(
+        'select to_regclass($1) is not null as present',
+        ['public.' + table],
+      );
+      if (relation.rows[0]?.present)
+        await client.query(
+          `revoke delete, truncate on ${table} from ${application}`,
+        );
+    }
     const authority = await client.query(
       "select exists(select 1 from pg_catalog.pg_namespace where nspname='rdws_authority') as present",
     );

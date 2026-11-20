@@ -101,6 +101,7 @@ export interface NativeModelTransport {
   signal?: AbortSignal;
   firstMessageTitle?: boolean;
   attachmentManifests?: boolean;
+  sessionModelPilot?: boolean;
 }
 
 const unavailable = () => new Error('Native model carrier unavailable');

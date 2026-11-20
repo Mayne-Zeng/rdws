@@ -10,7 +10,10 @@ import { Pool } from 'pg';
 const exec = promisify(execFile);
 const random = () => randomBytes(32).toString('hex');
 
-export async function authorityDatabase(dockerHost?: string) {
+export async function authorityDatabase(
+  dockerHost?: string,
+  beforeMigrate?: (owner: Pool, root: string) => Promise<void>,
+) {
   const dockerEnv = { ...process.env };
   if (dockerHost !== undefined) {
     if (!dockerHost.startsWith('unix:///'))
@@ -147,9 +150,13 @@ export async function authorityDatabase(dockerHost?: string) {
         env: { ...childEnv, DATABASE_MIGRATION_URL: migrationUrl },
         timeout: 20_000,
       });
+    owner = new Pool({ connectionString: migrationUrl });
+    if (beforeMigrate) {
+      stage = 'fixture migration baseline';
+      await beforeMigrate(owner, root);
+    }
     stage = 'project migration';
     await migrate();
-    owner = new Pool({ connectionString: migrationUrl });
     return {
       admin,
       owner,

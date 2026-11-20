@@ -1,9 +1,15 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
-import { signGrant, bodyHash } from '../../bridge/access.ts';
+import {
+  signGrant,
+  bodyHash,
+  isRecord,
+  onlyKeys,
+} from '../../bridge/access.ts';
 import { cancelTitleOrigins, rememberTitleOrigin } from './title-binding.mjs';
 import { installFixtureToolProbe } from './tool-probe.mjs';
+import { installSessionModelPilot } from './session-model-pilot.mjs';
 import { intakeImageMatches } from './image-intake.mjs';
 
 const imageId = /^sha256:[a-f0-9]{64}$/;
@@ -242,6 +248,10 @@ export function installContext(ctx, config, key, route, requestContext) {
     )
       return run;
   }
+  const modelPilot =
+    config.sessionModelPilot === true
+      ? installSessionModelPilot(ctx, inputIdentity, currentInputRun)
+      : undefined;
   function cancelRecovered(agent, recovered) {
     for (const [id, identity] of recovered) {
       const message = pendingInput(agent, id);
@@ -272,12 +282,31 @@ export function installContext(ctx, config, key, route, requestContext) {
       authorized.size >= 512
     )
       throw new Error('Invalid run binding');
+    const selection = input.selection;
+    if (
+      modelPilot
+        ? !isRecord(selection) ||
+          !onlyKeys(selection, ['provider', 'model', 'revision']) ||
+          ['provider', 'model', 'revision'].some(
+            (key) =>
+              typeof selection[key] !== 'string' ||
+              !selection[key] ||
+              selection[key].length > 160,
+          )
+        : selection !== undefined
+    )
+      throw new Error('Invalid run model selection');
     const id = lookup(input),
       old = authorized.get(id);
-    if (old && old.runId !== input.runId)
+    if (
+      old &&
+      (old.runId !== input.runId ||
+        (modelPilot && bodyHash(old.selection) !== bodyHash(selection)))
+    )
       throw new Error('Run binding conflict');
     const run = old ?? {
       ...input,
+      ...(modelPilot && { selection: Object.freeze({ ...selection }) }),
       admittedAt: Date.now(),
       expiresAt: Date.now() + 30 * 60 * 1000,
     };
@@ -607,6 +636,11 @@ export function installContext(ctx, config, key, route, requestContext) {
     'agent/pre-step',
     async ({ agent, turn, step, signal, modelSelection, messages }, next) => {
       closeAgentModelStep(agent);
+      const newPrompts = modelPilot
+        ? messages.filter((m) => ['user', 'retry'].includes(m.source?.kind))
+        : undefined;
+      const newRunIds = modelPilot?.(agent, turn, newPrompts, modelSelection);
+      if (modelPilot && !newRunIds) return { kind: 'reject' };
       const attachmentSources = imageOrigins
         ? claimedImages(agent, messages, turn)
         : undefined;
@@ -622,13 +656,27 @@ export function installContext(ctx, config, key, route, requestContext) {
         const prompts = decision.messages.filter((m) =>
           ['user', 'retry'].includes(m.source?.kind),
         );
+        if (
+          modelPilot &&
+          (prompts.length !== newPrompts.length ||
+            prompts.some(
+              (message, index) =>
+                inputIdentity(message) !== inputIdentity(newPrompts[index]),
+            ))
+        )
+          throw new Error('Selection batch changed');
         if (state.binding && state.binding.turn !== turn)
           release(state, completedTitleTurns.get(agent.session));
         const bindings = state.binding
-          ? [
-              { ...state.binding, relatedRuns: undefined },
-              ...(state.binding.relatedRuns ?? []),
-            ]
+          ? modelPilot
+            ? [
+                ...(state.binding.relatedRuns ?? []),
+                { ...state.binding, relatedRuns: undefined },
+              ]
+            : [
+                { ...state.binding, relatedRuns: undefined },
+                ...(state.binding.relatedRuns ?? []),
+              ]
           : [];
         for (const prompt of prompts) {
           const source = prompt.source,
@@ -676,7 +724,11 @@ export function installContext(ctx, config, key, route, requestContext) {
           };
           record = {
             agent,
-            body: { ...state.binding, modelStep },
+            body: {
+              ...state.binding,
+              modelStep,
+              ...(modelPilot && { modelNewRunIds: newRunIds }),
+            },
             signal,
             attachmentSources,
             runs: bindings.map((binding) => authorized.get(lookup(binding))),

@@ -673,7 +673,7 @@
 
   <h4 id="t20-component-states-evidence-20261120">11.15.2 T20 组件状态视觉复验</h4>
   <p>用户首轮走查认可整体页面，确认调整组件状态卡片间距和提示条操作布局。独立卡片使用 12px 间距。失败与恢复用同一个 TDesign Alert 布局，操作位于提示条内右侧，宽屏垂直居中，空间不足时在条内换行。示例沿用键盘焦点、本页状态及零业务请求。</p>
-  <p>改前定点浏览器用例以实际 <code>1px</code> 间距退出 1。改后 <code>pnpm test:e2e tests/e2e/design-system.spec.ts</code> 通过 4 项。在明暗两主题、1440／1024／820／390／320px 核对实测卡片间距、提示条包裹操作、宽屏中心对齐、320px 真实换行和键盘重试。两种状态的明暗宽窄截图已查看，存于本地 <code>.impeccable/review/t20</code>。类型、lint、当前 Git 文件 Prettier 检查、构建和基线通过。待用户复验。</p>
+  <p>改前定点浏览器用例以实际 <code>1px</code> 间距退出 1。改后 <code>pnpm test:e2e tests/e2e/design-system.spec.ts</code> 通过 4 项。在明暗两主题、1440／1024／820／390／320px 核对实测卡片间距、提示条包裹操作、宽屏中心对齐、320px 真实换行和键盘重试。两种状态的明暗宽窄截图已查看，存于本地 <code>.impeccable/review/t20</code>。类型、lint、当前 Git 文件 Prettier 检查、构建和基线通过。用户在 <code>8b34740</code> 对应预览中复验通过。收到卡片相贴、按钮位于提示条外的先前截图后，以当前代码重新启动隔离预览，设计系统浏览器用例 4 项通过并重新取图。</p>
 
   <h3 id="t13-native-evidence-20261118">11.16 T13 原生配置与选模接线核查</h3>
   <p>依据 D2、D19、Q8 和 T00-G6，针对锁定的 DSH 0.2.2-rc.3 核对安装源码和现有 RDWS 组装。独立参考源码修订与 <code>dsh/upstream/manifest.json</code> 的 reviewedSourceCommit 一致。当前启动仍要求项目 Profile 中已有 <code>rdws-glm</code> 路由，并在缺失默认模型时从该路由首个模型初始化。现有 BFF 和 Native Policy 对浏览器会话使用同一行动允许表，配置接口和选模仍受阻止。</p>

@@ -440,6 +440,7 @@ export async function registerNativeTransport(
       ...data,
       loginBinding: loginBinding(fresh),
       modelEgressPaused: scope.runtime.native.modelEgress === 'paused',
+      sessionModelPilot: scope.runtime.modelPilot !== undefined,
     };
   });
 

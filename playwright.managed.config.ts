@@ -2,7 +2,10 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests/web-live',
-  testMatch: '**/managed-fleet.browser.ts',
+  testMatch: [
+    '**/managed-fleet.browser.ts',
+    '**/model-pilot-passive.browser.ts',
+  ],
   workers: 1,
   timeout: 120000,
   reporter: 'list',

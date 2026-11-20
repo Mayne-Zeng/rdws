@@ -1318,6 +1318,22 @@
   <p>真实同账号换登录、重新取得 BFF 所有者后，在 Native 启动前读回前代首写，Native ready 文件保持缺失，回环 HTTP 及 TCP 连接数均未增加。换 Cookie 后沿用旧观察登录时拒绝回证。隔离库预置的错 Host、错账号、错项目和相邻会话的同修订候选均无证明效力。删除 Host 比对后真实 GET 反例错误返回 <code>submitted</code>，恢复条件后通过。旧实现的定点红灯为已授权 GET 只返回 <code>selection</code>。保存结果、原键重放及普通模式 404 沿既有合同。</p>
   <p>方案与终稿经全新上下文独立复审 APPROVE。真实 <code>t13-session-model</code> 定点和本人选模、固定切点、迁移存储、会话生命周期、主出口 5 文件 31 项邻域通过。隔离 <code>pnpm test</code> 退出 0，60 文件、375 项通过、1 项平台条件跳过。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code> 和 <code>pnpm validate:baseline</code> 退出 0，构建保留既有主包体积提示。</p>
 
+  <h4 id="t13-pilot-passive-follow-plan-20261121">11.16.50 隔离选模试点的正式 SDK 被动跟随</h4>
+  <p>Fix / R3，基线 <code>269df5b</code>。沿 §11.16.7、§11.16.49 和已批准文本试点的活化禁令。既有试点能以签名及真实 PostgreSQL 对普通 HTTP Prompt 派发。锁版 SDK 的 <code>sessions.retain()</code> 固定发 <code>activate: true</code>、<code>assistantStream: true</code> 的 WebSocket 跟随，而试点 BFF 有意关闭活化桥。选模页方案先暂停在此真实前置，保留已有本人选模和出站语义，单独交付正式工作台能以 SDK 被动打开会话、主动发普通消息及接收真实回复。</p>
+  <ol>
+    <li><strong>改前证据与边界。</strong>锁版 <code>dsh-api-session-controller</code> 客户端的真实 <code>follow</code> 开启 assistantStream，并检查初始 baseline。服务端独立建立助理监听并提供 baseline，只有 <code>activate === true</code> 才 promote。用真实试点 Chromium 的正式页先得到目标本人会话原活化帧、实际 WS 关闭及绑定未就绪、供应商零请求的定点红灯。已用 Chromium 实际打开 Demo 模型菜单，正式页旧只读布局及实例默认状态用 <code>pnpm test:e2e tests/e2e/workbench-layout.spec.ts</code> 通过 1 项。</li>
+    <li><strong>实施。</strong>受登录和需求授权的现有 BFF bootstrap 以确切当前项目的程序化试点状态派生布尔位，覆盖 Native 数据中的同名键，普通装配为 false。Web 客户端仅在该连接实例实际 mux 发送处处理有界 JSON 文本。只匹配锁版唯一有效 <code>open / session/follow</code> 外层、UUID 流键、标准 <code>payload.args.request</code>、确切普通 session 地址、<code>activate: true</code> 与 <code>assistantStream: true</code>、以及锁版合法的可选 <code>maxMessages</code> 和 <code>turnWindow</code>；只改 <code>activate</code> 一位。原 assistantStream、会话、合法分页窗口及流键语义等同。二进制、畸形、相邻形态、其它帧和无有效指示时维持原发送，固化对应反例。HTTP 消息和服务端权限规则沿既有合同。服务器仍分别拒原始 HTTP／WS 活化、WS Prompt 和越权会话访问。</li>
+    <li><strong>冷态实证。</strong>在现有受管 Playwright 配置发现新用例。复用一次性隔离 PostgreSQL、独立 Vite／回环 API、真正锁版 Native 和两个合成 HTTPS 模型，装配独立于 T07 写权。按 §11.16.15–16 的维护挂载，在第一代本机试点经已有本人 HTTP Prompt 写入真实旧队列，测试专用文件握手等待原生合格入箱并刷盘。确认精准临时 PID 后停止第一代，校验同库 owner 交还和原日志中确定未领取的消息。接替实例用同库新票、同实际 Native 根、同浏览器 origin，去掉维护夹具，仅观测原生 <code>agent/created</code> 和真实领取。Chromium 登录连续打开和合法重连这个确有未决输入的冷会话，核对被动 opening、可用会话状态、原消息原字节／入箱数量无变化、零 Agent 创建或领取、零新派发和零供应商 TCP。普通同构 SDK 对照及本次程序化装配的另一项目实际发原 <code>activate: true</code>，试点开帧仅改变该布尔位，试点新 socket 重连再次证明。两种测试装配均使用合成身份及配置。</li>
+    <li><strong>边界和主动发送。</strong>通过同一真实浏览器与原授权主动尝试绕过适配的完整锁版活化形态（<code>assistantStream: true</code>），实际 HTTP 返回 403、实际 WS 拒绝。分别试越权会话的被动形态、WS Prompt、换 Cookie 后旧观察登录／旧 binding 的重连和旧代 HTTP Prompt，均观察无推进。对照 fresh 合法重连和普通模式发送权限。使用另一当前本人会话，经真实 BFF 选模接口预设允许模型，已有 Workbench SDK 点击发送，回环实收当前模型，正式页呈现中间助理内容与最终回复，PostgreSQL 有实际首写。另一真实读者观察真实回复且保持只读、零新发送。核对明暗、窄屏和页面错误，定点、邻域、双面复审、整仓、受管与普通 Chromium、静态基线后本地提交。</li>
+    <li><strong>后续。</strong>完整选模操作区另按 §11.16.7 验收。现有同键保存的未确认和拒绝不能等同原命令已终结，失答浏览器须保留原键。目录失败区别于成功目录确缺模型，只有本次原请求可证明未派发的不可用拒绝才引导新的明确发送。这些与当前被动载体交付独立。派生门禁、真实供应商和平台／项目配置不进入本次。</li>
+  </ol>
+
+  <h5 id="t13-pilot-passive-follow-evidence-20261121">真实工作台的被动跟随与助理流</h5>
+  <p>真实受管 Chromium 红灯捕获锁版 SDK 向目标冷会话发送 <code>activate: true</code> 和 <code>assistantStream: true</code>，原试点桥关闭，页面无绑定状态、合成供应商零连接。修正后，已授权 bootstrap 只在试点项目发布对应布尔位，客户端在该连接上仅将普通 SDK 跟随的 <code>activate</code> 置 false。相邻帧、普通模式和原服务端规则原样运行。同一 BFF 的邻项目 SDK 实际仍发送 true。按各自合法的会话和流键归一后，两种真实开帧仅有该布尔位差异。强制关闭实际连接后，原可用登录在新代次重连，按新流键实际收到含助理 baseline 的被动快照。</p>
+  <p>第一代 Native 在维护期间经真实 HTTP 留下一条已刷盘未领取消息，核对同根锁、父子 PID 和运行标识后停止。接替实例的冷会话被打开及重连，原日志逐字节相等，无 Agent 创建、领取、新派发行或供应商连接。用同一观测器核对另一本人会话新 Agent 和真实领取。该会话经现有 API 预设另一允许模型后，以工作台 SDK 发送，供应商实收相应模型，页面显示在途和最终助理文字，数据库对精确当前修订读出 <code>submitted</code>。真实读者查看同一回复且无发送入口，390px 暗色与桌面亮色通过。</p>
+  <p>绕过客户端适配的完整原活化 HTTP 请求为 403。每次原始 WS 反例先收到合法被动快照，继而分别注入同形活化、外项目实际会话及 WS Prompt 后关闭。换 Cookie 后旧绑定重连被拒，旧代 HTTP 返回 401，无新派发和领取。浏览器用例只有一条实际供应商连接与请求，本人工作台页面脚本错误为零。仍待独立验收完整选模界面的保存、失答恢复和重新选模。</p>
+  <p>方案和交付均经全新上下文的 A、B 面独立复审 APPROVE。精确帧定点 2 项，选模、冷队列、固定切点及原生权限邻域合计 5 文件 17 项。<code>pnpm test:e2e --config playwright.managed.config.ts</code> 受管 2 项，终稿新用例单独通过。<code>pnpm test:e2e --shard=1/2</code> 与 <code>--shard=2/2</code> 分别 26 和 25 项。隔离 <code>pnpm test</code> 返回 0，61 文件、377 项通过、1 项平台条件跳过。类型、lint、格式、构建及基线退出 0，构建保留既有主包体积提示。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

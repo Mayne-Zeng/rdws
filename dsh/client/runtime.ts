@@ -17,6 +17,7 @@ import type {
 } from '@deepseek-ai/dsh-api-session-controller/client';
 import type {} from '@deepseek-ai/dsh-api-session-controller/remote';
 import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
+import { passiveModelFollow } from './passive-follow.ts';
 declare module '@deepseek-ai/dsh-api-session-controller/client' {
   interface SessionReferenceSourceMap {
     rdws: unknown;
@@ -84,6 +85,7 @@ export function connectNative(
       const payload = (await response.json()) as {
         loginBinding: string;
         modelEgressPaused?: boolean;
+        sessionModelPilot?: boolean;
         graph: WebBootGraph;
         injections: {
           kind: string;
@@ -185,9 +187,14 @@ export function connectNative(
               generation,
               login: loginBinding,
             });
-            return new WebSocket(
+            const socket = new WebSocket(
               `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${prefix}api/remote.mux?${query}`,
             );
+            if (payload.sessionModelPilot === true) {
+              const send = socket.send.bind(socket);
+              socket.send = (data) => send(passiveModelFollow(data));
+            }
+            return socket;
           },
           streamBaseUrl: location.origin,
           loadBundle: load,

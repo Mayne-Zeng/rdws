@@ -15,6 +15,7 @@ import { MembersPage } from './administration.tsx';
 import { RepositoriesPage } from './repositories.tsx';
 import { CapabilityTemplates } from './capability-templates.tsx';
 import { SessionTrace } from './session-trace.tsx';
+import { SessionFleet } from './session-fleet.tsx';
 import { ProjectAudit } from './project-audit.tsx';
 import type { NativeTab } from './conversation.tsx';
 import { WORKBENCH_POLL_INTERVAL_MS } from '../lib/query.ts';
@@ -23,6 +24,7 @@ export type View =
   | 'overview'
   | 'chat'
   | 'trace'
+  | 'fleet'
   | 'context'
   | 'create'
   | 'repos'
@@ -65,6 +67,7 @@ export function ProjectWorkspace({
     'overview',
     'chat',
     'trace',
+    'fleet',
     'context',
     'create',
     'repos',
@@ -178,9 +181,10 @@ export function ProjectWorkspace({
     view !== 'members' &&
     view !== 'capabilities' &&
     view !== 'audit';
-  const traceAccessFailed = view === 'trace' && requirements.isError;
+  const sessionDirectoryFailed =
+    (view === 'trace' || view === 'fleet') && requirements.isError;
   const showTabs =
-    demandView && projectMatches && !!summary && !traceAccessFailed;
+    demandView && projectMatches && !!summary && !sessionDirectoryFailed;
   const sessionView = view === 'chat' || view === 'trace';
   const scopeLabel = sessionView ? '会话视图' : '需求级';
   const activeView = view === 'requirements' ? 'overview' : view;
@@ -189,6 +193,7 @@ export function ProjectWorkspace({
     { view: 'trace', label: '轨迹', icon: 'clock' },
     { view: 'overview', label: '需求档案', icon: 'grid' },
     { view: 'context', label: '上下文', icon: 'layers' },
+    { view: 'fleet', label: '编队', icon: 'branch' },
   ] as const;
   const projectCard = (
     <div className="project-card">
@@ -415,7 +420,12 @@ export function ProjectWorkspace({
                 'demand-item' +
                 (r.id === selected && view !== 'create' ? ' active' : '')
               }
-              onClick={() => navigate(sessionView ? view : 'overview', r.id)}
+              onClick={() =>
+                navigate(
+                  sessionView || view === 'fleet' ? view : 'overview',
+                  r.id,
+                )
+              }
             >
               <span className="demand-icon">
                 <Icon name="file" />
@@ -701,6 +711,22 @@ export function ProjectWorkspace({
                     projectId={project.id}
                     requirementId={selected}
                   />
+                ) : view === 'fleet' ? (
+                  <SessionFleet
+                    key={JSON.stringify([
+                      userId,
+                      sessionId,
+                      nativeTab.login.userId,
+                      nativeTab.login.sessionId,
+                      project.id,
+                      selected,
+                    ])}
+                    userId={userId}
+                    sessionId={sessionId}
+                    observedLogin={nativeTab.login}
+                    projectId={project.id}
+                    requirementId={selected}
+                  />
                 ) : (
                   <RequirementPage
                     key={selected}
@@ -715,7 +741,7 @@ export function ProjectWorkspace({
               ) : requirements.isPending ? (
                 <Loading text="正在核对需求归属" />
               ) : (
-                !traceAccessFailed && (
+                !sessionDirectoryFailed && (
                   <div className="inline-feedback">
                     <Alert
                       theme="warning"

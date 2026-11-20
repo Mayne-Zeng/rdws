@@ -175,6 +175,7 @@
 <tr><td class="mono">design</td><td><strong>设计系统</strong></td><td>平台级</td><td>令牌 / 字阶 / 断点 / 状态自述</td><td>色卡、字阶、状态样例、断点表</td><td>只读</td></tr>
   </table>
   <p class="src">视图 key 与 <code>ALLVIEWS / MENU / SESSION_TABS / DEMAND_TABS</code> 一致；hash 路由 <code>#/&lt;view&gt;/&lt;demandId&gt;</code>。工作区 7 个视图显示 tab 栏，配置域 9 个隐藏 tab 栏。</p>
+  <p id="t07-fleet-directory-current">正式工作台在需求级标签提供「编队」。会话行显示本人、派生关系及派生源事件，行内「回放」读取所选会话自己的固定历史位置。320／390px 使用文字标签以保留完整触达区。<a href="02-directory-and-engineering-design.html#t07-fleet-directory-delivery-20261120">工程与验收</a>。</p>
 
   <h2 id="s2"><span class="num">2</span>可访问性实测报告</h2>
   <p><strong>方法</strong>：headless Chrome 通过 CDP 打开真实页面，逐视图注入 WCAG 相对亮度公式（<code>0.2126R + 0.7152G + 0.0722B</code>，sRGB 线性化），对每个含直接文本节点的可见元素取计算样式前景色、向上合成不透明背景色，计算对比度。普通文字阈值 <strong>4.5:1</strong>，大字号（≥24px，或 ≥18.66px 且 ≥700）阈值 <strong>3:1</strong>。每视图最多采样 500 个文本元素；明 / 暗主题各跑 16 视图。</p>

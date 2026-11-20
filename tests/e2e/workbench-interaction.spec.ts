@@ -375,6 +375,10 @@ test('mobile navigation contains keyboard focus and tabs support arrows', async 
     page.getByRole('tab', { name: '对话', exact: true }),
   ).toBeFocused();
   await page.keyboard.press('End');
+  await expect(
+    page.getByRole('tab', { name: '编队', exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press('ArrowLeft');
   await expect(context).toBeFocused();
   await page.keyboard.press('ArrowLeft');
   await expect(overview).toBeFocused();

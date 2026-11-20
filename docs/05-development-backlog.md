@@ -135,7 +135,7 @@
   - 交付证据：[macOS 隔离执行](02-directory-and-engineering-design.html#t06-execution-delivery-20261118)。真实 Seatbelt 文件、进程、网络及 Git 验收和独立复审通过。聚焦 12 项通过，最新整仓 129 项通过、2 项超时，超时用例分组复跑通过，类型、lint、格式、构建和基线校验通过。T07 的 macOS 前置已满足。产品执行工具按 T07 联合验收启用。
   - 已补验：[macOS 系统 Git 启动器](02-directory-and-engineering-design.html#t06-apple-git-launcher-20261120)。查到当前系统工具链的实际 Git 后，继续通过原有 Seatbelt 只读查询和最终启动授权。Apple Git 两套聚焦 17 项及 Homebrew Git 执行套件 12 项通过。
 
-- [ ] **T07 · 单写与安全交接**（进行中：同 BFF 回环联测通过，待产品写权与编队验收）
+- [ ] **T07 · 单写与安全交接**（进行中：同 BFF 回环联测通过，编队只读页已交付，待产品写权验收）
   - 说明：落实当前开发分派、本人会话和独占写资格，协调数据库授权、实际执行进程、停止确认及异常恢复。
   - 可验收目标：同需求同时只有一个实际写会话；旧任务及子进程确认停稳后才交接；租约过期不冒称已停止；不能确认时保持只读；恢复／派生重新鉴权，取得写权前刷新上下文；测试人员会话代码只读。macOS 产品写入口只在本任务的当前身份、分派、独占写权及进程停止检查全部通过后启用；其他平台逐平台验证，不随 macOS 通过自动开启。
   - 前置：T02、T06 的 macOS 隔离执行边界验收；无需等待 T21。
@@ -149,7 +149,8 @@
   - 已本地交付联测：[正式 Native Host 单次工具授权](02-directory-and-engineering-design.html#t07-native-host-tool-permit-evidence-20261120)。经真实私有 IPC 验证原运行、当步、参数、时限与一次消费，拒绝错会话及取消后迟到许可，实际合成模型续步收到原关联结果。双面复审、整仓 320 项和基线通过。真实工作树写入与物理取消继续接线。
   - 已本地交付子项：[父 Broker 逐调用取消](02-directory-and-engineering-design.html#t07-broker-call-cancel-evidence-20261120)。真实 PostgreSQL 和 macOS 用例覆盖起跑前零写入、实际进程组退出、原键回读、写代续用、主动释放交错和停稳不明时保留占位。双面复审、邻域 33 项、整仓 320 项和基线通过。正式 Native 与父 Broker 的执行控制继续接线。
   - 已本地交付联测：[正式 Native 与父 Broker 执行控制](02-directory-and-engineering-design.html#t07-native-broker-control-evidence-20261120)。真实短 IPC、隔离 PG 和 T06 验证一次写入、失答按原键回查、原生取消、主动关闭及断连后物理停稳。双面复审、邻域 46 项、整仓 321 项和基线通过。
-  - 已本地交付联测：[Workbench Prompt、父 Broker 与工具出站](02-directory-and-engineering-design.html#t07-workbench-tool-wire-evidence-20261120)。同一受管 macOS 测试 BFF 验证真实登录、固定工具单次写入、实际 TLS 续步、两种释放顺序与步骤过期时的零首写。双面复审、整仓 323 项、浏览器 48 项和基线通过。编队先推进需求会话目录和固定切点回放，产品写权及正式工具继续按 T07 验收。
+  - 已本地交付联测：[Workbench Prompt、父 Broker 与工具出站](02-directory-and-engineering-design.html#t07-workbench-tool-wire-evidence-20261120)。同一受管 macOS 测试 BFF 验证真实登录、固定工具单次写入、实际 TLS 续步、两种释放顺序与步骤过期时的零首写。双面复审、整仓 323 项、浏览器 48 项和基线通过。
+  - 已本地交付子项：[编队会话目录与固定切点回放](02-directory-and-engineering-design.html#t07-fleet-directory-delivery-20261120)。真实会话目录、派生源信息与已选会话的独立回放位置可在需求级页面读取，失权后卸载旧状态。独立复审、整仓 323 项、浏览器 50 项和基线通过。下一项为受管写权状态，产品申请、释放及正式工具继续按 T07 验收。
   - 来源：I2-AUTH、I3-WRITE、I3-CONTEXT。
 
 - [ ] **T08 · 变更查看与交付快照**
@@ -349,7 +350,7 @@
 | overview     | 需求档案     | T11      | T01 T08     | 部分：资料／人员／子任务／阶段       |
 | chat         | 对话         | T02      | T01 T07     | 部分：原生流／派生／回放已验收       |
 | context      | 上下文       | T12      | T01 T14     | 部分：只读业务快照                   |
-| fleet        | 编队         | T07      | T02 T06     | 独立页未建；只读多会话子能力在 chat  |
+| fleet        | 编队         | T07      | T02 T06     | 部分：会话目录与固定切点只读回放     |
 | changes      | 变更         | T08      | T09 T10     | 未建                                 |
 | trace        | 轨迹         | T16      | T02         | 部分：逻辑轨迹、执行摘要、物理锚点   |
 | audit        | 审计中心     | T17      | T16         | 部分：业务、权限、执行与锚点联查     |

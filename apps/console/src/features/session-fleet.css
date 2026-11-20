@@ -37,6 +37,11 @@
   padding: 0 16px 12px;
 }
 
+.fleet-write-status {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 620px) {
   .workspace-tabs:has(#view-fleet) [role='tab'] {
     justify-content: center;

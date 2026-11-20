@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Loading } from 'tdesign-react';
+import type { RequirementWriteAuthority } from '@rdws/contracts';
 import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import { api } from '../lib/ui.tsx';
 import { WORKBENCH_POLL_INTERVAL_MS } from '../lib/query.ts';
@@ -52,6 +53,11 @@ export function SessionFleet({
   });
   const sessions = directory.data ?? [];
   const hasSelection = sessions.some(({ id }) => id === selected);
+  const showStatus =
+    !loginChanged &&
+    !accessLost &&
+    directory.isSuccess &&
+    directory.isFetchedAfterMount;
   useEffect(() => {
     if (directory.isError || (directory.isFetchedAfterMount && !hasSelection))
       setSelected('');
@@ -69,6 +75,16 @@ export function SessionFleet({
     <section aria-labelledby="fleet-heading">
       <div className="page-heading core-page-heading">
         <h1 id="fleet-heading">编队</h1>
+        {showStatus && (
+          <FleetWriteStatus
+            projectId={projectId}
+            requirementId={requirementId}
+            userId={userId}
+            loginId={observedLogin.sessionId}
+            sessions={sessions}
+            onAccessLost={loseAccess}
+          />
+        )}
       </div>
       {loginChanged ? (
         <div className="inline-feedback" role="alert">
@@ -159,4 +175,85 @@ export function SessionFleet({
       )}
     </section>
   );
+}
+
+const writeStatusLabels = {
+  idle: '暂无写会话',
+  held: '写权已占用',
+  stopping: '写任务停止中',
+  unconfirmed: '写权状态待确认',
+};
+
+function FleetWriteStatus({
+  projectId,
+  requirementId,
+  userId,
+  loginId,
+  sessions,
+  onAccessLost,
+}: {
+  projectId: string;
+  requirementId: string;
+  userId: string;
+  loginId: string;
+  sessions: FleetSession[];
+  onAccessLost: () => void;
+}) {
+  const writeStatus = useQuery({
+    queryKey: ['fleet-write-status', projectId, requirementId, userId, loginId],
+    queryFn: ({ signal }) =>
+      api<RequirementWriteAuthority>(
+        `/api/requirements/${encodeURIComponent(requirementId)}/write-authority`,
+        {
+          cache: 'no-store',
+          headers: { [OBSERVED_LOGIN_HEADER]: loginId },
+          signal,
+        },
+      ),
+    refetchOnMount: 'always',
+    refetchInterval: (query) =>
+      query.state.data?.state === 'unavailable'
+        ? false
+        : WORKBENCH_POLL_INTERVAL_MS,
+  });
+  const status =
+    writeStatus.isSuccess && writeStatus.isFetchedAfterMount
+      ? writeStatus.data
+      : undefined;
+  const failure = writeStatus.isFetchedAfterMount ? writeStatus.error : null;
+  useLayoutEffect(() => {
+    const code = (failure as { status?: number } | null)?.status;
+    if (code === 401 || code === 403 || code === 404) onAccessLost();
+  }, [failure, onAccessLost]);
+  const holder = status?.state === 'held' ? status.holder : undefined;
+  const [elapsed, setElapsed] = useState<number>();
+  const expiresAt = holder?.expiresAt;
+  useEffect(() => {
+    if (expiresAt === undefined || expiresAt <= Date.now()) return;
+    const timer = window.setTimeout(
+      () => setElapsed(expiresAt),
+      expiresAt - Date.now(),
+    );
+    return () => window.clearTimeout(timer);
+  }, [expiresAt]);
+
+  const expired =
+    expiresAt !== undefined &&
+    (expiresAt <= Date.now() || elapsed === expiresAt);
+  const ownPosition =
+    holder && !expired
+      ? sessions.findIndex(({ id, own }) => own && id === holder.sessionId) + 1
+      : 0;
+  const state = expired ? 'unconfirmed' : status?.state;
+  const label = failure
+    ? '写权状态暂不可查询'
+    : state && state !== 'unavailable'
+      ? writeStatusLabels[state]
+      : undefined;
+  return label ? (
+    <p className="muted fleet-write-status" role="status" aria-label="写权状态">
+      {label}
+      {ownPosition > 0 && ` · 本人会话 ${ownPosition}`}
+    </p>
+  ) : null;
 }

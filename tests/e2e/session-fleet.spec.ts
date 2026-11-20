@@ -359,3 +359,120 @@ test('fleet discards a late requirement response and clears an active replay whe
     releaseFirst();
   }
 });
+
+test('fleet projects write status only for the current directory and observed login', async ({
+  baseURL,
+  page,
+}) => {
+  const origin = baseURL!;
+  const accounts = await readTestAccounts();
+  const manager = await prepareSession(
+    page.context(),
+    origin,
+    accounts.find(({ username }) => username === 'manager')!,
+  );
+  const first = await createRequirement(page.request, origin);
+  const second = await createRequirement(page.request, origin);
+  const firstSession = await createSession(
+    page.request,
+    origin,
+    first.path,
+    manager.session.id,
+  );
+  const secondSession = await createSession(
+    page.request,
+    origin,
+    second.path,
+    manager.session.id,
+  );
+  const statusPath = (id: string) => `/api/requirements/${id}/write-authority`;
+  let holdFirst = false;
+  let entered!: () => void, release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const own = (sessionId: string, expiresAt: number) => ({
+    state: 'held',
+    holder: { sessionId, generation: randomUUID(), expiresAt },
+  });
+  const firstStatus = own(firstSession, Date.now() + 60_000);
+  await page.route(
+    (url) => url.pathname === statusPath(first.id),
+    async (route) => {
+      expect(route.request().headers()['x-rdws-edit-session']).toBe(
+        manager.session.id,
+      );
+      if (holdFirst) {
+        entered();
+        await held;
+      }
+      await route.fulfill({ json: firstStatus }).catch(() => {});
+    },
+  );
+  let failure: 503 | 403 | undefined;
+  let secondStatus: ReturnType<typeof own> | { state: string } = {
+    state: 'idle',
+  };
+  await page.route(
+    (url) => url.pathname === statusPath(second.id),
+    async (route) => {
+      expect(route.request().headers()['x-rdws-edit-session']).toBe(
+        manager.session.id,
+      );
+      if (failure)
+        await route.fulfill({
+          status: failure,
+          json: { error: 'Synthetic status failure' },
+        });
+      else await route.fulfill({ json: secondStatus });
+    },
+  );
+  try {
+    await page.goto(`/?project=poc&view=fleet&requirement=${first.id}`);
+    const status = page.getByRole('status', { name: '写权状态' });
+    const sessions = page.getByRole('list', { name: '编队会话列表' });
+    await expect(status).toHaveText('写权已占用 · 本人会话 1');
+    holdFirst = true;
+    await waiting;
+    await page.getByRole('button', { name: second.title, exact: true }).click();
+    await expect(status).toHaveText('暂无写会话');
+    release();
+
+    secondStatus = { state: 'stopping' };
+    await expect(status).toHaveText('写任务停止中');
+    secondStatus = { state: 'unconfirmed' };
+    await expect(status).toHaveText('写权状态待确认');
+    secondStatus = own(secondSession, Date.now() + 60_000);
+    await expect(status).toHaveText('写权已占用 · 本人会话 1');
+    failure = 503;
+    await expect(status).toHaveText('写权状态暂不可查询');
+    await expect(sessions.getByRole('listitem')).toHaveCount(1);
+
+    failure = undefined;
+    secondStatus = own(secondSession, Date.now() + 3500);
+    await expect(status).toHaveText('写权已占用 · 本人会话 1');
+    await expect(status).toHaveText('写权状态待确认');
+    await expect(sessions.getByRole('listitem')).toHaveCount(1);
+    const replay = page.getByRole('region', { name: '会话历史回放' });
+    await page.getByRole('button', { name: '回放会话 1', exact: true }).click();
+    await expect(replay).toContainText('已加载至历史起点');
+    failure = 403;
+    await expect(
+      page.getByText('会话访问已变化，请重新读取会话列表。'),
+    ).toBeVisible();
+    await expect(status).toHaveCount(0);
+    await expect(replay).toHaveCount(0);
+    await expect(sessions).toHaveCount(0);
+    failure = undefined;
+    secondStatus = { state: 'idle' };
+    await page.getByRole('button', { name: '重试读取会话列表' }).click();
+    await expect(status).toHaveText('暂无写会话');
+    await expect(sessions.getByRole('listitem')).toHaveCount(1);
+    await expect(replay).toHaveCount(0);
+  } finally {
+    release();
+  }
+});

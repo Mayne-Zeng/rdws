@@ -1542,11 +1542,12 @@ export function createBusiness(db: Database) {
     projectId: string,
     requirementId: string,
     sessionId: string,
+    lock = true,
   ) {
-    const { session } = await identity(tx, who, projectId, [], true);
-    const state = await scope(tx, who, requirementId, true, projectId);
+    const { session } = await identity(tx, who, projectId, [], lock);
+    const state = await scope(tx, who, requirementId, lock, projectId);
     if (!state.developer) businessError(403, '当前开发分派没有写入资格');
-    const [owned] = await tx
+    const ownedQuery = tx
       .select({ id: schema.nativeSession.id })
       .from(schema.nativeSession)
       .where(
@@ -1555,15 +1556,15 @@ export function createBusiness(db: Database) {
           eq(schema.nativeSession.requirementId, requirementId),
           eq(schema.nativeSession.ownerId, who.userId),
         ),
-      )
-      .for('share');
+      );
+    const [owned] = await (lock ? ownedQuery.for('share') : ownedQuery);
     if (!owned) businessError(403, '只能为本人会话申请写入');
-    const tasks = await tx
+    const taskQuery = tx
       .select()
       .from(schema.task)
       .where(eq(schema.task.requirementId, requirementId))
-      .orderBy(asc(schema.task.id))
-      .for('share');
+      .orderBy(asc(schema.task.id));
+    const tasks = await (lock ? taskQuery.for('share') : taskQuery);
     if (
       !state.lead &&
       !tasks.some(

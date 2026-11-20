@@ -11,6 +11,12 @@ export const ProjectList = Type.Object({
 export type ProjectList = Static<typeof ProjectList>;
 export const Health = Type.Object({ status: Type.Literal('ok') });
 export const ApiError = Type.Object({ error: Type.String() });
+export type RequirementWriteAuthority =
+  | { state: 'unavailable' | 'idle' | 'stopping' | 'unconfirmed' }
+  | {
+      state: 'held';
+      holder?: { sessionId: string; generation: string; expiresAt: number };
+    };
 export const SessionCreate = Type.Object(
   {
     commandId: Type.Optional(Type.String({ format: 'uuid' })),

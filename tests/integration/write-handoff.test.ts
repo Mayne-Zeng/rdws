@@ -46,6 +46,14 @@ function controlledCommits() {
       }
     | undefined;
   let finalRead: FinalReadGate | undefined;
+  let settling:
+    | {
+        afterCommit: boolean;
+        entered: boolean;
+        wait: Promise<void>;
+        release: () => void;
+      }
+    | undefined;
   const original = Pool.prototype.connect;
   const spy = vi.spyOn(Pool.prototype, 'connect').mockImplementation(function (
     this: Pool,
@@ -97,6 +105,20 @@ function controlledCommits() {
           );
         }
         if (sql === 'commit' || sql === 'rollback') client.query = query;
+        if (sql === 'commit' && completingExecution && settling) {
+          const gate = settling;
+          settling = undefined;
+          if (gate.afterCommit)
+            return Reflect.apply(query, client, parameters).then(
+              async (result: unknown) => {
+                gate.entered = true;
+                await gate.wait;
+                return result;
+              },
+            );
+          gate.entered = true;
+          return gate.wait.then(() => Reflect.apply(query, client, parameters));
+        }
         if (
           sql === 'commit' &&
           brokerTransaction &&
@@ -144,6 +166,13 @@ function controlledCommits() {
         release = resolve;
       });
       return (finalRead = { wait, release });
+    },
+    holdSettlement(afterCommit = false) {
+      let release!: () => void;
+      const wait = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return (settling = { afterCommit, entered: false, wait, release });
     },
     restore: () => spy.mockRestore(),
   };
@@ -576,6 +605,9 @@ test.skipIf(process.platform !== 'darwin')(
       await expect.poll(() => started).toBe(true);
       expect(await readFile(path, 'utf8')).toBe('old');
       expect((await currentRows()).rows[0]?.run_id).toBeTruthy();
+      const readStatus = (handoff = active) =>
+        handoff.readStatus(next.who, projectId, requirementId, () => {});
+      expect(await readStatus()).toEqual({ state: 'held' });
       await expect(active.acquire(next, randomUUID())).rejects.toMatchObject({
         statusCode: 409,
       });
@@ -585,9 +617,16 @@ test.skipIf(process.platform !== 'darwin')(
 
       const releaseId = randomUUID();
       const missingRelease = commits.arm();
-      await expect(
-        active.release(writer, generation, releaseId),
-      ).rejects.toThrow('commit could not be confirmed');
+      const stopSettlement = commits.holdSettlement();
+      const release = active.release(writer, generation, releaseId);
+      void release.catch(() => {});
+      try {
+        await expect.poll(() => stopSettlement.entered).toBe(true);
+        expect(await readStatus()).toEqual({ state: 'stopping' });
+      } finally {
+        stopSettlement.release();
+      }
+      await expect(release).rejects.toThrow('commit could not be confirmed');
       expect(missingRelease.entered).toBe(true);
       const firstReceipt = await running;
       expect(firstReceipt).toMatchObject({
@@ -597,6 +636,7 @@ test.skipIf(process.platform !== 'darwin')(
       expect((await currentRows()).rows).toEqual([
         { generation, phase: 'released', run_id: null },
       ]);
+      expect(await readStatus()).toEqual({ state: 'idle' });
       expect(await active.release(writer, generation, releaseId)).toBe(
         'released',
       );
@@ -656,7 +696,21 @@ test.skipIf(process.platform !== 'darwin')(
         result: { stop: 'not-started' },
       });
       expect(await readFile(path, 'utf8')).toBe('old');
-      expect(await active.execute(next, file)).toMatchObject({
+      const settlementAck = commits.holdSettlement(true);
+      const confirmedFile = active.execute(next, file);
+      void confirmedFile.catch(() => {});
+      try {
+        await expect.poll(() => settlementAck.entered).toBe(true);
+        expect((await currentRows()).rows[0]).toMatchObject({
+          phase: 'held',
+          generation: second.generation,
+          run_id: null,
+        });
+        expect(await readStatus()).toEqual({ state: 'unconfirmed' });
+      } finally {
+        settlementAck.release();
+      }
+      expect(await confirmedFile).toMatchObject({
         status: 'finished',
         result: { status: 'ok', stop: 'confirmed' },
       });
@@ -985,6 +1039,23 @@ test.skipIf(process.platform !== 'darwin')(
         .poll(async () => (await currentRows()).rows[0]?.phase)
         .toBe('released');
 
+      const expiringIdle = await short.acquire(next, randomUUID());
+      const expiryStop = commits.holdFinalRead();
+      try {
+        await expect
+          .poll(() => expiryStop.pid, { timeout: 4_000 })
+          .toEqual(expect.any(Number));
+        expect(Date.now()).toBeGreaterThanOrEqual(expiringIdle.expiresAt);
+        expect((await currentRows()).rows[0]).toMatchObject({
+          generation: expiringIdle.generation,
+          phase: 'held',
+        });
+        expect(await readStatus(short)).toEqual({ state: 'unconfirmed' });
+      } finally {
+        expiryStop.release();
+      }
+      await expect.poll(() => readStatus(short)).toEqual({ state: 'idle' });
+
       const retained = await short.acquire(next, randomUUID());
       const marker = join(scope.control, 'isolated-execution');
       await mkdir(marker, { mode: 0o700 });
@@ -1005,6 +1076,7 @@ test.skipIf(process.platform !== 'darwin')(
       expect(await short.release(next, retained.generation, randomUUID())).toBe(
         'draining',
       );
+      expect(await readStatus(short)).toEqual({ state: 'unconfirmed' });
       await expect(short.acquire(next, randomUUID())).rejects.toMatchObject({
         statusCode: 409,
       });
@@ -1038,6 +1110,7 @@ test.skipIf(process.platform !== 'darwin')(
         git,
       );
       broker = cold;
+      expect(await readStatus(cold)).toEqual({ state: 'unconfirmed' });
       await expect(cold.acquire(next, randomUUID())).rejects.toMatchObject({
         statusCode: 409,
       });

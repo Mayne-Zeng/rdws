@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import {
   acquireAuthority,
@@ -9,6 +9,7 @@ import {
 } from '@rdws/db';
 import { runMacosWorktree, type ExecutionRequest } from '@rdws/dsh/execution';
 import type { DemandWorktrees } from '@rdws/orchestrator';
+import type { RequirementWriteAuthority } from '@rdws/contracts';
 import {
   businessError,
   createBusiness,
@@ -960,7 +961,122 @@ export function createOwnedWriteHandoff(
     }
   }
 
+  async function readStatus(
+    who: Actor,
+    projectId: string,
+    requirementId: string,
+    assertReader: () => void,
+  ): Promise<RequirementWriteAuthority> {
+    const deadline = Date.now() + 1800;
+    const { reader, lease, holder } = await db.transaction(
+      async (tx) => {
+        await tx.execute(sql`set local transaction_timeout='2400ms'`);
+        await tx.execute(sql`set local statement_timeout='950ms'`);
+        const reader = await business.authorizeRequirement(
+          who,
+          requirementId,
+          projectId,
+          'reader',
+          tx,
+        );
+        const [lease] = await tx
+          .select()
+          .from(leases)
+          .where(
+            and(
+              eq(leases.projectId, projectId),
+              eq(leases.requirementId, requirementId),
+            ),
+          );
+        let holder:
+          Awaited<ReturnType<typeof business.writeContext>> | undefined;
+        if (lease?.phase === 'held') {
+          try {
+            holder = await business.writeContext(
+              tx,
+              { userId: lease.ownerId, authSessionId: lease.authSessionId },
+              projectId,
+              requirementId,
+              lease.nativeSessionId,
+              false,
+            );
+          } catch (error) {
+            const status = (error as { statusCode?: number }).statusCode;
+            if (status !== 401 && status !== 403 && status !== 404) throw error;
+          }
+        }
+        return { reader, lease, holder };
+      },
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
+    assertReader();
+    const now = Date.now();
+    if (reader.expiresAt.getTime() <= now)
+      businessError(401, '登录已失效，请重新登录');
+    if (deadline <= now) businessError(503, '写权状态读取超时');
+
+    const tracked = holdings.get(requirementId);
+    if (
+      !stopping &&
+      !fences.size &&
+      !tracked &&
+      (!lease || (lease.phase === 'released' && !lease.runId))
+    )
+      return { state: 'idle' };
+    if (
+      !tracked?.confirmed ||
+      !sameHolder(lease, tracked.scope, tracked.grant.generation) ||
+      tracked.grant.contextVersion !== lease.contextVersion ||
+      tracked.grant.expiresAt !== lease.expiresAt.getTime()
+    )
+      return { state: 'unconfirmed' };
+    const execution = lease.runId ? executions.get(lease.runId) : undefined;
+    const running =
+      execution?.requirementId === requirementId &&
+      execution.generation === lease.generation;
+    const settlement = lease.runId ? settlements.get(lease.runId) : undefined;
+    if (
+      lease.phase === 'draining' &&
+      running &&
+      execution.controller.signal.aborted &&
+      settlement?.outcome.status !== 'unknown'
+    )
+      return { state: 'stopping' };
+    const awaitingSettlement = [...settlements.values()].some(
+      ({ scope, generation }) =>
+        scope.requirementId === requirementId &&
+        generation === lease.generation,
+    );
+    if (
+      lease.phase !== 'held' ||
+      stopping ||
+      fences.size ||
+      loginClosed(lease.authSessionId) ||
+      !holder ||
+      holder.requirement.contextVersion !== lease.contextVersion ||
+      awaitingSettlement ||
+      (lease.runId && (!running || execution.controller.signal.aborted))
+    )
+      return { state: 'unconfirmed' };
+    const expiresAt = Math.min(lease.expiresAt.getTime(), holder.validBefore);
+    if (expiresAt <= now) return { state: 'unconfirmed' };
+    if (
+      lease.ownerId !== who.userId ||
+      lease.authSessionId !== who.authSessionId
+    )
+      return { state: 'held' };
+    return {
+      state: 'held',
+      holder: {
+        sessionId: lease.nativeSessionId,
+        generation: lease.generation,
+        expiresAt,
+      },
+    };
+  }
+
   return {
+    readStatus,
     assertWireLease(scope: Scope, generation: string, contextVersion: number) {
       const tracked = holdings.get(scope.requirementId);
       if (

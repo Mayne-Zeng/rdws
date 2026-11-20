@@ -2,6 +2,7 @@ import type { FastifyRequest } from 'fastify';
 export const templateBindingPath = '/api/requirements/:id/capability-template';
 export const personnelPath = '/api/requirements/:id/personnel';
 export const sessionsPath = '/api/requirements/:id/sessions';
+export const writeAuthorityStatusPath = '/api/requirements/:id/write-authority';
 export const sessionHistoryPath =
   '/api/requirements/:id/sessions/:sessionId/history';
 export const sessionAnchorsPath =
@@ -42,6 +43,9 @@ export const isPassiveRequirementRead = (request: FastifyRequest) =>
     request.routeOptions.url === sessionExecutionPath ||
     request.routeOptions.url === sessionTemplatePath ||
     request.routeOptions.url === businessAuditPath);
+export const isWriteAuthorityStatus = (request: FastifyRequest) =>
+  request.method === 'GET' &&
+  request.routeOptions.url === writeAuthorityStatusPath;
 export const isProjectAuditRead = (request: FastifyRequest) =>
   request.method === 'GET' &&
   request.routeOptions.url === projectBusinessAuditPath;

@@ -1215,6 +1215,64 @@ test('Native personnel revocation closes only the affected demand and the old pe
       ).json().result,
     ).toMatchObject({ ok: true, value: { accepted: true } });
     await expect.poll(() => calls.length).toBe(1);
+    const developerRole = {
+      userId: actor('dev').id,
+      role: 'developer' as const,
+    };
+    const uncertain = edit({ remove: [developerRole] });
+    let holdRecovery = true;
+    const uncertainCommit = interceptCommit(
+      uncertain.commandId,
+      async (finish) => {
+        await finish(true);
+        throw new Error('Synthetic commit acknowledgement failure');
+      },
+      { id: nativeDemand, blocked: () => holdRecovery },
+    );
+    try {
+      const pending = await server.inject({
+        method: 'POST',
+        url: `/api/requirements/${nativeDemand}/personnel`,
+        headers: headers('pm'),
+        payload: uncertain,
+      });
+      expect(pending.statusCode).toBe(503);
+      holdRecovery = false;
+      failNotification = true;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const status = await server.inject({
+          url: `/api/requirements/${nativeDemand}/write-authority`,
+          headers: headers('dev'),
+        });
+        expect(status.statusCode).toBe(401);
+        expect(status.headers['cache-control']).toBe('no-store');
+        expect(notifications).toHaveLength(0);
+      }
+      expect(ownBridge.readyState).toBe(WebSocket.OPEN);
+      expect(calls).toHaveLength(1);
+      const recover = () =>
+        server.inject({
+          url: `/api/requirements/${nativeDemand}/sessions`,
+          headers: headers('dev'),
+        });
+      expect((await recover()).statusCode).toBe(401);
+      expect((await recover()).statusCode).toBe(403);
+      expect(notifications).toContainEqual([
+        actor('dev').sessionId,
+        nativeDemand,
+      ]);
+    } finally {
+      uncertainCommit.mockRestore();
+      failNotification = false;
+      notifications.length = 0;
+    }
+    const restored = await server.inject({
+      method: 'POST',
+      url: `/api/requirements/${nativeDemand}/personnel`,
+      headers: headers('pm'),
+      payload: edit({ add: [developerRole] }),
+    });
+    expect(restored.json()).toMatchObject({ status: 'saved' });
     const operation = edit({ leadId: actor('dev').id, remove: [removeLead()] });
     failNotification = true;
     const result = await server.inject({

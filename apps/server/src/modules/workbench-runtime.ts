@@ -1,6 +1,9 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { join } from 'node:path';
-import { type RequirementWorkspace } from '@rdws/contracts';
+import type {
+  RequirementWorkspace,
+  RequirementWriteAuthority,
+} from '@rdws/contracts';
 import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import {
   businessError,
@@ -33,6 +36,7 @@ import {
   isImportRequest,
   isTemplateBindingRequest,
   isPassiveRequirementRead,
+  isWriteAuthorityStatus,
   sessionAnchorsPath,
   sessionExecutionPath,
   isProjectAuditRead,
@@ -626,7 +630,8 @@ export function createWorkbenchRuntime(
       isProjectAccessAuditRead(request) ||
       isPlatformAccountAuditRead(request);
     const sessionWrite = isSessionWrite(request);
-    if (passiveRead || auditRead || sessionWrite)
+    const writeStatus = isWriteAuthorityStatus(request);
+    if (passiveRead || auditRead || sessionWrite || writeStatus)
       reply.header('cache-control', 'no-store');
     if (
       Object.keys(request.headers).some(
@@ -644,6 +649,7 @@ export function createWorkbenchRuntime(
               passiveRead ||
               auditRead ||
               sessionWrite ||
+              writeStatus ||
               (request.method === 'GET' &&
                 request.routeOptions.url === nativeBootstrapPath) ||
               (request.routeOptions.url === personnelPath &&
@@ -728,6 +734,7 @@ export function createWorkbenchRuntime(
       if (path !== '/api/projects' && !project && !demand) return;
       const templateBinding = isTemplateBindingRequest(request);
       const passiveRead = isPassiveRequirementRead(request);
+      const writeStatus = isWriteAuthorityStatus(request);
       const exactSessionRead =
         passiveRead &&
         (request.routeOptions.url === sessionAnchorsPath ||
@@ -735,9 +742,14 @@ export function createWorkbenchRuntime(
       const projectAudit = isProjectAuditRead(request);
       const accessAudit = isProjectAccessAuditRead(request);
       const epoch = authorizationEpoch;
-      const who = await actor(request.headers);
+      const who = writeStatus
+        ? await auth.api.readObservedLogin({
+            headers: fromNodeHeaders(request.headers),
+          })
+        : await actor(request.headers);
+      if (!who) fail(401, '请先登录');
       if (templateBinding) verifyEditLogin(request, who.authSessionId);
-      if (projectAudit || accessAudit || exactSessionRead)
+      if (projectAudit || accessAudit || exactSessionRead || writeStatus)
         verifyEditLogin(request, who.authSessionId, true);
       if ((passiveRead && !exactSessionRead) || isSessionWrite(request))
         verifyEditLogin(request, who.authSessionId, false);
@@ -757,7 +769,7 @@ export function createWorkbenchRuntime(
         projectAudit ||
         (request.routeOptions.url === '/api/projects/:projectId/requirements' &&
           (request.method === 'GET' || request.method === 'HEAD'));
-      if (projectId && (requirementId || demandList))
+      if (!writeStatus && projectId && (requirementId || demandList))
         await recoverPersonnelFences(
           who.userId,
           projectId,
@@ -806,6 +818,8 @@ export function createWorkbenchRuntime(
           ((scope.requirementId || scope.importReply) &&
             reply.statusCode === 409))
       ) {
+        if (reply.statusCode === 200 && isWriteAuthorityStatus(request))
+          return JSON.stringify(await readWriteAuthorityStatus(request));
         if (scope.importReply)
           await business.authorizeImport(
             scope,
@@ -1011,6 +1025,32 @@ export function createWorkbenchRuntime(
     return { ...original, projectId: original.projectId };
   }
 
+  async function readWriteAuthorityStatus(
+    request: FastifyRequest,
+  ): Promise<RequirementWriteAuthority> {
+    const scope = requestDemandScope(request);
+    if (!scope.requirementId) fail(404, '需求不存在');
+    assertResponse(scope);
+    const broker = writeHandoff();
+    if (broker)
+      return broker.readStatus(
+        scope,
+        scope.projectId,
+        scope.requirementId,
+        () => assertResponse(scope),
+      );
+    const reader = await business.authorizeRequirement(
+      scope,
+      scope.requirementId,
+      scope.projectId,
+      'reader',
+    );
+    assertResponse(scope);
+    if (reader.expiresAt.getTime() <= Date.now())
+      fail(401, '登录已失效，请重新登录');
+    return { state: 'unavailable' };
+  }
+
   function verifyEditLogin(
     request: FastifyRequest,
     authSessionId: string,
@@ -1079,6 +1119,7 @@ export function createWorkbenchRuntime(
     recoverPersonnelFence,
     recoverPersonnelFences,
     requestDemandScope,
+    readWriteAuthorityStatus,
     responseScopes,
     revokeMember,
     settlePersonnelFence,

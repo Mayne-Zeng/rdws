@@ -1,5 +1,9 @@
 import { betterAuth } from 'better-auth';
-import { APIError, createAuthMiddleware } from 'better-auth/api';
+import {
+  APIError,
+  createAuthEndpoint,
+  createAuthMiddleware,
+} from 'better-auth/api';
 import { and, eq, gt, type SQL } from 'drizzle-orm';
 import { username } from 'better-auth/plugins';
 import { drizzleAdapter } from '@better-auth/drizzle-adapter';
@@ -184,6 +188,43 @@ export function createAuth(
       max: 100,
       customRules: { '/sign-in/username': { window: 60, max: 10 } },
     },
-    plugins: [username({ minUsernameLength: 2 })],
+    plugins: [
+      username({ minUsernameLength: 2 }),
+      {
+        id: 'rdws-observed-login',
+        endpoints: {
+          readObservedLogin: createAuthEndpoint(
+            { method: 'GET', metadata: { SERVER_ONLY: true } },
+            async (ctx) => {
+              const { authCookies, secret } = ctx.context;
+              const token = await ctx.getSignedCookie(
+                authCookies.sessionToken.name,
+                secret,
+              );
+              if (!token) return null;
+              const [login] = await db
+                .select({
+                  userId: schema.user.id,
+                  authSessionId: schema.session.id,
+                })
+                .from(schema.session)
+                .innerJoin(
+                  schema.user,
+                  eq(schema.session.userId, schema.user.id),
+                )
+                .where(
+                  and(
+                    eq(schema.session.token, token),
+                    gt(schema.session.expiresAt, new Date()),
+                    eq(schema.user.active, true),
+                    eq(schema.user.authEpoch, schema.session.authEpoch),
+                  ),
+                );
+              return login ?? null;
+            },
+          ),
+        },
+      },
+    ],
   });
 }

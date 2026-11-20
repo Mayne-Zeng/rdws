@@ -18,6 +18,11 @@ import { nativeLoginBinding, LEASE_MS, type Grant } from '@rdws/dsh/access';
 import { currentAccount, type createAuth } from './auth.ts';
 import { runtimeHome } from '@rdws/runtime-config';
 import {
+  createWorkbenchWriteAuthority,
+  type OwnedWriteHandoff,
+} from './workbench-write-authority.ts';
+import type { CheckedWriteTransaction } from './checked-write-transaction.ts';
+import {
   templateBindingPath,
   personnelPath,
   nativeBootstrapPath,
@@ -71,6 +76,9 @@ export function createWorkbenchRuntime(
   nativeProfiles?: ReadonlyMap<string, string>,
   modelEgress: NativeModelEgress = 'direct',
   mainPolicy?: import('./model-egress-policy.ts').MainModelPolicy,
+  writeHandoff: () => OwnedWriteHandoff | undefined = () => undefined,
+  writeTransaction?: CheckedWriteTransaction,
+  trackWork = <T>(work: () => Promise<T>) => work(),
 ) {
   const instanceRoot =
     process.env.RDWS_MODE === 'test'
@@ -98,6 +106,11 @@ export function createWorkbenchRuntime(
   let stopping = false;
 
   const closingSessions = new Set<string>();
+  const writeAuthority = createWorkbenchWriteAuthority(
+    writeHandoff,
+    (id) => closingSessions.has(id),
+    writeTransaction,
+  );
 
   const logoutNotifications = new Map<string, Promise<boolean>>();
 
@@ -239,6 +252,7 @@ export function createWorkbenchRuntime(
     requirementId: string;
     projectId: string;
     close: () => void;
+    drained: () => Promise<unknown>;
   }>();
 
   async function actor(headers: FastifyRequest['headers']) {
@@ -699,170 +713,179 @@ export function createWorkbenchRuntime(
       businessError(401, '当前权限正在变更，请刷新后重试');
   }
 
-  app.addHook('preHandler', async (request, reply) => {
-    if (isImportRequest(request)) return;
-    const personnel = request.routeOptions.url === personnelPath;
-    if (request.routeOptions.url === templateBindingPath || personnel)
-      reply.header('cache-control', 'no-store');
-    const path = new URL(request.url, expectedOrigin).pathname;
-    const project = /^\/api\/projects\/([^/]+)/.exec(path);
-    const demand = /^\/api\/(?:requirements|dsh)\/([^/]+)/.exec(path);
-    if (path !== '/api/projects' && !project && !demand) return;
-    const templateBinding = isTemplateBindingRequest(request);
-    const passiveRead = isPassiveRequirementRead(request);
-    const exactSessionRead =
-      passiveRead &&
-      (request.routeOptions.url === sessionAnchorsPath ||
-        request.routeOptions.url === sessionExecutionPath);
-    const projectAudit = isProjectAuditRead(request);
-    const accessAudit = isProjectAccessAuditRead(request);
-    const epoch = authorizationEpoch;
-    const who = await actor(request.headers);
-    if (templateBinding) verifyEditLogin(request, who.authSessionId);
-    if (projectAudit || accessAudit || exactSessionRead)
-      verifyEditLogin(request, who.authSessionId, true);
-    if ((passiveRead && !exactSessionRead) || isSessionWrite(request))
-      verifyEditLogin(request, who.authSessionId, false);
-    if (personnel) verifyEditLogin(request, who.authSessionId, true);
-    const requirementId = demand ? decodeURIComponent(demand[1]!) : undefined;
-    const projectId = project
-      ? decodeURIComponent(project[1]!)
-      : requirementId
-        ? (
-            await db
-              .select({ projectId: schema.requirement.projectId })
-              .from(schema.requirement)
-              .where(eq(schema.requirement.id, requirementId))
-          )[0]?.projectId
-        : ':project-list';
-    const demandList =
-      projectAudit ||
-      (request.routeOptions.url === '/api/projects/:projectId/requirements' &&
-        (request.method === 'GET' || request.method === 'HEAD'));
-    if (projectId && (requirementId || demandList))
-      await recoverPersonnelFences(
-        who.userId,
+  app.addHook('preHandler', (request, reply) =>
+    trackWork(async () => {
+      if (stopping) fail(503, '项目运行正在关闭');
+      if (isImportRequest(request)) return;
+      const personnel = request.routeOptions.url === personnelPath;
+      if (request.routeOptions.url === templateBindingPath || personnel)
+        reply.header('cache-control', 'no-store');
+      const path = new URL(request.url, expectedOrigin).pathname;
+      const project = /^\/api\/projects\/([^/]+)/.exec(path);
+      const demand = /^\/api\/(?:requirements|dsh)\/([^/]+)/.exec(path);
+      if (path !== '/api/projects' && !project && !demand) return;
+      const templateBinding = isTemplateBindingRequest(request);
+      const passiveRead = isPassiveRequirementRead(request);
+      const exactSessionRead =
+        passiveRead &&
+        (request.routeOptions.url === sessionAnchorsPath ||
+          request.routeOptions.url === sessionExecutionPath);
+      const projectAudit = isProjectAuditRead(request);
+      const accessAudit = isProjectAccessAuditRead(request);
+      const epoch = authorizationEpoch;
+      const who = await actor(request.headers);
+      if (templateBinding) verifyEditLogin(request, who.authSessionId);
+      if (projectAudit || accessAudit || exactSessionRead)
+        verifyEditLogin(request, who.authSessionId, true);
+      if ((passiveRead && !exactSessionRead) || isSessionWrite(request))
+        verifyEditLogin(request, who.authSessionId, false);
+      if (personnel) verifyEditLogin(request, who.authSessionId, true);
+      const requirementId = demand ? decodeURIComponent(demand[1]!) : undefined;
+      const projectId = project
+        ? decodeURIComponent(project[1]!)
+        : requirementId
+          ? (
+              await db
+                .select({ projectId: schema.requirement.projectId })
+                .from(schema.requirement)
+                .where(eq(schema.requirement.id, requirementId))
+            )[0]?.projectId
+          : ':project-list';
+      const demandList =
+        projectAudit ||
+        (request.routeOptions.url === '/api/projects/:projectId/requirements' &&
+          (request.method === 'GET' || request.method === 'HEAD'));
+      if (projectId && (requirementId || demandList))
+        await recoverPersonnelFences(
+          who.userId,
+          projectId,
+          requirementId,
+          demandList,
+        );
+      const scope = {
+        ...who,
         projectId,
+        epoch,
         requirementId,
         demandList,
-      );
-    const scope = {
-      ...who,
-      projectId,
-      epoch,
-      requirementId,
-      demandList,
-      projectAdminOnly: accessAudit,
-    };
-    assertResponse(scope);
-    responseScopes.set(
-      request,
-      passiveRead && projectId && requirementId
-        ? {
-            ...scope,
-            demandAccess: {
-              projectId,
-              requirementId,
-              authority: 'reader',
-              ...(exactSessionRead && {
-                nativeSessionId: (request.params as { sessionId: string })
-                  .sessionId,
-              }),
-            },
-          }
-        : scope,
-    );
-  });
-
-  app.addHook('onSend', async (request, reply, payload) => {
-    const scope = responseScopes.get(request);
-    if (
-      scope &&
-      (reply.statusCode < 400 ||
-        ((scope.requirementId || scope.importReply) &&
-          reply.statusCode === 409))
-    ) {
-      if (scope.importReply)
-        await business.authorizeImport(
-          scope,
-          scope.projectId!,
-          scope.importReply,
-        );
-      if (scope.demandAccess) {
-        const { requirementId, projectId, authority, nativeSessionId } =
-          scope.demandAccess;
-        const current = await business.authorizeRequirement(
-          scope,
-          requirementId,
-          projectId,
-          authority,
-          undefined,
-          nativeSessionId,
-        );
-        if (
-          nativeSessionId !== undefined &&
-          (current.expiresAt.getTime() <= Date.now() ||
-            epochFor(scope.authSessionId, requirementId, projectId) >
-              scope.epoch)
-        )
-          fail(401, '授权已变化');
-      }
-      if (scope.platformOnly) {
-        const current = await currentAccount(
-          db,
-          scope.authSessionId,
-          scope.userId,
-        );
-        if (!current) fail(401, '账号或会话不可用');
-        if (!current.platformAdmin)
-          businessError(
-            403,
-            isPlatformAccountAuditRead(request)
-              ? '无权读取平台账号状态记录'
-              : '无权读取平台能力白名单',
-          );
-      }
-      if (scope.memberOnly || scope.projectAdminOnly) {
-        const [current] = await db
-          .select({
-            expiresAt: schema.session.expiresAt,
-            membership: schema.projectMember.projectId,
-          })
-          .from(schema.session)
-          .innerJoin(schema.user, eq(schema.session.userId, schema.user.id))
-          .leftJoin(
-            schema.projectMember,
-            and(
-              eq(schema.projectMember.userId, schema.user.id),
-              eq(schema.projectMember.projectId, scope.projectId!),
-              scope.projectAdminOnly
-                ? eq(schema.projectMember.role, 'project_admin')
-                : undefined,
-            ),
-          )
-          .where(
-            and(
-              eq(schema.session.id, scope.authSessionId),
-              eq(schema.user.id, scope.userId),
-              eq(schema.user.active, true),
-              eq(schema.session.authEpoch, schema.user.authEpoch),
-            ),
-          )
-          .limit(1);
-        if (!current || current.expiresAt <= new Date())
-          fail(401, '账号或会话不可用');
-        if (!current.membership)
-          businessError(
-            403,
-            scope.projectAdminOnly
-              ? '无权读取项目权限事件'
-              : '无权读取当前项目模板',
-          );
-      }
+        projectAdminOnly: accessAudit,
+      };
       assertResponse(scope);
-    }
-    return payload;
-  });
+      responseScopes.set(
+        request,
+        passiveRead && projectId && requirementId
+          ? {
+              ...scope,
+              demandAccess: {
+                projectId,
+                requirementId,
+                authority: 'reader',
+                ...(exactSessionRead && {
+                  nativeSessionId: (request.params as { sessionId: string })
+                    .sessionId,
+                }),
+              },
+            }
+          : scope,
+      );
+    }),
+  );
+
+  app.addHook('onSend', (request, reply, payload) =>
+    trackWork(async () => {
+      const scope = responseScopes.get(request);
+      if (stopping) {
+        if (scope && reply.statusCode < 400) fail(503, '项目运行正在关闭');
+        return payload;
+      }
+      if (
+        scope &&
+        (reply.statusCode < 400 ||
+          ((scope.requirementId || scope.importReply) &&
+            reply.statusCode === 409))
+      ) {
+        if (scope.importReply)
+          await business.authorizeImport(
+            scope,
+            scope.projectId!,
+            scope.importReply,
+          );
+        if (scope.demandAccess) {
+          const { requirementId, projectId, authority, nativeSessionId } =
+            scope.demandAccess;
+          const current = await business.authorizeRequirement(
+            scope,
+            requirementId,
+            projectId,
+            authority,
+            undefined,
+            nativeSessionId,
+          );
+          if (
+            nativeSessionId !== undefined &&
+            (current.expiresAt.getTime() <= Date.now() ||
+              epochFor(scope.authSessionId, requirementId, projectId) >
+                scope.epoch)
+          )
+            fail(401, '授权已变化');
+        }
+        if (scope.platformOnly) {
+          const current = await currentAccount(
+            db,
+            scope.authSessionId,
+            scope.userId,
+          );
+          if (!current) fail(401, '账号或会话不可用');
+          if (!current.platformAdmin)
+            businessError(
+              403,
+              isPlatformAccountAuditRead(request)
+                ? '无权读取平台账号状态记录'
+                : '无权读取平台能力白名单',
+            );
+        }
+        if (scope.memberOnly || scope.projectAdminOnly) {
+          const [current] = await db
+            .select({
+              expiresAt: schema.session.expiresAt,
+              membership: schema.projectMember.projectId,
+            })
+            .from(schema.session)
+            .innerJoin(schema.user, eq(schema.session.userId, schema.user.id))
+            .leftJoin(
+              schema.projectMember,
+              and(
+                eq(schema.projectMember.userId, schema.user.id),
+                eq(schema.projectMember.projectId, scope.projectId!),
+                scope.projectAdminOnly
+                  ? eq(schema.projectMember.role, 'project_admin')
+                  : undefined,
+              ),
+            )
+            .where(
+              and(
+                eq(schema.session.id, scope.authSessionId),
+                eq(schema.user.id, scope.userId),
+                eq(schema.user.active, true),
+                eq(schema.session.authEpoch, schema.user.authEpoch),
+              ),
+            )
+            .limit(1);
+          if (!current || current.expiresAt <= new Date())
+            fail(401, '账号或会话不可用');
+          if (!current.membership)
+            businessError(
+              403,
+              scope.projectAdminOnly
+                ? '无权读取项目权限事件'
+                : '无权读取当前项目模板',
+            );
+        }
+        assertResponse(scope);
+      }
+      return payload;
+    }),
+  );
 
   async function revokeMember(
     userId: string,
@@ -995,6 +1018,37 @@ export function createWorkbenchRuntime(
     if ((required || observed !== undefined) && observed !== authSessionId)
       businessError(401, '登录已变化，请刷新后重试');
   }
+  let shutdown: Promise<void> | undefined;
+  function closeWorkflows() {
+    return (shutdown ??= (async () => {
+      stopping = true;
+      projects.stopAdmission();
+      const openBridges = [...bridges];
+      for (const bridge of openBridges) bridge.close();
+      for (const transfer of transfers) transfer.controller.abort();
+      const isolated = writeAuthority.enabled();
+      const drained = isolated
+        ? await Promise.allSettled([writeAuthority.close(), projects.close()])
+        : [];
+      const statuses = await Promise.allSettled([
+        mirrors.close(),
+        worktrees.close(),
+        providedWorktrees?.close(),
+        ...(isolated ? [] : [projects.close()]),
+      ]);
+      const closedBridges = isolated
+        ? await Promise.allSettled(
+            openBridges.map((bridge) => bridge.drained()),
+          )
+        : [];
+      if (
+        [...drained, ...statuses, ...closedBridges].some(
+          (status) => status.status === 'rejected',
+        )
+      )
+        throw new Error('Project shutdown was not confirmed');
+    })());
+  }
   return {
     actor,
     assertResponse,
@@ -1027,6 +1081,8 @@ export function createWorkbenchRuntime(
     revokeMember,
     settlePersonnelFence,
     stale,
+    isStopping: () => stopping,
+    trackWork,
     transfers,
     verifyEditLogin,
     verifyNativeLogin,
@@ -1037,25 +1093,17 @@ export function createWorkbenchRuntime(
       return authorizationEpoch;
     },
     registerShutdown() {
-      app.addHook('preClose', async () => {
-        stopping = true;
-        projects.stopAdmission();
-        for (const bridge of [...bridges]) bridge.close();
-        for (const transfer of transfers) transfer.controller.abort();
-        const statuses = await Promise.allSettled([
-          mirrors.close(),
-          worktrees.close(),
-          providedWorktrees?.close(),
-          projects.close(),
-        ]);
-        if (statuses.some((status) => status.status === 'rejected'))
-          throw new Error('Project shutdown was not confirmed');
-      });
+      if (!writeTransaction) app.addHook('preClose', closeWorkflows);
     },
+    closeWorkflows,
+    writeAuthority,
+    writeWorktrees: worktrees,
+    writeLoginClosed: (id: string) => closingSessions.has(id),
     access,
     revoke,
     closeLogin(authSessionId: string) {
       closingSessions.add(authSessionId);
+      writeAuthority.closeLogin(authSessionId);
       const pending = logoutNotifications.get(authSessionId);
       if (pending) return pending;
       const notification = revoke(authSessionId)

@@ -1,5 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { and, eq, inArray, asc, desc, gt, or, sql } from 'drizzle-orm';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { and, eq, inArray, asc, desc, gt, ne, or, sql } from 'drizzle-orm';
 import { schema, type connectDatabase } from '@rdws/db';
 import type {
   RequirementInput,
@@ -27,10 +28,31 @@ import {
   validateImportRows,
   type NormalizedImportRows,
 } from './requirement-import.ts';
+import type {
+  CheckedWriteTransaction,
+  WriteTransaction,
+} from './checked-write-transaction.ts';
 type Database = ReturnType<typeof connectDatabase>['db'];
-type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+type Transaction = WriteTransaction;
 type Reads = Pick<Transaction, 'select'>;
 export type Actor = { userId: string; authSessionId: string };
+type WriteMutation = {
+  lock: bigint;
+  receipt: () => typeof schema.commandReceipt.$inferInsert;
+  transaction: CheckedWriteTransaction;
+  assertCurrent?: () => void;
+  begin: (affectedUserId?: string) => void;
+};
+const writeMutation = new AsyncLocalStorage<WriteMutation>();
+export function withWriteMutation<T>(
+  mutation: WriteMutation,
+  operation: () => Promise<T>,
+) {
+  return writeMutation.run(mutation, operation);
+}
+function beginWriteMutation(affectedUserId?: string) {
+  writeMutation.getStore()?.begin(affectedUserId);
+}
 export type RequirementAuthority = 'reader' | 'editor' | 'project-admin';
 type PersonnelResult = Omit<RequirementPersonnelReceipt, 'revocation'> & {
   removedUserIds: string[];
@@ -105,6 +127,32 @@ export function normalizeManagement(input: ManagementCommand) {
   } as ManagementCommand;
 }
 export function createBusiness(db: Database) {
+  function runTransaction<T>(
+    work: (tx: Transaction) => Promise<T>,
+    options?: Parameters<Database['transaction']>[1],
+  ) {
+    const marking = writeMutation.getStore();
+    if (!marking) return db.transaction(work, options);
+    return marking.transaction(async (tx, assertCurrent) => {
+      await tx.execute(sql`set local lock_timeout='650ms'`);
+      await tx.execute(sql`select pg_advisory_xact_lock(${marking.lock})`);
+      assertCurrent();
+      const result = await withWriteMutation(
+        {
+          ...marking,
+          assertCurrent,
+          begin(affectedUserId) {
+            assertCurrent();
+            marking.begin(affectedUserId);
+          },
+        },
+        () => work(tx),
+      );
+      assertCurrent();
+      await tx.insert(schema.commandReceipt).values(marking.receipt());
+      return result;
+    }, true);
+  }
   async function transaction<T>(
     work: (tx: Transaction) => Promise<T>,
     opts: {
@@ -119,7 +167,7 @@ export function createBusiness(db: Database) {
   ): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       try {
-        return await db.transaction(
+        return await runTransaction(
           async (tx) => {
             if (opts.transactionTimeout)
               await tx.execute(
@@ -1017,6 +1065,28 @@ export function createBusiness(db: Database) {
           ),
         );
         if (Object.keys(delta).length) {
+          if (
+            writeMutation.getStore() &&
+            task.assigneeId !== state.item.leadId &&
+            ['todo', 'in_progress'].includes(task.status) &&
+            ('assigneeId' in delta ||
+              delta.status === 'done' ||
+              delta.status === 'cancelled')
+          ) {
+            const [other] = await tx
+              .select({ id: schema.task.id })
+              .from(schema.task)
+              .where(
+                and(
+                  eq(schema.task.requirementId, id),
+                  eq(schema.task.assigneeId, task.assigneeId),
+                  inArray(schema.task.status, ['todo', 'in_progress']),
+                  ne(schema.task.id, task.id),
+                ),
+              )
+              .limit(1);
+            if (!other) beginWriteMutation(task.assigneeId);
+          }
           await tx
             .update(schema.task)
             .set({ ...delta, updatedAt: new Date() })
@@ -1196,6 +1266,7 @@ export function createBusiness(db: Database) {
         };
         await finish(tx, reservation.value, receipt);
         confirm();
+        writeMutation.getStore()?.assertCurrent?.();
         if (removedUserIds.length) fence(removedUserIds);
         return receipt;
       };
@@ -1279,6 +1350,7 @@ export function createBusiness(db: Database) {
       if (!added.length && !removed.length && previewLeadId === leadId)
         return complete('unchanged');
       confirm();
+      beginWriteMutation();
 
       for (const person of removed)
         await tx
@@ -2100,7 +2172,7 @@ export function createBusiness(db: Database) {
       // Management commands deliberately keep one explicit attempt: the fence
       // tests (project-administration) require a forced failure to surface as-is,
       // and recovery replays the original command instead of auto-retrying.
-      return await db.transaction(async (tx) => {
+      return await runTransaction(async (tx) => {
         await tx.execute(sql`set local lock_timeout='3s'`);
         const [session] = await tx
           .select()
@@ -2199,6 +2271,7 @@ export function createBusiness(db: Database) {
           after: null,
         };
         if (normalized.kind === 'account.active') {
+          beginWriteMutation();
           if (person!.id === who.userId)
             businessError(409, '不能切换当前账号的状态');
           result.before = person!.active;
@@ -2326,6 +2399,7 @@ export function createBusiness(db: Database) {
           const added = after.filter((r) => !prior.includes(r));
           const removed = prior.filter((r) => !after.includes(r));
           if (added.length && !person!.active) businessError(409, '账号已停用');
+          if (added.length || removed.length) beginWriteMutation();
           if (removed.length)
             await tx
               .delete(schema.projectMember)
@@ -2355,6 +2429,7 @@ export function createBusiness(db: Database) {
         confirmTemplate();
         await finish(tx, receipt.value, result);
         confirmTemplate();
+        writeMutation.getStore()?.assertCurrent?.();
         if (result.changed && result.targetId) {
           fence(result.targetId, result.projectId);
           fenced = true;

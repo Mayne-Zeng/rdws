@@ -23,9 +23,11 @@ export function registerRequirementImport(
     assertResponse,
     business,
     db,
+    isStopping,
     mirrors,
     requestDemandScope,
     responseScopes,
+    trackWork,
     verifyEditLogin,
     worktreesFor,
   } = workbench;
@@ -33,17 +35,20 @@ export function registerRequirementImport(
   const importRoute = {
     bodyLimit: importLimits.bytes,
     attachValidation: true,
-    async onRequest(request: FastifyRequest, reply: FastifyReply) {
-      reply.header('cache-control', 'no-store');
-      const epoch = workbench.authorizationEpoch;
-      const who = await actor(request.headers);
-      verifyEditLogin(request, who.authSessionId);
-      const { projectId } = request.params as { projectId: string };
-      const scope = { ...who, projectId, epoch, importReply: [] as string[] };
-      assertResponse(scope);
-      await business.authorizeImport(who, projectId);
-      assertResponse(scope);
-      responseScopes.set(request, scope);
+    onRequest(request: FastifyRequest, reply: FastifyReply) {
+      return trackWork(async () => {
+        if (isStopping()) businessError(503, '项目运行正在关闭');
+        reply.header('cache-control', 'no-store');
+        const epoch = workbench.authorizationEpoch;
+        const who = await actor(request.headers);
+        verifyEditLogin(request, who.authSessionId);
+        const { projectId } = request.params as { projectId: string };
+        const scope = { ...who, projectId, epoch, importReply: [] as string[] };
+        assertResponse(scope);
+        await business.authorizeImport(who, projectId);
+        assertResponse(scope);
+        responseScopes.set(request, scope);
+      });
     },
     async preValidation(request: FastifyRequest, reply: FastifyReply) {
       const raw: unknown = request.body;

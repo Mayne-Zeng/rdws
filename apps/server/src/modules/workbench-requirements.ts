@@ -92,6 +92,7 @@ export function registerRequirements(
     verifyEditLogin,
     workspaceResult,
     worktreesFor,
+    writeAuthority,
   } = workbench;
 
   app.post(
@@ -393,34 +394,44 @@ export function registerRequirements(
         businessError(503, '人员变更结果尚未确认，请重试原操作');
       let entry: PersonnelFence | undefined;
       try {
-        const result = await business.editPersonnel(
+        const edit = () =>
+          business.editPersonnel(
+            scope,
+            scope.projectId,
+            id,
+            input,
+            () => {
+              assertResponse(scope);
+              if (personnelFences.has(key))
+                businessError(503, '人员变更结果尚未确认，请重试原操作');
+            },
+            (userIds) => {
+              entry = {
+                key,
+                actorId: scope.userId,
+                projectId: scope.projectId,
+                requirementId: id,
+                commandId: input.commandId,
+                digest: digestOf(normalizePersonnel(input)),
+                cutoff: Date.now(),
+                userIds,
+              };
+              personnelFences.set(key, entry);
+            },
+            () => {
+              if (entry && personnelFences.get(key) === entry)
+                personnelFences.delete(key);
+              entry = undefined;
+            },
+          );
+        const result = await writeAuthority.change(
           scope,
-          scope.projectId,
-          id,
-          input,
-          () => {
-            assertResponse(scope);
-            if (personnelFences.has(key))
-              businessError(503, '人员变更结果尚未确认，请重试原操作');
-          },
-          (userIds) => {
-            entry = {
-              key,
-              actorId: scope.userId,
-              projectId: scope.projectId,
-              requirementId: id,
-              commandId: input.commandId,
-              digest: digestOf(normalizePersonnel(input)),
-              cutoff: Date.now(),
-              userIds,
-            };
-            personnelFences.set(key, entry);
-          },
-          () => {
-            if (entry && personnelFences.get(key) === entry)
-              personnelFences.delete(key);
-            entry = undefined;
-          },
+          'requirement.personnel',
+          'requirement:' + id,
+          input.commandId,
+          normalizePersonnel(input),
+          ({ requirementId }) => requirementId === id,
+          edit,
         );
         responseScopes.set(request, {
           ...scope,
@@ -525,11 +536,27 @@ export function registerRequirements(
   app.post(
     '/api/requirements/:id/commands',
     { schema: { body: BusinessCommand } },
-    async (request) =>
-      business.execute(
-        await actor(request.headers),
-        (request.params as { id: string }).id,
-        request.body as BusinessCommand,
-      ),
+    async (request) => {
+      const who = await actor(request.headers);
+      const { id } = request.params as { id: string };
+      const input = request.body as BusinessCommand;
+      const execute = () => business.execute(who, id, input);
+      if (input.type === 'requirement.stage') return execute();
+      if (
+        input.type === 'task.update' &&
+        !('status' in input.patch) &&
+        !('assigneeId' in input.patch)
+      )
+        return execute();
+      return writeAuthority.change(
+        who,
+        input.type,
+        'requirement:' + id,
+        input.commandId,
+        input,
+        ({ requirementId }) => requirementId === id,
+        execute,
+      );
+    },
   );
 }

@@ -437,7 +437,14 @@ export function isMicrosecondTimestamp(value: unknown): value is string {
 
 function registerProjectAudit(
   app: FastifyInstance,
-  { assertResponse, db, projectRoles, requestDemandScope }: WorkbenchRuntime,
+  {
+    assertResponse,
+    db,
+    isStopping,
+    projectRoles,
+    requestDemandScope,
+    trackWork,
+  }: WorkbenchRuntime,
 ) {
   const outbound = new WeakMap<FastifyRequest, string[]>();
   const { requirement, projectMember, session, user } = schema;
@@ -445,44 +452,46 @@ function registerProjectAudit(
     projectBusinessAuditPath,
     {
       exposeHeadRoute: false,
-      onSend: async (request, reply, payload) => {
-        const ids = outbound.get(request);
-        if (reply.statusCode >= 400 || !ids) return payload;
-        const scope = requestDemandScope(request);
-        const { projectId, userId, authSessionId } = scope;
-        const visible = ids.length
-          ? sql<number>`(select count(*)::integer from ${requirement}
+      onSend: (request, reply, payload) =>
+        trackWork(async () => {
+          const ids = outbound.get(request);
+          if (reply.statusCode >= 400 || !ids) return payload;
+          if (isStopping()) fail(503, '项目运行正在关闭');
+          const scope = requestDemandScope(request);
+          const { projectId, userId, authSessionId } = scope;
+          const visible = ids.length
+            ? sql<number>`(select count(*)::integer from ${requirement}
               where ${requirement.projectId} = ${projectId}
                 and ${inArray(requirement.id, ids)}
                 and ${readableRequirement(userId)})`
-          : sql<number>`0`;
-        const [current] = await db
-          .select({
-            expiresAt: session.expiresAt,
-            member: sql<boolean>`exists (select 1 from ${projectMember}
+            : sql<number>`0`;
+          const [current] = await db
+            .select({
+              expiresAt: session.expiresAt,
+              member: sql<boolean>`exists (select 1 from ${projectMember}
               where ${projectMember.projectId} = ${projectId}
                 and ${projectMember.userId} = ${userId})`,
-            visible,
-          })
-          .from(session)
-          .innerJoin(user, eq(user.id, session.userId))
-          .where(
-            and(
-              eq(session.id, authSessionId),
-              eq(user.id, userId),
-              eq(user.active, true),
-              eq(user.authEpoch, session.authEpoch),
-            ),
-          );
-        if (!current || current.expiresAt.getTime() <= Date.now())
-          fail(401, '登录已失效，请重新登录');
-        if (!current.member || current.visible !== ids.length)
-          fail(403, '当前审计范围已变化，请重新读取');
-        assertResponse(scope);
-        for (const requirementId of ids)
-          assertResponse({ ...scope, requirementId });
-        return payload;
-      },
+              visible,
+            })
+            .from(session)
+            .innerJoin(user, eq(user.id, session.userId))
+            .where(
+              and(
+                eq(session.id, authSessionId),
+                eq(user.id, userId),
+                eq(user.active, true),
+                eq(user.authEpoch, session.authEpoch),
+              ),
+            );
+          if (!current || current.expiresAt.getTime() <= Date.now())
+            fail(401, '登录已失效，请重新登录');
+          if (!current.member || current.visible !== ids.length)
+            fail(403, '当前审计范围已变化，请重新读取');
+          assertResponse(scope);
+          for (const requirementId of ids)
+            assertResponse({ ...scope, requirementId });
+          return payload;
+        }),
     },
     async (request): Promise<ProjectBusinessAuditPage> => {
       const { projectId } = request.params;
@@ -523,8 +532,15 @@ function registerCrossProjectAudit(
   app: FastifyInstance,
   workbench: WorkbenchRuntime,
 ) {
-  const { db, actor, verifyEditLogin, assertResponse, recoverPersonnelFences } =
-    workbench;
+  const {
+    db,
+    actor,
+    verifyEditLogin,
+    assertResponse,
+    isStopping,
+    recoverPersonnelFences,
+    trackWork,
+  } = workbench;
   const { requirement, session, user } = schema;
   const outbound = new WeakMap<
     FastifyRequest,
@@ -539,46 +555,48 @@ function registerCrossProjectAudit(
     crossProjectBusinessAuditPath,
     {
       exposeHeadRoute: false,
-      onSend: async (request, reply, payload) => {
-        const scope = outbound.get(request);
-        if (reply.statusCode >= 400 || !scope) return payload;
-        for (const demand of scope.demands)
-          await recoverPersonnelFences(
-            scope.userId,
-            demand.projectId,
-            demand.requirementId,
-          );
-        const pairs = scope.demands.map(({ projectId, requirementId }) =>
-          and(
-            eq(requirement.projectId, projectId),
-            eq(requirement.id, requirementId),
-          ),
-        );
-        const visible = pairs.length
-          ? sql<number>`(select count(*)::integer from ${requirement}
-            where (${or(...pairs)}) and ${readableRequirement(scope.userId)})`
-          : sql<number>`0`;
-        const [current] = await db
-          .select({ expiresAt: session.expiresAt, visible })
-          .from(session)
-          .innerJoin(user, eq(user.id, session.userId))
-          .where(
+      onSend: (request, reply, payload) =>
+        trackWork(async () => {
+          const scope = outbound.get(request);
+          if (reply.statusCode >= 400 || !scope) return payload;
+          if (isStopping()) fail(503, '项目运行正在关闭');
+          for (const demand of scope.demands)
+            await recoverPersonnelFences(
+              scope.userId,
+              demand.projectId,
+              demand.requirementId,
+            );
+          const pairs = scope.demands.map(({ projectId, requirementId }) =>
             and(
-              eq(session.id, scope.authSessionId),
-              eq(user.id, scope.userId),
-              eq(user.active, true),
-              eq(user.authEpoch, session.authEpoch),
+              eq(requirement.projectId, projectId),
+              eq(requirement.id, requirementId),
             ),
           );
-        if (!current || current.expiresAt.getTime() <= Date.now())
-          fail(401, '登录已失效，请重新登录');
-        if (current.visible !== scope.demands.length)
-          fail(403, '当前审计范围已变化，请重新读取');
-        assertResponse(scope);
-        for (const demand of scope.demands)
-          assertResponse({ ...scope, ...demand });
-        return payload;
-      },
+          const visible = pairs.length
+            ? sql<number>`(select count(*)::integer from ${requirement}
+            where (${or(...pairs)}) and ${readableRequirement(scope.userId)})`
+            : sql<number>`0`;
+          const [current] = await db
+            .select({ expiresAt: session.expiresAt, visible })
+            .from(session)
+            .innerJoin(user, eq(user.id, session.userId))
+            .where(
+              and(
+                eq(session.id, scope.authSessionId),
+                eq(user.id, scope.userId),
+                eq(user.active, true),
+                eq(user.authEpoch, session.authEpoch),
+              ),
+            );
+          if (!current || current.expiresAt.getTime() <= Date.now())
+            fail(401, '登录已失效，请重新登录');
+          if (current.visible !== scope.demands.length)
+            fail(403, '当前审计范围已变化，请重新读取');
+          assertResponse(scope);
+          for (const demand of scope.demands)
+            assertResponse({ ...scope, ...demand });
+          return payload;
+        }),
     },
     async (request): Promise<CrossProjectBusinessAuditPage> => {
       const epoch = workbench.authorizationEpoch;

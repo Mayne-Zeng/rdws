@@ -81,12 +81,14 @@ export async function registerNativeTransport(
     confirmAccess,
     expectedOrigin,
     grant,
+    isStopping,
     lease,
     loginBinding,
     nativeCarrier,
     readyAccess,
     revoke,
     stale,
+    trackWork,
     transfers,
     verifyEditLogin,
     verifyNativeLogin,
@@ -406,26 +408,31 @@ export async function registerNativeTransport(
     nativeMuxPath,
     {
       websocket: true,
-      preValidation: async (request, reply) => {
-        if (
-          Object.keys(request.headers).some((key) => key.startsWith('x-rdws-'))
-        )
-          return reply.code(403).send({ error: '身份头不受信任' });
-        if (request.headers.origin !== expectedOrigin)
-          return reply.code(403).send({ error: '请求来源不受信任' });
-        let original: Access;
-        try {
-          original = await access(
-            request.headers,
-            (request.params as { id: string }).id,
-          );
-        } catch {
-          return reply.code(403).send({ error: '无权连接会话' });
-        }
-        const { binding, generation } = nativeCarrier(request, true);
-        verifyNativeLogin(original, binding);
-        upgradeAccess.set(request, { original, generation });
-      },
+      preValidation: (request, reply) =>
+        trackWork(async () => {
+          if (isStopping())
+            return reply.code(503).send({ error: '共享运行正在关闭' });
+          if (
+            Object.keys(request.headers).some((key) =>
+              key.startsWith('x-rdws-'),
+            )
+          )
+            return reply.code(403).send({ error: '身份头不受信任' });
+          if (request.headers.origin !== expectedOrigin)
+            return reply.code(403).send({ error: '请求来源不受信任' });
+          let original: Access;
+          try {
+            original = await access(
+              request.headers,
+              (request.params as { id: string }).id,
+            );
+          } catch {
+            return reply.code(403).send({ error: '无权连接会话' });
+          }
+          const { binding, generation } = nativeCarrier(request, true);
+          verifyNativeLogin(original, binding);
+          upgradeAccess.set(request, { original, generation });
+        }),
     },
     (browser, request) => {
       const { original, generation } = upgradeAccess.get(request)!;
@@ -435,6 +442,12 @@ export async function registerNativeTransport(
       let hostSignal: AbortSignal | undefined;
       let timer: ReturnType<typeof setInterval> | undefined;
       let chain = Promise.resolve();
+      let upstreamClosed: Promise<unknown> | undefined;
+      let drained: Promise<void> | undefined;
+      const accessChecks = new Set<Promise<void>>();
+      const browserClosed = new Promise((resolve) =>
+        browser.once('close', resolve),
+      );
       const opened = createNativeStreamState();
       const close = () => {
         if (stopped) return;
@@ -443,7 +456,15 @@ export async function registerNativeTransport(
         hostSignal?.removeEventListener('abort', close);
         upstream?.close();
         browser.close(4001, 'access changed');
-        bridges.delete(bridge);
+        drained = Promise.allSettled([
+          connection,
+          chain,
+          browserClosed,
+          upstreamClosed,
+          ...accessChecks,
+        ]).then(() => {
+          bridges.delete(bridge);
+        });
       };
       const bridge = {
         authSessionId: original.who.authSessionId,
@@ -451,13 +472,15 @@ export async function registerNativeTransport(
         requirementId,
         projectId: original.item.projectId,
         close,
+        drained: () => drained!,
       };
-      const connection = (async () => {
+      bridges.add(bridge);
+      const connection = Promise.resolve().then(async () => {
+        if (stopped) return;
         const scope = await readyAccess(request.headers, original);
         const { native } = scope.runtime;
         if (stopped) return;
         if (stale(original)) return close();
-        bridges.add(bridge);
         hostSignal = native.signal;
         hostSignal.addEventListener('abort', close, { once: true });
         if (hostSignal.aborted) {
@@ -472,6 +495,9 @@ export async function registerNativeTransport(
             origin: new URL(native.socketUrl()).origin.replace('ws:', 'http:'),
           },
         });
+        upstreamClosed = new Promise((resolve) =>
+          upstream!.once('close', resolve),
+        );
         upstream.on('message', (data) => {
           if (
             stopped ||
@@ -490,31 +516,50 @@ export async function registerNativeTransport(
         upstream.on('error', close);
         timer = setInterval(() => {
           if (
+            stopped ||
             blocked(bridge.userId, bridge.projectId, undefined, requirementId)
           )
             return;
-          void confirmAccess(request.headers, original).catch(async (error) => {
-            if (
-              error instanceof PendingAuthority ||
-              blocked(bridge.userId, bridge.projectId, undefined, requirementId)
-            )
-              return;
-            close();
-            if (!stale(original))
-              await revoke(
-                bridge.authSessionId,
-                requirementId,
-                bridge.projectId,
-              );
-          });
+          const check = confirmAccess(request.headers, original).then(
+            () => {},
+            async (error) => {
+              if (
+                stopped ||
+                error instanceof PendingAuthority ||
+                blocked(
+                  bridge.userId,
+                  bridge.projectId,
+                  undefined,
+                  requirementId,
+                )
+              )
+                return;
+              close();
+              if (!stale(original))
+                await revoke(
+                  bridge.authSessionId,
+                  requirementId,
+                  bridge.projectId,
+                );
+            },
+          );
+          accessChecks.add(check);
+          const remove = () => {
+            accessChecks.delete(check);
+          };
+          void check.then(remove, remove);
         }, 1000);
         await new Promise<void>((resolve, reject) => {
           upstream!.once('open', resolve);
           upstream!.once('error', reject);
+          upstream!.once('close', () =>
+            reject(new Error('Native bridge closed during upgrade')),
+          );
         });
         return scope.runtime;
-      })();
+      });
       browser.on('message', (data) => {
+        if (stopped) return;
         chain = chain
           .then(async () => {
             const runtime = await connection;
@@ -553,6 +598,7 @@ export async function registerNativeTransport(
       browser.on('close', close);
       browser.on('error', close);
       void connection.catch(close);
+      if (isStopping()) close();
     },
   );
 }

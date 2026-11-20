@@ -31,6 +31,7 @@ export function registerAdministration(
     projects,
     responseScopes,
     revokeMember,
+    writeAuthority,
   } = workbench;
 
   app.get(
@@ -393,60 +394,82 @@ export function registerAdministration(
         { ...who, projectId: project, epoch: workbench.authorizationEpoch },
         held ? key : undefined,
       );
-      let mine = false,
-        retain = false;
-      try {
-        const result = await business.manage(
-          who,
-          input,
-          (userId, projectId) => {
-            if (!fences.has(key)) mine = true;
-            fences.set(key, { userId, projectId, digest });
-          },
-          () => assertResponse({ ...who, epoch }),
-        );
-        if ('unknown' in result) {
-          retain = true;
-          businessError(503, '管理操作结果待核对，请重试同一操作');
-        }
-        const { receipt, replayed } = result;
-        const pending = fences.get(key);
-        const actorFence =
-          pending &&
-          receipt.targetId === pending.userId &&
-          receipt.projectId === pending.projectId;
-        if (actorFence && !receipt.changed) fences.delete(key);
-        if (actorFence && receipt.changed && receipt.targetId) {
-          let notification = pendingNotifications.get(key);
-          if (!notification) {
-            notification = revokeMember(
-              receipt.targetId,
-              receipt.projectId,
-            ).finally(() => {
-              fences.delete(key);
-              pendingNotifications.delete(key);
-            });
-            pendingNotifications.set(key, notification);
+      const manage = async (): Promise<ManagementResult> => {
+        let mine = false,
+          retain = false;
+        try {
+          const result = await business.manage(
+            who,
+            input,
+            (userId, projectId) => {
+              if (!fences.has(key)) mine = true;
+              fences.set(key, { userId, projectId, digest });
+            },
+            () => assertResponse({ ...who, epoch }),
+          );
+          if ('unknown' in result) {
+            retain = true;
+            businessError(503, '管理操作结果待核对，请重试同一操作');
           }
-          const confirmed = await notification;
+          const { receipt, replayed } = result;
+          const pending = fences.get(key);
+          const actorFence =
+            pending &&
+            receipt.targetId === pending.userId &&
+            receipt.projectId === pending.projectId;
+          if (actorFence && !receipt.changed) fences.delete(key);
+          if (actorFence && receipt.changed && receipt.targetId) {
+            let notification = pendingNotifications.get(key);
+            if (!notification) {
+              notification = revokeMember(
+                receipt.targetId,
+                receipt.projectId,
+              ).finally(() => {
+                fences.delete(key);
+                pendingNotifications.delete(key);
+              });
+              pendingNotifications.set(key, notification);
+            }
+            const confirmed = await notification;
+            return {
+              changed: true,
+              replayed,
+              revocation: confirmed ? 'confirmed' : 'lease-expiry',
+            };
+          }
           return {
-            changed: true,
+            changed: receipt.changed,
             replayed,
-            revocation: confirmed ? 'confirmed' : 'lease-expiry',
+            ...(receipt.template ? { template: receipt.template } : {}),
+            revocation:
+              replayed && receipt.changed && receipt.targetId
+                ? 'previously-recorded'
+                : 'none',
           };
+        } finally {
+          if (mine && !retain) fences.delete(key);
         }
-        return {
-          changed: receipt.changed,
-          replayed,
-          ...(receipt.template ? { template: receipt.template } : {}),
-          revocation:
-            replayed && receipt.changed && receipt.targetId
-              ? 'previously-recorded'
-              : 'none',
-        };
-      } finally {
-        if (mine && !retain) fences.delete(key);
-      }
+      };
+      if (
+        !writeAuthority.enabled() ||
+        (input.kind !== 'account.active' && input.kind !== 'project.roles')
+      )
+        return manage();
+      const [target] = await db
+        .select({ id: schema.user.id })
+        .from(schema.user)
+        .where(eq(schema.user.username, input.username.toLowerCase()));
+      return writeAuthority.change(
+        who,
+        input.kind,
+        project ?? 'platform',
+        input.commandId,
+        normalizeManagement(input),
+        (scope) =>
+          (!project || scope.projectId === project) &&
+          (!target || scope.who.userId === target.id),
+        manage,
+      );
     },
   );
 

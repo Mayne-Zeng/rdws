@@ -19,12 +19,13 @@ import {
 type Database = ReturnType<typeof connectDatabase>;
 type Queries = Pick<Database['db'], 'select' | 'insert' | 'update' | 'delete'>;
 type Lease = typeof schema.requirementWriteLease.$inferSelect;
-type Scope = {
+export type WriteHandoffScope = {
   who: Actor;
   projectId: string;
   requirementId: string;
   sessionId: string;
 };
+type Scope = WriteHandoffScope;
 type Invocation = {
   generation: string;
   commandId: string;
@@ -71,13 +72,7 @@ const leaseDuration = 30 * 60 * 1000;
 
 class UnknownWriteCommit extends Error {}
 
-export async function createWriteHandoff(
-  connectionString: string,
-  ticket: string,
-  worktrees: DemandWorktrees,
-  gitPath: string,
-  leaseMs = leaseDuration,
-) {
+function checkLocalExecution(leaseMs: number) {
   if (
     process.platform !== 'darwin' ||
     !Number.isSafeInteger(leaseMs) ||
@@ -87,21 +82,10 @@ export async function createWriteHandoff(
     throw new Error(
       'Isolated write handoff requires a macOS owner and a bounded lease',
     );
+}
 
-  const { pool, db } = connectDatabase(
-    connectionString,
-    randomBytes(32).toString('hex'),
-    3_000,
-  );
-  const authority = await acquireBrokerAuthority().catch(
-    async (error: unknown) => {
-      await pool.end();
-      throw error;
-    },
-  );
-
-  async function acquireBrokerAuthority() {
-    const configuration = await pool.query<{ ready: boolean }>(`
+export async function validateWriteHandoffDatabase({ pool }: Database) {
+  const configuration = await pool.query<{ ready: boolean }>(`
     select current_setting('fsync') = 'on' and not pg_is_in_recovery()
       and not has_table_privilege(current_user, 'public.requirement_write_lease', 'DELETE,TRUNCATE')
       and (select count(distinct t.tgrelid) = 12 from pg_trigger t join pg_class c on c.oid=t.tgrelid
@@ -111,17 +95,68 @@ export async function createWriteHandoff(
           and c.relname in ('auth_user','auth_session','auth_account','auth_verification','project',
             'project_member','requirement','requirement_participant','native_session','task',
             'command_receipt','requirement_write_lease')) as ready`);
-    if (configuration.rows[0]?.ready !== true)
-      throw new Error(
-        'Isolated write handoff database protection could not be confirmed',
-      );
-    const owner = await acquireAuthority(pool, true, ticket);
-    if (!owner)
+  if (configuration.rows[0]?.ready !== true)
+    throw new Error(
+      'Isolated write handoff database protection could not be confirmed',
+    );
+}
+
+export async function createWriteHandoff(
+  connectionString: string,
+  ticket: string,
+  worktrees: DemandWorktrees,
+  gitPath: string,
+  leaseMs = leaseDuration,
+) {
+  checkLocalExecution(leaseMs);
+  const database = connectDatabase(
+    connectionString,
+    randomBytes(32).toString('hex'),
+    3_000,
+  );
+  let authority: string | null;
+  try {
+    await validateWriteHandoffDatabase(database);
+    authority = await acquireAuthority(database.pool, true, ticket);
+    if (!authority)
       throw new Error(
         'Isolated write handoff requires a managed database owner',
       );
-    return owner;
+  } catch (error) {
+    await database.pool.end();
+    throw error;
   }
+  const owned = authority;
+  const handoff = createOwnedWriteHandoff(
+    database,
+    owned,
+    worktrees,
+    gitPath,
+    leaseMs,
+  );
+  let shutdown: Promise<void> | undefined;
+  async function stop() {
+    try {
+      await handoff.close();
+      await releaseAuthority(database.pool, owned);
+    } finally {
+      await database.pool.end();
+    }
+  }
+  return { ...handoff, close: () => (shutdown ??= stop()) };
+}
+
+export function createOwnedWriteHandoff(
+  { pool, db }: Database,
+  authority: string,
+  worktrees: DemandWorktrees,
+  gitPath: string,
+  leaseMs = leaseDuration,
+  loginClosed: (id: string) => boolean = () => false,
+) {
+  checkLocalExecution(leaseMs);
+  if (!authority)
+    throw new Error('Write handoff requires a managed database owner');
 
   const business = createBusiness(db);
   const { reserve, finish } = business.writeReceipts;
@@ -193,7 +228,13 @@ export async function createWriteHandoff(
     }
   }
 
+  function requireLiveLogin(scope: Scope) {
+    if (loginClosed(scope.who.authSessionId))
+      businessError(401, '登录已失效，请重新登录');
+  }
+
   function context(tx: Queries, scope: Scope) {
+    requireLiveLogin(scope);
     return business.writeContext(
       tx,
       scope.who,
@@ -203,7 +244,8 @@ export async function createWriteHandoff(
     );
   }
 
-  function allowed(deadline: number) {
+  function allowed(deadline: number, scope: Scope) {
+    requireLiveLogin(scope);
     if (stopping || fences.size || !(Date.now() < deadline))
       businessError(409, '写入授权正在变更或已到期');
   }
@@ -356,12 +398,12 @@ export async function createWriteHandoff(
   function propose(scope: Scope, grant: Grant) {
     const previous = holdings.get(scope.requirementId);
     if (previous) clearTimeout(previous.timer);
-    const timer = setTimeout(
-      () => {
-        void drain(scope.requirementId, grant.generation).catch(() => {});
-      },
+    const timer = scheduleExpiry(
+      scope.requirementId,
+      grant,
       Math.max(0, grant.expiresAt - Date.now()),
-    ).unref();
+      0,
+    );
     holdings.set(scope.requirementId, {
       scope,
       grant,
@@ -370,8 +412,33 @@ export async function createWriteHandoff(
     });
   }
 
+  function scheduleExpiry(
+    requirementId: string,
+    grant: Grant,
+    delay: number,
+    retries: number,
+  ): NodeJS.Timeout {
+    return setTimeout(() => {
+      if (stopping) return;
+      const active = holdings.get(requirementId);
+      if (active?.grant.generation !== grant.generation) return;
+      void track(drain(requirementId, grant.generation)).catch(() => {
+        if (!stopping && holdings.get(requirementId) === active && retries < 3)
+          active.timer = scheduleExpiry(
+            requirementId,
+            grant,
+            250 * 2 ** retries,
+            retries + 1,
+          );
+      });
+    }, delay).unref();
+  }
+
   async function acquire(scope: Scope, commandId: string) {
     await recoverReleases();
+    const expiring = holdings.get(scope.requirementId)?.grant;
+    if (expiring && expiring.expiresAt <= Date.now())
+      await drain(scope.requirementId, expiring.generation);
     let proposed: Grant | undefined;
     const issued = await transaction(async (tx, deadline) => {
       const snapshot = await context(tx, scope);
@@ -393,7 +460,10 @@ export async function createWriteHandoff(
           grant.contextVersion !== snapshot.requirement.contextVersion
         )
           businessError(409, '原写入资格已失效，请重新申请');
-        allowed(Math.min(deadline, snapshot.validBefore, grant.expiresAt));
+        allowed(
+          Math.min(deadline, snapshot.validBefore, grant.expiresAt),
+          scope,
+        );
         return { grant, snapshot };
       }
       const tracked = holdings.get(scope.requirementId);
@@ -406,7 +476,7 @@ export async function createWriteHandoff(
       )
         businessError(409, '已有写会话或进程尚待停稳');
       const expiresAt = Math.min(snapshot.validBefore, Date.now() + leaseMs);
-      allowed(Math.min(deadline, expiresAt));
+      allowed(Math.min(deadline, expiresAt), scope);
       const grant = {
         generation: randomUUID(),
         expiresAt,
@@ -430,7 +500,7 @@ export async function createWriteHandoff(
         .values(values)
         .onConflictDoUpdate({ target: leases.requirementId, set: values });
       await finish(tx, receipt.value, { ...grant, ownerGeneration: authority });
-      allowed(Math.min(deadline, expiresAt));
+      allowed(Math.min(deadline, expiresAt), scope);
       proposed = grant;
       propose(scope, grant);
       return { grant, snapshot };
@@ -443,7 +513,7 @@ export async function createWriteHandoff(
     const tracked = holdings.get(scope.requirementId);
     if (tracked?.grant.generation !== generation)
       businessError(409, '原写入资格已失效，请重新申请');
-    allowed(expiresAt);
+    allowed(expiresAt, scope);
     tracked.confirmed = true;
     return {
       generation,
@@ -584,6 +654,7 @@ export async function createWriteHandoff(
         businessError(403, '仓库不在需求工作树范围内');
       allowed(
         Math.min(deadline, snapshot.validBefore, row.expiresAt.getTime()),
+        scope,
       );
       const runId = randomUUID();
       await tx
@@ -664,6 +735,7 @@ export async function createWriteHandoff(
               businessError(409, '当前执行的写入资格已失效');
             allowed(
               Math.min(deadline, snapshot.validBefore, row.expiresAt.getTime()),
+              scope,
             );
             confirmConnection();
             started = true;
@@ -707,23 +779,42 @@ export async function createWriteHandoff(
   }
 
   function beginAuthorityChange(matches: (scope: Scope) => boolean) {
+    if (stopping) businessError(503, '写入协调正在关闭');
     const token = Symbol();
     fences.add(token);
+    const captured = [...holdings.values()].filter(({ scope }) =>
+      matches(scope),
+    );
     return {
+      generations: captured.map(({ scope, grant }) => ({
+        requirementId: scope.requirementId,
+        generation: grant.generation,
+      })),
       rolledBack: () => fences.delete(token),
       uncertain() {
-        for (const { scope, grant } of holdings.values())
-          if (matches(scope))
-            abortExecution(scope.requirementId, grant.generation);
+        for (const { scope, grant } of captured)
+          abortExecution(scope.requirementId, grant.generation);
       },
-      async committed() {
-        await Promise.all(
-          [...holdings.values()]
-            .filter(({ scope }) => matches(scope))
-            .map(({ scope, grant }) =>
-              drain(scope.requirementId, grant.generation),
-            ),
+      async committed(recheck = false) {
+        const results = await Promise.allSettled(
+          captured.map(async ({ scope, grant }) => {
+            if (recheck) {
+              try {
+                await transaction((tx) => context(tx, scope));
+                return;
+              } catch (error) {
+                const status = (error as { statusCode?: number }).statusCode;
+                if (status !== 401 && status !== 403 && status !== 404) {
+                  abortExecution(scope.requirementId, grant.generation);
+                  throw error;
+                }
+              }
+            }
+            await drain(scope.requirementId, grant.generation);
+          }),
         );
+        const failed = results.find((result) => result.status === 'rejected');
+        if (failed) throw failed.reason;
         fences.delete(token);
       },
     };
@@ -735,7 +826,6 @@ export async function createWriteHandoff(
     change: (tx: Queries) => Promise<T>,
     confirm: AuthorityConfirmation,
   ) {
-    if (stopping) businessError(409, '写入协调正在停止');
     if (typeof confirm !== 'function')
       throw new Error('Authority changes require same-command confirmation');
     if (authorityChanges.has(operationId))
@@ -818,10 +908,8 @@ export async function createWriteHandoff(
         throw new Error(
           'Isolated write execution could not be confirmed stopped',
         );
-      await releaseAuthority(pool, authority);
     } finally {
       for (const { timer } of holdings.values()) clearTimeout(timer);
-      await pool.end();
     }
   }
 
@@ -832,6 +920,11 @@ export async function createWriteHandoff(
   function track<T>(operation: Promise<T>): Promise<T> {
     operations.add(operation);
     return operation.finally(() => operations.delete(operation));
+  }
+
+  async function admit<T>(operation: () => Promise<T>) {
+    if (stopping) businessError(503, '写入协调正在关闭');
+    return track(operation());
   }
 
   async function submit(scope: Scope, input: Invocation, onOutput?: OnOutput) {
@@ -851,20 +944,25 @@ export async function createWriteHandoff(
 
   return {
     acquire: (scope: Scope, commandId: string) =>
-      track(acquire(structuredClone(scope), commandId)),
+      admit(() => acquire(structuredClone(scope), commandId)),
     execute: (scope: Scope, input: Invocation, onOutput?: OnOutput) =>
-      track(submit(structuredClone(scope), structuredClone(input), onOutput)),
+      admit(() =>
+        submit(structuredClone(scope), structuredClone(input), onOutput),
+      ),
     release: (scope: Scope, generation: string, commandId: string) =>
-      track(release(structuredClone(scope), generation, commandId)),
+      admit(() => release(structuredClone(scope), generation, commandId)),
     beginAuthorityChange,
     changeAuthority: <T>(
       operationId: string,
       matches: (scope: Scope) => boolean,
       change: (tx: Queries) => Promise<T>,
       confirm: AuthorityConfirmation,
-    ) => track(changeAuthority(operationId, matches, change, confirm)),
+    ) => admit(() => changeAuthority(operationId, matches, change, confirm)),
     reconcileAuthorityChange: (operationId: string) =>
-      track(reconcileAuthorityChange(operationId)),
+      admit(() => reconcileAuthorityChange(operationId)),
+    stopAdmission() {
+      stopping = true;
+    },
     close,
   };
 }

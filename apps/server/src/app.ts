@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { isAbsolute } from 'node:path';
 import Fastify, { type FastifyError } from 'fastify';
 import { fromNodeHeaders } from 'better-auth/node';
 import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
@@ -10,6 +11,11 @@ import {
 } from '@rdws/dsh/web';
 import { registerWorkbench } from './modules/workbench.ts';
 import { mainModelPolicy } from './modules/model-egress-policy.ts';
+import {
+  createOwnedWriteHandoff,
+  validateWriteHandoffDatabase,
+} from './modules/write-handoff.ts';
+import { checkedWriteTransaction } from './modules/checked-write-transaction.ts';
 import {
   createAuth,
   logoutRevocationHeader,
@@ -25,6 +31,7 @@ export function buildApp(options: {
   nativeProfiles?: ReadonlyMap<string, string>;
   authorityTicket?: string;
   mainModelPolicy?: unknown;
+  isolatedWrite?: { gitPath: string };
 }) {
   const modelEgress = resolveNativeModelEgress(
     process.env.RDWS_NATIVE_MODEL_EGRESS,
@@ -34,6 +41,17 @@ export function buildApp(options: {
       'Native Host model egress does not match BFF configuration',
     );
   const ticket = options.authorityTicket;
+  const isolatedWrite = options.isolatedWrite;
+  if (
+    isolatedWrite &&
+    (process.env.RDWS_MODE !== 'test' ||
+      process.platform !== 'darwin' ||
+      !ticket ||
+      modelEgress !== 'paused' ||
+      options.nativeHost ||
+      !isAbsolute(isolatedWrite.gitPath))
+  )
+    throw new Error('Isolated write handoff requires a managed macOS test BFF');
   const mediated = modelEgress === 'mediated';
   if (
     mediated &&
@@ -65,7 +83,13 @@ export function buildApp(options: {
     throw new Error('Invalid database authority startup ticket');
   const proof =
     ticket === undefined ? undefined : randomBytes(32).toString('hex');
-  const database = connectDatabase(options.databaseUrl, proof);
+  const database = connectDatabase(
+    options.databaseUrl,
+    proof,
+    isolatedWrite ? 3_000 : undefined,
+    !!isolatedWrite,
+  );
+  let ownedWrite: ReturnType<typeof createOwnedWriteHandoff> | undefined;
   let workbench: Awaited<ReturnType<typeof registerWorkbench>> | undefined;
   const auth = createAuth(database.db, {
     secret: options.secret,
@@ -78,17 +102,97 @@ export function buildApp(options: {
   }).withTypeProvider<TypeBoxTypeProvider>();
   let authority: string | null = null;
   let stopping: Promise<undefined> | undefined;
-  app.addHook('onReady', async () => {
-    authority = await acquireAuthority(
-      database.pool,
-      modelEgress !== 'direct',
-      ticket,
+  let closing = false;
+  const active = new Set<Promise<unknown>>();
+  function trackWork<T>(work: () => Promise<T>) {
+    const pending = work();
+    active.add(pending);
+    const remove = () => {
+      active.delete(pending);
+    };
+    void pending.then(remove, remove);
+    return pending;
+  }
+  const checked = isolatedWrite
+    ? checkedWriteTransaction(database.pool)
+    : undefined;
+  if (isolatedWrite)
+    app.addHook('onRoute', (route) => {
+      if (route.websocket) return;
+      const handler = route.handler;
+      route.handler = function (request, reply) {
+        if (closing) return reply.code(503).send({ error: '共享运行正在关闭' });
+        return trackWork(async () => handler.call(this, request, reply));
+      };
+    });
+  let closingDatabase: Promise<void> | undefined;
+  const closeDatabase = () =>
+    (closingDatabase ??= (async () => {
+      while (active.size) await Promise.allSettled(active);
+      await checked?.drain();
+      await database.close();
+    })());
+  async function releaseConfirmedOwner() {
+    if (!authority || !proof) return;
+    if (app.server.listening)
+      throw new Error('HTTP shutdown was not confirmed');
+    const control = connectDatabase(options.databaseUrl, proof);
+    try {
+      await releaseAuthority(control.pool, authority);
+      authority = null;
+    } finally {
+      await control.pool.end();
+    }
+  }
+  if (isolatedWrite) {
+    app.decorate('isolatedWriteHandoff', () => ownedWrite);
+    app.decorate('recoverIsolatedWriteAuthority', () =>
+      workbench?.recoverWriteAuthority(),
     );
-    if (mediated && !authority)
-      throw new Error('Mediated Native database ownership was not confirmed');
+  }
+  app.addHook('onReady', async () => {
+    try {
+      const prepared = workbench;
+      if (isolatedWrite) {
+        if (closing) throw new Error('Write handoff closed during startup');
+        if (!prepared)
+          throw new Error('Write handoff workbench could not be assembled');
+        await validateWriteHandoffDatabase(database);
+      }
+      authority = await acquireAuthority(
+        database.pool,
+        modelEgress !== 'direct',
+        ticket,
+      );
+      if ((mediated || isolatedWrite) && !authority)
+        throw new Error('Mediated Native database ownership was not confirmed');
+      if (isolatedWrite && closing)
+        throw new Error('Write handoff closed during startup');
+      if (isolatedWrite && prepared && authority)
+        ownedWrite = createOwnedWriteHandoff(
+          database,
+          authority,
+          prepared.writeWorktrees,
+          isolatedWrite.gitPath,
+          undefined,
+          prepared.writeLoginClosed,
+        );
+    } catch (error) {
+      if (isolatedWrite) {
+        try {
+          await workbench?.closeWorkflows();
+        } finally {
+          await closeDatabase();
+        }
+        if (!ownedWrite) await releaseConfirmedOwner();
+      }
+      throw error;
+    }
   });
-  app.addHook('onClose', () => database.pool.end());
+  if (!isolatedWrite) app.addHook('onClose', closeDatabase);
   app.addHook('onRequest', async (request, reply) => {
+    if (isolatedWrite && closing)
+      return reply.code(503).send({ error: '共享运行正在关闭' });
     if (request.method === 'POST' && request.headers.origin !== options.origin)
       return reply.code(403).send({ error: '请求来源不受信任' });
   });
@@ -158,6 +262,9 @@ export function buildApp(options: {
       options.nativeProfiles,
       modelEgress,
       policy,
+      () => ownedWrite,
+      checked,
+      isolatedWrite ? trackWork : undefined,
     );
   });
   app.setErrorHandler((error: FastifyError, _request, reply) => {
@@ -181,16 +288,18 @@ export function buildApp(options: {
   const closeFastify = app.close.bind(app);
   function stopRuntime() {
     return (stopping ??= (async () => {
-      await closeFastify();
-      if (!authority || !proof) return undefined;
-      if (app.server.listening)
-        throw new Error('HTTP shutdown was not confirmed');
-      const control = connectDatabase(options.databaseUrl, proof);
-      try {
-        await releaseAuthority(control.pool, authority);
-      } finally {
-        await control.pool.end();
-      }
+      closing = true;
+      ownedWrite?.stopAdmission();
+      if (isolatedWrite) {
+        const results = await Promise.allSettled([
+          workbench?.closeWorkflows(),
+          closeFastify(),
+        ]);
+        await closeDatabase();
+        if (results.some(({ status }) => status === 'rejected'))
+          throw new Error('Project shutdown was not confirmed');
+      } else await closeFastify();
+      await releaseConfirmedOwner();
       return undefined;
     })());
   }

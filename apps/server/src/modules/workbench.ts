@@ -26,5 +26,9 @@ export async function registerWorkbench(
     access: runtime.access,
     revoke: runtime.revoke,
     closeLogin: runtime.closeLogin,
+    writeWorktrees: runtime.writeWorktrees,
+    writeLoginClosed: runtime.writeLoginClosed,
+    recoverWriteAuthority: runtime.writeAuthority.recover,
+    closeWorkflows: runtime.closeWorkflows,
   };
 }

@@ -144,6 +144,7 @@
   - 已交付子项：[隔离单写与停稳交接](02-directory-and-engineering-design.html#t07-isolated-write-handoff-evidence-20261120)。一次性受管 PostgreSQL、真实 T05 工作树与 macOS Seatbelt 核对一个写代、旧进程停稳及下一会话实际写入。定点 19 项、整仓 273 项、静态检查和基线通过。产品工具接线、运行状态恢复及编队 UI 继续按 T07 验收。
   - 接线前核对：[Native 工具与受管模型请求](02-directory-and-engineering-design.html#t07-native-tool-wire-evidence-20261120)。从锁定 SDK 的三个实际回环请求核对文本、工具声明及历史；现有 BFF 只接受文本。记录同库所有者复用、当步工具限定及后续联合验收。
   - 接线前核对：[Native 声明与执行的独立边界](02-directory-and-engineering-design.html#t07-native-tool-boundary-evidence-20261120)。正式 Host 实际模型回包在已声明和无声明场景中都受现有根守卫，执行体零入口。锁包对照复验声明后撤权、无声明及许可执行一次。14 项邻域和故障反例通过。
+  - 已交付子项：[共享 BFF 所有者与写资格撤销](02-directory-and-engineering-design.html#t07-shared-bff-delivery-20261120)。真实 PostgreSQL 借用终止、独立后端回查及断开客户端后的关停均通过，A/B 交付复审批准。整仓 308 项、静态、构建及基线通过。本地提交，待 Native 写工具与编队联合验收。
   - 来源：I2-AUTH、I3-WRITE、I3-CONTEXT。
 
 - [ ] **T08 · 变更查看与交付快照**
@@ -336,7 +337,7 @@
 | ------------ | ------------ | -------- | ----------- | ------------------------------------ |
 | demands      | 需求管理     | T11      | T01 T18     | 部分：列表／新建／初始分派／批量导入 |
 | overview     | 需求档案     | T11      | T01 T08     | 部分：资料／人员／子任务／阶段       |
-| chat         | 对话         | T02      | T01 T07     | 部分：原生流／派生／回放；用户验收待 |
+| chat         | 对话         | T02      | T01 T07     | 部分：原生流／派生／回放已验收       |
 | context      | 上下文       | T12      | T01 T14     | 部分：只读业务快照                   |
 | fleet        | 编队         | T07      | T02 T06     | 独立页未建；只读多会话子能力在 chat  |
 | changes      | 变更         | T08      | T09 T10     | 未建                                 |

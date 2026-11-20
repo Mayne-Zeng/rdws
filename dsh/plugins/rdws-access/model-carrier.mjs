@@ -24,7 +24,11 @@ export function installModelCarrier(
   const fromAgentLoop = createRequire(
     fromNative.resolve('@deepseek-ai/dsh-agent-loop/package.json'),
   );
-  const { isAgentLoopRequest } = fromAgentLoop('@deepseek-ai/dsh-llm');
+  const {
+    isAgentLoopRequest,
+    requestImageHandleText,
+    resolveImageAttachmentAccess,
+  } = fromAgentLoop('@deepseek-ai/dsh-llm');
   if (typeof isAgentLoopRequest !== 'function')
     throw new Error('Native model identity unavailable');
   const targets = new Map(
@@ -38,6 +42,11 @@ export function installModelCarrier(
   const attachmentRoutes =
     contextBinding.attachmentCallFor && new Set(['files', 'messages']);
   if (attachmentRoutes) {
+    if (
+      typeof requestImageHandleText !== 'function' ||
+      typeof resolveImageAttachmentAccess !== 'function'
+    )
+      throw unavailable();
     const attachments = ctx.attachments;
     const descriptor = Object.getOwnPropertyDescriptor(
       attachments,
@@ -58,20 +67,28 @@ export function installModelCarrier(
           ) ||
           result.attachment?.attachmentId !== id ||
           !(result.data instanceof Uint8Array) ||
-          result.data.byteLength !== result.bytes
+          result.data.byteLength !== result.bytes ||
+          !Number.isSafeInteger(result.width) ||
+          result.width < 1 ||
+          !Number.isSafeInteger(result.height) ||
+          result.height < 1
         )
           throw unavailable();
         const variant = {
           sha256: createHash('sha256').update(result.data).digest('hex'),
           bytes: result.bytes,
           mediaType: result.mediaType,
+          width: result.width,
+          height: result.height,
         };
         const previous = attachment.variants.get(id);
         if (
           previous &&
           (previous.sha256 !== variant.sha256 ||
             previous.bytes !== variant.bytes ||
-            previous.mediaType !== variant.mediaType)
+            previous.mediaType !== variant.mediaType ||
+            previous.width !== variant.width ||
+            previous.height !== variant.height)
         )
           throw unavailable();
         attachment.variants.set(id, variant);
@@ -116,11 +133,27 @@ export function installModelCarrier(
       ]),
     });
     if (!attachment.ready) {
-      const images = attachment.origin.expected.map((source) => {
-        const variant = attachment.variants.get(source.attachmentId);
-        if (!variant) throw unavailable();
-        return { ...source, ...variant };
-      });
+      const images = attachment.origin.expected.map(
+        ({ reference, ...source }) => {
+          const variant = attachment.variants.get(source.attachmentId);
+          if (!variant) throw unavailable();
+          const access = resolveImageAttachmentAccess(
+            ctx.attachments,
+            (path) => ctx.get('fs')?.processPathFromHostPath(path),
+            reference,
+          );
+          const handle = requestImageHandleText(reference, variant, access);
+          return {
+            ...source,
+            bytes: variant.bytes,
+            sha256: variant.sha256,
+            mediaType: variant.mediaType,
+            handleSha256: createHash('sha256')
+              .update(JSON.stringify(handle))
+              .digest('hex'),
+          };
+        },
+      );
       attachment.ready = attachment.origin.prepare(images, request.signal);
     }
     const ack = await attachment.ready;

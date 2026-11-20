@@ -406,7 +406,7 @@ export class ContextRuns {
         'modelStep',
         'bindingId',
         'callId',
-        ...(closing ? [] : ['images']),
+        ...(closing ? [] : ['images', 'userContentSha256']),
       ]) ||
       Object.entries(this.binding(run)).some(
         ([key, value]) => input[key] !== value,
@@ -441,6 +441,8 @@ export class ContextRuns {
       step.attachment ||
       step.attempts.size >= 128 ||
       step.wireAttempt !== undefined ||
+      typeof input.userContentSha256 !== 'string' ||
+      !imageDigest.test(input.userContentSha256) ||
       !Array.isArray(input.images) ||
       input.images.length > maxAttachmentOccurrences
     )
@@ -448,6 +450,7 @@ export class ContextRuns {
 
     const messages = new Map<string, Run>();
     const positions = new Set<string>();
+    const imageHandleDigests: string[] = [];
     const images = input.images.map((entry: unknown) => {
       if (
         !isRecord(entry) ||
@@ -460,6 +463,7 @@ export class ContextRuns {
           'messageId',
           'blockIndex',
           'attachmentId',
+          'handleSha256',
           'bytes',
           'sha256',
           'mediaType',
@@ -471,6 +475,8 @@ export class ContextRuns {
         entry.blockIndex < 0 ||
         typeof entry.attachmentId !== 'string' ||
         !attachmentId.test(entry.attachmentId) ||
+        typeof entry.handleSha256 !== 'string' ||
+        !imageDigest.test(entry.handleSha256) ||
         typeof entry.sha256 !== 'string' ||
         !imageDigest.test(entry.sha256) ||
         typeof entry.bytes !== 'number' ||
@@ -498,6 +504,7 @@ export class ContextRuns {
         return invalidModel();
       messages.set(entry.messageId, source);
       positions.add(position);
+      imageHandleDigests.push(entry.handleSha256);
       return Object.freeze({
         mediaType: entry.mediaType,
         bytes: entry.bytes,
@@ -516,6 +523,8 @@ export class ContextRuns {
         sessionId: run.sessionId,
         bindingId: step.id,
         images: Object.freeze(images),
+        imageHandleDigests: Object.freeze(imageHandleDigests),
+        userContentSha256: input.userContentSha256,
       }),
     };
     return { bindingId: step.id, callId, grant };

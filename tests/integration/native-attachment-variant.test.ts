@@ -34,6 +34,7 @@ import { modelTlsCertificate } from '../helpers/model-tls.ts';
 
 const fixtureCredential = 'synthetic-variant-only';
 const receiptId = 'synthetic-native-variant';
+const authoredPath = '/fixture-user/explicit-attachment-context';
 const credentialGeneration = 'native-variant-fixture';
 const sha = (value: Buffer | string) =>
   createHash('sha256').update(value).digest('hex');
@@ -82,12 +83,49 @@ type Attempt = {
   call: { provider: string; model: string; purpose?: string };
   current: boolean;
   wireSha256: string;
+  projectedSha256: string;
   contentType: string | null;
   attribution: string[];
   fixtureCredentialPresent: boolean;
   witness: Witness;
   hasOriginalImage: boolean;
 };
+
+function observeMessages(
+  wire: Buffer,
+  contentType: string | null,
+  model: string,
+) {
+  const request = readDeepSeekMessagesEvidence(wire, contentType, model);
+  if (!request) throw new Error('Expected locked Native Messages');
+  const decoded = JSON.parse(wire.toString('utf8')) as {
+    messages: { role: string; content: { type: string; text?: string }[] }[];
+  };
+  const handles = request.images.map(({ messageIndex, blockIndex }) => {
+    const text = decoded.messages[messageIndex]?.content[blockIndex - 1];
+    if (text?.type !== 'text' || !text.text)
+      throw new Error('Expected a generated description before each image');
+    return text.text;
+  });
+  for (const image of [...request.images].reverse())
+    decoded.messages[image.messageIndex]!.content.splice(
+      image.blockIndex - 1,
+      1,
+    );
+  const userContent = decoded.messages
+    .filter(({ role }) => role === 'user')
+    .flatMap(({ content }) =>
+      content.map(({ type, text }) =>
+        type === 'text' ? ['text', text] : ['image'],
+      ),
+    );
+  return {
+    handles,
+    imageHandleDigests: handles.map((handle) => sha(JSON.stringify(handle))),
+    userContentSha256: sha(JSON.stringify(userContent)),
+    projectedSha256: sha(JSON.stringify(decoded)),
+  };
+}
 
 function syntheticMessages(model: string) {
   const frames = [
@@ -138,6 +176,8 @@ test
     'native inline',
     'native lost ACK',
     'native revoked',
+    'native offload mixed',
+    'native offload all',
   ] as const)(
   'Native variant evidence follows the original claimed input with %s',
   async (transport) => {
@@ -146,7 +186,10 @@ test
     const nativeInline = transport === 'native inline';
     const loseAck = transport === 'native lost ACK';
     const revokeBeforeCarrier = transport === 'native revoked';
-    const denied = loseAck || revokeBeforeCarrier;
+    const offload =
+      transport === 'native offload mixed' ||
+      transport === 'native offload all';
+    const denied = loseAck || revokeBeforeCarrier || offload;
     let retryFirstMessage = transport === 'native receipt';
     const root = await mkdtemp(
       join(await realpath(tmpdir()), 'rdws-attachment-variant-'),
@@ -155,10 +198,21 @@ test
     const profile = join(config, 'profiles', 'rdws');
     const evidencePath = join(root, 'synthetic-evidence.jsonl');
     const project = 'attachment-variant';
+    const attachmentObjects = join(
+      root,
+      'runtime',
+      'dsh',
+      'project-' + project,
+      'attachments',
+      'v1',
+      'objects',
+    );
     const provider = 'deepseek-official';
     const model = 'fixture-vision';
-    const accepted = 'Synthetic image admitted with original run';
+    const accepted =
+      'Synthetic image admitted with original run at ' + authoredPath;
     const late = 'Synthetic original text with later variation';
+    const file = 'Synthetic typed file rejection';
     const attempts: Attempt[] = [];
     const originals = new Map<
       string,
@@ -177,12 +231,14 @@ test
     }[] = [];
     let replies = 0;
     const receivedImages: Attempt['messageImages'][] = [];
+    const receivedTextBoundaries: boolean[] = [];
     const wireGrants = new Set<string>();
     const visibleGrants: boolean[] = [];
     const httpEntries: string[] = [];
     const uploadedImages: Image[] = [];
     const arrivals: {
       path: string;
+      method: string | undefined;
       wireSha256: string;
       contentType: string | null;
       accept: string | undefined;
@@ -201,6 +257,8 @@ test
     > & {
       manifest?: AttachmentManifest;
       wireSha256?: string;
+      projectedSha256?: string;
+      projection?: ReturnType<typeof observeMessages>;
       contentType: string | null;
     })[] = [];
     const registrations: {
@@ -271,6 +329,7 @@ test
                 );
               arrivals.push({
                 path,
+                method: request.method,
                 wireSha256: sha(wire),
                 contentType: headers['content-type'] ?? null,
                 accept: headers.accept,
@@ -313,6 +372,11 @@ test
                 });
                 response.end(receipt);
               } else if (path === '/v1/messages') {
+                receivedTextBoundaries.push(
+                  !wire.includes(attachmentObjects) &&
+                    !wire.includes('rdws-synthetic-picture-') &&
+                    wire.includes(authoredPath),
+                );
                 receivedImages.push(
                   readDeepSeekMessagesEvidence(
                     wire,
@@ -386,8 +450,18 @@ test
                   attemptScope.run(attempt, () =>
                     egress!({ ...request, body }),
                   ),
-                  new Response(observation).arrayBuffer().then((wire) => {
-                    attempt.wireSha256 = sha(Buffer.from(wire));
+                  new Response(observation).arrayBuffer().then((value) => {
+                    const wire = Buffer.from(value);
+                    attempt.wireSha256 = sha(wire);
+                    if (request.routeId === 'messages') {
+                      attempt.projection = observeMessages(
+                        wire,
+                        attempt.contentType,
+                        request.call.model,
+                      );
+                      attempt.projectedSha256 =
+                        attempt.projection.projectedSha256;
+                    } else attempt.projectedSha256 = attempt.wireSha256;
                   }),
                 ]);
                 return response;
@@ -396,6 +470,10 @@ test
                 await new Response(request.body).arrayBuffer(),
               );
               const type = request.headers.get('content-type');
+              const projection =
+                useTls && request.routeId === 'messages'
+                  ? observeMessages(wire, type, request.call.model)
+                  : undefined;
               const messages =
                 request.routeId === 'messages'
                   ? readDeepSeekMessagesEvidence(wire, type, request.call.model)
@@ -463,6 +541,7 @@ test
                   ].map((name) => [name, request.headers.get(name)]),
                 ),
                 wireSha256: sha(wire),
+                projectedSha256: projection?.projectedSha256 ?? sha(wire),
                 contentType: type,
                 attribution: attributionHeaders.filter((name) =>
                   request.headers.has(name),
@@ -475,18 +554,24 @@ test
               };
               if (egress) {
                 const previous = historicalInputs.get(witness.sessionId);
+                const images = hasOriginalImage
+                  ? [
+                      ...(previous ? [previous.variant.image] : []),
+                      witness.variant.image,
+                    ]
+                  : [];
                 const manifest: AttachmentManifest = {
                   projectId: project,
                   requirementId: original.requirementId,
                   sessionId: witness.sessionId,
                   bindingId,
                   credentialGeneration,
-                  images: hasOriginalImage
-                    ? [
-                        ...(previous ? [previous.variant.image] : []),
-                        witness.variant.image,
-                      ]
-                    : [],
+                  images,
+                  imageHandleDigests:
+                    projection && hasOriginalImage
+                      ? projection.imageHandleDigests
+                      : images.map(() => sha('Legacy Files fixture')),
+                  userContentSha256: projection?.userContentSha256 ?? sha('[]'),
                 };
                 attempt.manifest = manifest;
                 attempts.push(attempt);
@@ -675,6 +760,11 @@ test
             config: {
               apiKeyEnv: 'FIXTURE_MODEL',
               baseURL: base,
+              ...(transport === 'native offload mixed'
+                ? { maxImagesPerRequest: 1, imageOffloadCountQuantum: 1 }
+                : transport === 'native offload all'
+                  ? { maxRequestFilesBytes: 1, imageOffloadByteQuantum: 1 }
+                  : {}),
               models: [
                 {
                   id: model,
@@ -703,6 +793,7 @@ test
                   late,
                   evidencePath,
                   repeatImages: nativeManifest,
+                  file,
                 },
               },
             ],
@@ -869,15 +960,43 @@ test
           expect((await currentTurn())?.data.reason).toMatchObject({
             kind: completed ? 'completed' : 'error',
           });
-          const replies = (await currentEvents()).filter(
+          const observed = await currentEvents();
+          const replies = observed.filter(
             ({ type }) => type === 'assistant/message',
+          );
+          const offloadCount = observed
+            .filter(({ type }) => type === 'image/offload')
+            .flatMap(({ data }) => {
+              if (!Array.isArray(data.targets))
+                throw new Error('Missing offload targets');
+              return data.targets;
+            })
+            .reduce((sum, target) => {
+              if (!isRecord(target) || !Array.isArray(target.imageIndexes))
+                throw new Error('Missing image indexes');
+              return sum + target.imageIndexes.length;
+            }, 0);
+          const typedFile = observed.some(
+            ({ type, data }) =>
+              type === 'user/message' &&
+              Array.isArray(data.content) &&
+              data.content.some(
+                (part) => isRecord(part) && part.type === 'file',
+              ),
           );
           if (completed)
             expect(JSON.stringify(replies)).toContain(
               'synthetic accepted variant',
             );
           else expect(replies).toHaveLength(0);
-          return { pair: [], identity, sessionId, previousEvents };
+          return {
+            pair: [],
+            identity,
+            sessionId,
+            previousEvents,
+            offloadCount,
+            typedFile,
+          };
         }
         const expectedRoutes =
           useTls && !checkPublicRejection
@@ -1009,7 +1128,14 @@ test
               ),
             );
         }
-        return { pair, identity, sessionId, previousEvents };
+        return {
+          pair,
+          identity,
+          sessionId,
+          previousEvents,
+          offloadCount: 0,
+          typedFile: false,
+        };
       }
 
       const warm = await send(accepted, true);
@@ -1055,11 +1181,12 @@ test
         expect(appearances[0]).not.toBe(appearances[1]);
         const evidence = appearances.map((id) => derived.get(id)!);
         expect(evidence[0]!.sha256).not.toBe(evidence[1]!.sha256);
-        const expectedRoutes = loseAck
-          ? []
-          : nativeInline || revokeBeforeCarrier
-            ? ['files', 'messages']
-            : ['files', 'files', 'messages', 'messages'];
+        const expectedRoutes =
+          loseAck || offload
+            ? []
+            : nativeInline || revokeBeforeCarrier
+              ? ['files', 'messages']
+              : ['files', 'files', 'messages', 'messages'];
         const expectedHttp = denied
           ? []
           : expectedRoutes.map((route) => '/v1/' + route);
@@ -1075,9 +1202,10 @@ test
         expect(arrivals).toEqual(
           denied
             ? []
-            : nativeAttempts.map(({ route, wireSha256, contentType }) => ({
+            : nativeAttempts.map(({ route, projectedSha256, contentType }) => ({
                 path: '/v1/' + route,
-                wireSha256,
+                method: 'POST',
+                wireSha256: projectedSha256,
                 contentType,
                 accept: route === 'messages' ? 'text/event-stream' : undefined,
                 version: '2023-06-01',
@@ -1103,7 +1231,7 @@ test
               })),
         );
         for (const attempt of nativeAttempts)
-          expect(attempt.manifest).toEqual({
+          expect(attempt.manifest).toMatchObject({
             projectId: project,
             requirementId: origin.requirementId,
             sessionId: origin.sessionId,
@@ -1111,17 +1239,52 @@ test
             credentialGeneration,
             images: evidence,
           });
+        const messages = nativeAttempts.filter(
+          ({ route }) => route === 'messages',
+        );
+        for (const attempt of messages) {
+          const projection = attempt.projection!;
+          expect(projection.handles).toHaveLength(3);
+          for (const handle of projection.handles)
+            expect(handle.includes(attachmentObjects)).toBe(true);
+          expect(
+            projection.handles.map(
+              (handle) =>
+                /rdws-synthetic-picture-[a-z-]+\.png/.exec(handle)?.[0],
+            ),
+          ).toEqual([
+            'rdws-synthetic-picture-a-first.png',
+            'rdws-synthetic-picture-b.png',
+            'rdws-synthetic-picture-a-last.png',
+          ]);
+          expect(projection.imageHandleDigests[0]).not.toBe(
+            projection.imageHandleDigests[2],
+          );
+          expect(attempt.manifest).toMatchObject({
+            imageHandleDigests: projection.imageHandleDigests,
+            userContentSha256: projection.userContentSha256,
+          });
+          expect(attempt.wireSha256).not.toBe(attempt.projectedSha256);
+        }
+        expect(receivedTextBoundaries).toEqual(
+          expectedHttp
+            .filter((path) => path === '/v1/messages')
+            .map(() => true),
+        );
 
         const prepared = registrations.filter(
           ({ operation }) => operation === 'model-attachment-prepare',
         );
-        const expectedCalls = !denied && !nativeInline ? 2 : 1;
+        const expectedCalls = offload ? 0 : !denied && !nativeInline ? 2 : 1;
         expect(prepared).toHaveLength(expectedCalls);
         expect(new Set(prepared.map(({ callId }) => callId)).size).toBe(
           expectedCalls,
         );
         expect(new Set(prepared.map(({ bindingId }) => bindingId)).size).toBe(
-          1,
+          offload ? 0 : 1,
+        );
+        expect(warm.offloadCount).toBe(
+          transport === 'native offload mixed' ? 2 : offload ? 3 : 0,
         );
         expect(registrations).toEqual(
           prepared.flatMap((event) => [
@@ -1166,6 +1329,7 @@ test
             : [],
         );
         await send(late);
+        if (nativeInline) expect((await send(file)).typedFile).toBe(true);
         await host.close();
         expect(carrierEntries).toEqual(expectedRoutes);
         expect(tcpConnections).toBe(expectedRoutes.length);
@@ -1221,9 +1385,10 @@ test
           ),
         ).toBe(true);
         expect(arrivals).toEqual(
-          positive.map(({ route, wireSha256, contentType }) => ({
+          positive.map(({ route, projectedSha256, contentType }) => ({
             path: '/v1/' + route,
-            wireSha256,
+            method: 'POST',
+            wireSha256: projectedSha256,
             contentType,
             accept: route === 'messages' ? 'text/event-stream' : undefined,
             version: '2023-06-01',
@@ -1349,7 +1514,10 @@ test
           contentType: warmMessage.contentType,
           fixtureCredentialPresent: true,
           manifest: {
-            ...warmMessage.manifest,
+            projectId: warmMessage.manifest?.projectId,
+            requirementId: warmMessage.manifest?.requirementId,
+            sessionId: warmMessage.manifest?.sessionId,
+            credentialGeneration: warmMessage.manifest?.credentialGeneration,
             bindingId: attempt!.bindingId,
             images: [warmWitness.variant.image, attempt!.witness.variant.image],
           },

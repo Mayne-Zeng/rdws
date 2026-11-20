@@ -38,6 +38,8 @@ T13 附件正文验证按锁定的 Native 序列化核对实际 Files 与 Messag
 
 回环附件适配器按 Files 和 Messages 路由核对固定版本、正文格式、单一认证和适用的 Files beta。Messages 要求 SSE Accept，文件引用与 beta 同步校验。出站报头重新构造，丢弃 Native User-Agent 与本地用户、会话归因字段。锁定 Native 的合成 Profile 和回环 HTTPS 已联合核对投影、独立首写和跨会话缓存引用拒绝。正式图片接纳与正文规范化继续验收。[Native 联查证据](docs/02-directory-and-engineering-design.html#t13-native-attachment-relay-evidence-20261120)
 
+回环 Messages 按签名清单逐图核对锁版 SDK 生成的相邻说明，并在 TLS 封口前移除该说明。单独的源有序内容摘要保证用户文本和图片相对顺序。上传及回执继续用实际变体与当前授权核对。其它原生上下文，例如工作目录提醒，仍需正式正文验收。[图片说明清理证据](docs/02-directory-and-engineering-design.html#t13-attachment-handle-evidence-20261120)
+
 主推理 TLS 1.3 转发在锁定的 macOS Node 24.20.0 环境完成回环验收。受信回调在同一同步段复核授权与最早期限，提交加密首段。步骤中只有明确零写入或完整验证的供应商 429 可开放下一次写入。转发先检查 HTTP 诊断与 TLS keylog，回归用合成标记检查性能记录、输出和运行产物。正式供应商接线及部署诊断仍待验收。 [TLS 转发验证](docs/02-directory-and-engineering-design.html#t13-tls13-first-write-20261119)
 
 停用与恢复写入账号代次，登录会话保存发行时的代次。数据库在插入时定序，业务读取和执行检查当前代次。旧登录不会在恢复后重新有效。单项目成员变动对该账号的同项目会话和连接生效。通知失败保留 BFF 截止与 Native 短租约两层不同的证据，已获准的外部请求可能完成。

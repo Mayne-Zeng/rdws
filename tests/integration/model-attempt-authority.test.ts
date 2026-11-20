@@ -504,9 +504,17 @@ test('the attachment grant binds the original batch and retires by call', async 
     mediaType: 'image/png',
     bytes: 20,
     sha256: 'b'.repeat(64),
+    handleSha256: 'd'.repeat(64),
   };
   const callId = randomUUID();
-  const frame = { ...position, callId, bindingId, images: [image] };
+  const userContentSha256 = bodyHash([['image']]);
+  const frame = {
+    ...position,
+    callId,
+    bindingId,
+    images: [image],
+    userContentSha256,
+  };
   const prepare = (input = frame, hostGeneration?: string) =>
     f.runs.handle(
       input,
@@ -520,6 +528,8 @@ test('the attachment grant binds the original batch and retires by call', async 
     { ...frame, images: [image, { ...image, sha256: 'c'.repeat(64) }] },
     { ...frame, images: [{ ...image, path: 'synthetic-local-path' }] },
     { ...frame, projectId: 'untrusted-project' },
+    { ...frame, images: [{ ...image, handleSha256: 'synthetic-raw-handle' }] },
+    { ...frame, userContentSha256: 'synthetic-raw-user-content' },
   ])
     await expect(prepare(invalid)).rejects.toMatchObject({ statusCode: 403 });
   await expect(prepare(frame, randomUUID())).rejects.toMatchObject({
@@ -553,6 +563,8 @@ test('the attachment grant binds the original batch and retires by call', async 
     sessionId: 'session',
     bindingId,
     images: [{ bytes: 20, mediaType: 'image/png', sha256: 'b'.repeat(64) }],
+    userContentSha256,
+    imageHandleDigests: [image.handleSha256],
   };
   expect(f.runs.attachmentManifestFor(wire)).toEqual(policy);
   expect(Object.isFrozen(f.runs.attachmentManifestFor(wire)?.images)).toBe(

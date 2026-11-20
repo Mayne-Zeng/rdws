@@ -8,10 +8,12 @@ export const inject = ['attachments', 'llm'];
 const image = {
   type: 'image',
   mediaType: 'image/png',
+  name: 'rdws-synthetic-picture-a-first.png',
   data: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGPgidpCU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULAHy7aD0Nf3XZAAAAAElFTkSuQmCC',
 };
 const otherImage = {
   ...image,
+  name: 'rdws-synthetic-picture-b.png',
   data: 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGMQKlpFU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULANkmuD10cOORAAAAAElFTkSuQmCC',
 };
 const sha = (data) => createHash('sha256').update(data).digest('hex');
@@ -27,7 +29,10 @@ const identity = (message) => ({
   images: imageIds(message),
 });
 
-export function apply(ctx, { accepted, late, evidencePath, repeatImages }) {
+export function apply(
+  ctx,
+  { accepted, late, evidencePath, repeatImages, file },
+) {
   const attachments = ctx.attachments;
   const scope = new AsyncLocalStorage();
   const inserted = new Map();
@@ -61,7 +66,13 @@ export function apply(ctx, { accepted, late, evidencePath, repeatImages }) {
             this,
             [
               ...content,
-              ...(repeatImages ? [image, otherImage, image] : [image]),
+              ...(repeatImages
+                ? [
+                    image,
+                    otherImage,
+                    { ...image, name: 'rdws-synthetic-picture-a-last.png' },
+                  ]
+                : [image]),
             ],
             ...rest,
           );
@@ -96,6 +107,27 @@ export function apply(ctx, { accepted, late, evidencePath, repeatImages }) {
     'agent/pre-step',
     async (_event, next) => {
       const decision = await next();
+      if (
+        decision.kind === 'enter' &&
+        file &&
+        decision.messages.some((message) => marked(message, file))
+      ) {
+        const attachment = await attachments.saveFile({
+          data: Buffer.from('Synthetic file fixture'),
+          name: 'rdws-synthetic-file.txt',
+        });
+        return {
+          ...decision,
+          messages: decision.messages.map((message) =>
+            marked(message, file)
+              ? {
+                  ...message,
+                  content: [...message.content, { type: 'file', attachment }],
+                }
+              : message,
+          ),
+        };
+      }
       if (
         decision.kind !== 'enter' ||
         !firstRef ||

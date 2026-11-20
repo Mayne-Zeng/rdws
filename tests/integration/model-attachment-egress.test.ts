@@ -60,19 +60,34 @@ async function uploadBody(image: Buffer) {
   };
 }
 
+const generatedText = {
+  type: 'text',
+  text: 'Synthetic generated local attachment description',
+};
+
 function messageBody(
   source:
     | { type: 'file'; file_id: string }
     | { type: 'base64'; media_type: string; data: string },
 ) {
+  const payload = {
+    model: model.model,
+    stream: true,
+    max_tokens: 64,
+    thinking: { type: 'disabled' },
+  };
+  const image = { type: 'image', source };
   return {
     bytes: Buffer.from(
       JSON.stringify({
-        model: model.model,
-        stream: true,
-        max_tokens: 64,
-        thinking: { type: 'disabled' },
-        messages: [{ role: 'user', content: [{ type: 'image', source }] }],
+        ...payload,
+        messages: [{ role: 'user', content: [generatedText, image] }],
+      }),
+    ),
+    projected: Buffer.from(
+      JSON.stringify({
+        ...payload,
+        messages: [{ role: 'user', content: [image] }],
       }),
     ),
     type: 'application/json',
@@ -121,6 +136,7 @@ async function supplierFixture(authority?: DatabaseAuthority) {
   };
   const arrivals: { route: string; sha256: string }[] = [];
   const httpEntries: string[] = [];
+  let connections = 0;
   const applicationBytes: number[] = [];
   const server = createServer(
     { ...tls, minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3' },
@@ -157,6 +173,7 @@ async function supplierFixture(authority?: DatabaseAuthority) {
       }
     },
   );
+  server.on('connection', () => connections++);
   server.on('secureConnection', (socket) => {
     const index = applicationBytes.push(0) - 1;
     socket.on('data', (bytes: Buffer) => {
@@ -353,6 +370,8 @@ async function supplierFixture(authority?: DatabaseAuthority) {
       bindingId,
       credentialGeneration,
       images: [{ mediaType, bytes: image.length, sha256: sha(image) }],
+      imageHandleDigests: [bodyHash(generatedText.text)],
+      userContentSha256: bodyHash([['image']]),
     });
     const callId = randomUUID();
     const request = (
@@ -382,10 +401,21 @@ async function supplierFixture(authority?: DatabaseAuthority) {
   }
   const forget = (request: ModelCarrierRequest) =>
     manifests.delete(request.call.bindingId!);
+  function replaceProjectionProof(
+    request: ModelCarrierRequest,
+    proof: Partial<
+      Pick<AttachmentManifest, 'imageHandleDigests' | 'userContentSha256'>
+    >,
+  ) {
+    const id = request.call.bindingId!;
+    manifests.set(id, { ...manifests.get(id)!, ...proof });
+  }
   return {
     close,
     routes,
     httpEntries,
+    connections: () => connections,
+    replaceProjectionProof,
     applicationBytes,
     transmissions,
     firstWrites,
@@ -445,7 +475,7 @@ test.skipIf(process.platform !== 'darwin')(
       ).toEqual({ fixture: 'message accepted' });
       expect(arrivals.at(-1)).toEqual({
         route: '/v1/messages',
-        sha256: sha(cached.bytes),
+        sha256: sha(cached.projected),
       });
       expect(lockReads).toEqual([step.authSessionId, step.authSessionId]);
 
@@ -873,10 +903,10 @@ test.skipIf(process.platform !== 'darwin')(
           ).toEqual([revokeMessages, revokeFiles]);
           const expected = [
             { route: '/v1/files', sha256: sha(firstFile.bytes) },
-            { route: '/v1/messages', sha256: sha(cached.bytes) },
-            { route: '/v1/messages', sha256: sha(cached.bytes) },
+            { route: '/v1/messages', sha256: sha(cached.projected) },
+            { route: '/v1/messages', sha256: sha(cached.projected) },
             { route: '/v1/files', sha256: sha(secondFile.bytes) },
-            { route: '/v1/messages', sha256: sha(secondReference.bytes) },
+            { route: '/v1/messages', sha256: sha(secondReference.projected) },
           ];
           expect(httpEntries).toEqual(expected.map(({ route }) => route));
           expect(arrivals).toEqual(expected);
@@ -914,4 +944,81 @@ test.skipIf(process.platform !== 'darwin')(
     }
   },
   60000,
+);
+
+test.skipIf(process.platform !== 'darwin')(
+  'Messages authorizes only the projected bytes from the current content proofs',
+  async () => {
+    await withSupplier(
+      async ({
+        open,
+        egress,
+        arrivals,
+        httpEntries,
+        applicationBytes,
+        connections,
+        state,
+        lockReads,
+        replaceProjectionProof,
+      }) => {
+        const step = await open('projection');
+        const file = await uploadBody(imageA);
+        await (await egress(step.request('files', file))).json();
+        const cached = reference(state.fileId);
+        const initialConnections = connections();
+        expect(initialConnections).toBe(1);
+        const edited = (content: string) =>
+          Buffer.from(
+            cached.bytes.toString('utf8').replace(generatedText.text, content),
+          );
+        const missingImage = JSON.parse(cached.bytes.toString('utf8')) as {
+          messages: { content: unknown[] }[];
+        };
+        missingImage.messages[0]!.content.pop();
+        for (const bytes of [
+          cached.projected,
+          Buffer.from(JSON.stringify(missingImage)),
+          edited('Synthetic unbound attachment description'),
+          edited(generatedText.text + ' extra suffix'),
+        ]) {
+          await expect(
+            egress(step.request('messages', { ...cached, bytes })),
+          ).rejects.toThrow('Attachment egress unavailable');
+        }
+        expect(connections()).toBe(initialConnections);
+        expect(applicationBytes).toHaveLength(initialConnections);
+        expect(lockReads).toEqual([step.authSessionId]);
+        expect(httpEntries).toEqual(['/v1/files']);
+
+        for (const proof of [
+          {
+            imageHandleDigests: [sha(Buffer.from('Another handle commitment'))],
+          },
+          {
+            userContentSha256: bodyHash([
+              ['text', 'Another user commitment'],
+              ['image'],
+            ]),
+          },
+        ]) {
+          const current = await open('projection');
+          const request = current.request('messages', cached);
+          state.beforeWrite = () => replaceProjectionProof(request, proof);
+          await expect(egress(request)).rejects.toThrow();
+          expect(lockReads.at(-1)).toBe(current.authSessionId);
+          expect(applicationBytes.at(-1)).toBe(0);
+          expect(httpEntries).toEqual(['/v1/files']);
+        }
+        state.beforeWrite = undefined;
+        const allowed = await open('projection');
+        expect(
+          await (await egress(allowed.request('messages', cached))).json(),
+        ).toEqual({ fixture: 'message accepted' });
+        expect(arrivals).toEqual([
+          { route: '/v1/files', sha256: sha(file.bytes) },
+          { route: '/v1/messages', sha256: sha(cached.projected) },
+        ]);
+      },
+    );
+  },
 );

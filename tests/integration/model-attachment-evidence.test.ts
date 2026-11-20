@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { expect, test } from 'vitest';
 import {
+  projectDeepSeekMessages,
   readDeepSeekFilesEvidence,
   readDeepSeekMessagesEvidence,
 } from '../../apps/server/src/modules/model-attachment-evidence.ts';
@@ -223,5 +224,97 @@ test('rejects ambiguous Messages bytes and unknown nested attachment routes', ()
     expect(read(invalid)).toBeUndefined();
   expect(
     readDeepSeekMessagesEvidence(body, 'text/plain', model),
+  ).toBeUndefined();
+});
+
+test('projects only signed generated positions while preserving the independent user sequence', () => {
+  const handleA = {
+    type: 'text',
+    text: 'Synthetic image A at "/fixture/rdws/normalized-a"',
+  };
+  const handleB = {
+    type: 'text',
+    text: 'Synthetic image B \uFFFD at "/fixture/rdws/normalized-b"',
+  };
+  const literal = {
+    type: 'text',
+    text: 'User path stays: /fixture/user/explicit',
+  };
+  const payload = (content: unknown[]) =>
+    wireMessage({
+      ...message,
+      messages: [{ role: 'user', content }, message.messages[1]],
+    });
+  const proof = {
+    imageHandleDigests: [handleA, handleB, handleA].map(({ text }) =>
+      sha(JSON.stringify(text)),
+    ),
+    userContentSha256: sha(
+      JSON.stringify([
+        ['text', handleA.text],
+        ['image'],
+        ['image'],
+        ['text', literal.text],
+        ['image'],
+      ]),
+    ),
+  };
+  const raw = payload([
+    handleA,
+    handleA,
+    inline,
+    handleB,
+    ref,
+    literal,
+    handleA,
+    inline,
+  ]);
+  const expected = payload([handleA, inline, ref, literal, inline]);
+  const project = (body: Buffer, commitment = proof) =>
+    projectDeepSeekMessages(body, 'application/json', model, commitment);
+  expect(project(raw)?.body.equals(expected)).toBe(true);
+  expect(project(raw)?.evidence).toEqual(
+    readDeepSeekMessagesEvidence(raw, 'application/json', model),
+  );
+  for (const mismatched of [
+    payload([handleA, inline, handleB, ref, literal, handleA, inline]),
+    payload([handleA, handleA, inline, handleB, ref, handleA, inline, literal]),
+    payload([
+      handleA,
+      handleA,
+      inline,
+      { ...handleB, text: handleB.text.replace('\uFFFD', '\uD800') },
+      ref,
+      literal,
+      handleA,
+      inline,
+    ]),
+    payload([handleA, handleB, inline, handleA, ref, literal, handleA, inline]),
+    payload([
+      handleA,
+      handleA,
+      inline,
+      handleB,
+      ref,
+      literal,
+      handleA,
+      inline,
+      handleA,
+    ]),
+  ])
+    expect(Boolean(project(mismatched))).toBe(false);
+  expect(project(raw, { ...proof, imageHandleDigests: [] })).toBeUndefined();
+  expect(
+    project(raw, { ...proof, userContentSha256: sha('[]') }),
+  ).toBeUndefined();
+
+  const textOnly = payload([literal]);
+  const plain = {
+    imageHandleDigests: [],
+    userContentSha256: sha(JSON.stringify([['text', literal.text]])),
+  };
+  expect(project(textOnly, plain)?.body).toBe(textOnly);
+  expect(
+    project(textOnly, { ...plain, userContentSha256: sha('[]') }),
   ).toBeUndefined();
 });

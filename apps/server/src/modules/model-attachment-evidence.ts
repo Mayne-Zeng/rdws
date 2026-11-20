@@ -151,7 +151,7 @@ function readImage(
   };
 }
 
-export function readDeepSeekMessagesEvidence(
+function inspectDeepSeekMessages(
   body: Buffer,
   contentType: string | null | undefined,
   model: string,
@@ -234,5 +234,78 @@ export function readDeepSeekMessagesEvidence(
     }
   }
   if (!body.equals(Buffer.from(JSON.stringify(value)))) return;
-  return { request: commit(body), images };
+  return {
+    value,
+    messages: value.messages as Array<{
+      role: string;
+      content: Record<string, unknown>[];
+    }>,
+    evidence: { request: commit(body), images },
+  };
+}
+
+export function readDeepSeekMessagesEvidence(
+  body: Buffer,
+  contentType: string | null | undefined,
+  model: string,
+) {
+  return inspectDeepSeekMessages(body, contentType, model)?.evidence;
+}
+
+export function projectDeepSeekMessages(
+  body: Buffer,
+  contentType: string,
+  model: string,
+  proof: {
+    imageHandleDigests: readonly string[];
+    userContentSha256: string;
+  },
+) {
+  const parsed = inspectDeepSeekMessages(body, contentType, model);
+  if (
+    !parsed ||
+    parsed.evidence.images.length !== proof.imageHandleDigests.length
+  )
+    return;
+  const removals = new Map<number, Set<number>>();
+  for (const [
+    occurrence,
+    { messageIndex, blockIndex },
+  ] of parsed.evidence.images.entries()) {
+    const index = blockIndex - 1;
+    const handle = parsed.messages[messageIndex]?.content[index];
+    if (
+      handle?.type !== 'text' ||
+      typeof handle.text !== 'string' ||
+      digest(JSON.stringify(handle.text)) !==
+        proof.imageHandleDigests[occurrence]
+    )
+      return;
+    const removed = removals.get(messageIndex) ?? new Set();
+    removed.add(index);
+    removals.set(messageIndex, removed);
+  }
+  const messages = parsed.messages.map((message, index) => {
+    const removed = removals.get(index);
+    return removed
+      ? {
+          ...message,
+          content: message.content.filter((_, block) => !removed.has(block)),
+        }
+      : message;
+  });
+  const userContent = messages
+    .filter(({ role }) => role === 'user')
+    .flatMap(({ content }) =>
+      content.map(({ type, text }) =>
+        type === 'text' ? ['text', text] : ['image'],
+      ),
+    );
+  if (digest(JSON.stringify(userContent)) !== proof.userContentSha256) return;
+  return {
+    evidence: parsed.evidence,
+    body: removals.size
+      ? Buffer.from(JSON.stringify({ ...parsed.value, messages }))
+      : body,
+  };
 }

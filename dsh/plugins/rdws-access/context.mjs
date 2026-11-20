@@ -735,8 +735,20 @@ export function installContext(ctx, config, key, route, requestContext) {
         )
           return;
         const expected = [];
+        const userContent = [];
         const seen = new Set();
         for (const message of options.messages) {
+          for (const part of message.content) {
+            if (
+              part.type === 'file' ||
+              (part.type === 'image' && part.offloaded === true)
+            )
+              throw attachmentUnavailable();
+            if (message.role !== 'user') continue;
+            if (part.type === 'text' && part.text)
+              userContent.push(['text', part.text]);
+            if (part.type === 'image') userContent.push(['image']);
+          }
           if (!message.content.some((part) => part.type === 'image')) continue;
           const source = record.attachmentSources.get(message.id);
           if (
@@ -750,6 +762,7 @@ export function installContext(ctx, config, key, route, requestContext) {
           for (const part of source.origin.images)
             expected.push({
               ...part,
+              reference: message.content[part.blockIndex].attachment,
               runId: source.run.runId,
               requestId: source.run.requestId,
               peerNonce: source.run.peerNonce,
@@ -766,12 +779,17 @@ export function installContext(ctx, config, key, route, requestContext) {
           callId: call.id,
           bindingId: call.bindingId,
         };
+        const userContentSha256 = bodyHash(userContent);
         return {
           expected,
           signal: record.signal,
           isCurrent: () => currentModelStep(record),
           prepare: (images, signal) =>
-            service('model-attachment-prepare', { ...cause, images }, signal),
+            service(
+              'model-attachment-prepare',
+              { ...cause, images, userContentSha256 },
+              signal,
+            ),
           close: () =>
             service('model-attachment-release', cause).catch(() => {}),
         };

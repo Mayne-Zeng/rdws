@@ -10,7 +10,14 @@ import { Pool } from 'pg';
 const exec = promisify(execFile);
 const random = () => randomBytes(32).toString('hex');
 
-export async function authorityDatabase() {
+export async function authorityDatabase(dockerHost?: string) {
+  const dockerEnv = { ...process.env };
+  if (dockerHost !== undefined) {
+    if (!dockerHost.startsWith('unix:///'))
+      throw new Error('The fixture Docker endpoint must be a local socket');
+    delete dockerEnv.DOCKER_CONTEXT;
+    dockerEnv.DOCKER_HOST = dockerHost;
+  }
   const image = /^\s*image: (postgres:\S+@sha256:[a-f0-9]{64})$/m.exec(
     await readFile('deploy/compose.postgres.yml', 'utf8'),
   )?.[1];
@@ -27,7 +34,8 @@ export async function authorityDatabase() {
       await Promise.all([owner?.end(), admin?.end()]);
     } finally {
       try {
-        if (created) await exec('docker', ['stop', '-t', '2', name]);
+        if (created)
+          await exec('docker', ['stop', '-t', '2', name], { env: dockerEnv });
       } finally {
         await rm(root, { recursive: true, force: true });
       }
@@ -61,11 +69,11 @@ export async function authorityDatabase() {
         '-c',
         'rdws.fixture_instance=' + name,
       ],
-      { env: { ...process.env, POSTGRES_PASSWORD: password } },
+      { env: { ...dockerEnv, POSTGRES_PASSWORD: password } },
     );
     created = true;
     const mapping = (
-      await exec('docker', ['port', name, '5432/tcp'])
+      await exec('docker', ['port', name, '5432/tcp'], { env: dockerEnv })
     ).stdout.trim();
     const port = /^127\.0\.0\.1:(\d+)$/.exec(mapping)?.[1];
     if (!port)
@@ -152,6 +160,7 @@ export async function authorityDatabase() {
       close,
       async logs() {
         const result = await exec('docker', ['logs', name], {
+          env: dockerEnv,
           maxBuffer: 4 * 1024 * 1024,
         });
         return result.stdout + result.stderr;

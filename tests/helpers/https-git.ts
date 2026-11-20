@@ -199,14 +199,14 @@ export async function httpsGitFixture(project = 'poc') {
     JSON.stringify({ url, username: 'reader', token }),
     { mode: 0o600 },
   );
-  const close = async () => {
+  const close = async ({ preserveRoot = false } = {}) => {
     closing = true;
     const ended = once(server, 'close');
     server.close();
     server.closeAllConnections();
     await ended;
     await Promise.allSettled(tasks);
-    await rm(root, { recursive: true, force: true });
+    if (!preserveRoot) await rm(root, { recursive: true, force: true });
   };
   async function update(branch = 'main') {
     await fixtureGit([

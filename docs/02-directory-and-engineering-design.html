@@ -1700,6 +1700,21 @@
   <p>普通浏览器使用项目 <code>test:e2e</code> 对应的已安装 Playwright 和原 <code>playwright.config.ts</code>，从临时目录运行 <code>test --shard=1/2</code> 和 <code>test --shard=2/2</code>，两组均返回 0，共 26 + 25 项。临时目录承接测试的相对截图路径。数据库权限反例使用同一一次性容器内禁止测试应用角色连接的合成 <code>rdws_dev</code>，普通浏览器使用临时原生配置和回环模型端点。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code> 和 <code>pnpm build</code> 返回 0，构建记录既有主包体积提示。</p>
   <p>补齐隔离库拒绝对照和临时 Native 配置后，<code>pnpm test</code> 返回 0，55 个文件、340 项通过、1 项条件跳过。普通浏览器和整仓回归夹具的合成模型端点收到 0 次请求。<code>pnpm validate:baseline</code> 返回 0，覆盖 29 项任务、62 个追溯点和 16 个视图。</p>
 
+  <h4 id="t07-owner-crash-evidence-plan-20261120">11.20.18 T07 执行期间 BFF 异常退出的隔离验证</h4>
+  <p>Change / R3，基线 <code>3599c47</code>。衔接 §11.20.2 的冷启动规则、§11.20.3 的持久占位和 §11.16.26 的数据库所有者。此前证据分别覆盖独立 BFF 无任务时的退出和同进程 Broker 冷读合成占位。本切片在独立受管 BFF 中开始一次真实写入，然后验证异常退出后仍存在的原占位。改动限集成用例、子进程夹具、两个测试辅助及本节证据，无公共契约变更。</p>
+  <ol>
+    <li>确认有效 Docker 端点为本机 Unix socket，固定本次启动、端口检查、日志和停止命令的端点。使用一次性 PostgreSQL、合成账号、随机回环端口、独立运行根和现有临时 HTTPS Git 工作树夹具。完成 Git 准备后等待编排器和镜像队列排空，记录 sources 与 Git 管理区指纹。预置合成的本人会话映射，以实际 HTTP 登录和申请取得原写代，避免启动 Native 或模型。测试装配使用现有 paused BFF 和编队 HTTP 命令。只有本次子进程的继承 IPC 可以尝试固定 Bash 动作。等待一次文件追加及 PID 标记落盘，通过 <code>ps</code> 检查直属父 PID、PGID 和非僵尸状态，确认租约 <code>run_id</code> 等于实际执行回执的 <code>reserved.runId</code>，并用独立事务取得原租约行锁验证启动授权事务已结束。执行器磁盘标记按 <code>launcherPid</code> 对应旧 BFF，其 UUID 独立于数据库运行 ID。脚本只用 Bash 内建、固定停止文件及单独的自退期限，无后台任务或父进程输出依赖。</li>
+    <li>在正常执行器 10 秒截止前仅终止本次 <code>ChildProcess</code> 启动的 BFF，确认收到 <code>SIGKILL</code>。原直属进程已无旧父 PID，仍须为同一非僵尸进程组。使用已消费的原票启动独立实例，核对 PostgreSQL 确切的所有者拒绝日志、无监听及真实原执行组仍在，持久所有者代次与证明摘要、写代、执行回执、磁盘标记原字节及已写文件字节不变。撤回测试动作时写固定停止文件，实查原直属 PID 和进程组均返回 <code>ESRCH</code>。在上述进程与原票竞争者全部停稳后，仅在本次一次性库以原所有者代次和原证明摘要为条件同步登记新票，预期恰一行。保留原需求租约、执行回执及标记原字节。</li>
+    <li>新的独立 BFF 继续使用原有效登录，可读取原需求的 <code>200 unconfirmed</code>，并通过只读核对获知原申请键及原写代。重放原键因所有者代次失效返回 409。当前合资格身份用新键申请同需求时命中旧写代尚待停稳的 409，新键只读核对为 unrecorded。同一进程与登录对合成空闲需求可申请并正常释放，作为命令入口正对照。再次核对原需求写占位、预留、真实标记、目标文件、sources 及 Git 管理区指纹。已知停稳后的需求占位结算仍属后续独立验收。</li>
+    <li>失败时封闭该子进程的夹具入口，写已定位的停止文件并有界核对执行状态。只有原 BFF 有序确认关闭或已确认的 PID 与 PGID 均消失，才能清理其执行目录。Git 准备或执行停稳不明时关闭本次 HTTPS 监听并保留运行根。若 BFF 或执行的结束不明，保留一次性库及标识，同时释放夹具自身的连接。原所有者换票前另需满足相同停稳判据。夹具不会向未核验的 PID 或 PGID 发送信号。定点、邻域和整仓均在一次性库、临时运行根及合成 Native 配置中执行，子进程使用白名单环境。验证包括写权／所有者邻域、整仓、类型、lint、格式、构建、基线及暂存检查。产品端和浏览器界面无新增行为。</li>
+  </ol>
+  <h5 id="t07-owner-crash-evidence-20261120">独立 BFF 异常退出与冷启动证据</h5>
+  <p>方案与交付双面复审均 APPROVE。定点用例在真实受管 macOS BFF 和一次性 PostgreSQL 中通过 HTTP 取得原写代。实际 Seatbelt 进程已追加一次，租约与执行回执记录同一运行 ID，独立连接读到启动事务已释放的租约行锁。原 BFF 收到 SIGKILL 后，真实原进程组仍存活。已消费的原票令第二个独立 BFF 在启动前退出，PostgreSQL 出现一条确切的所有者拒绝。原代次和证明摘要、需求租约、执行回执及实际磁盘标记保持原值。</p>
+  <p>固定停止文件生效后，正 PID 和负 PGID 均返回 ESRCH。夹具只在一次性库以原代次和证明摘要同步登记新票。第三个 BFF 用原登录读取原需求得到 <code>unconfirmed</code>，原申请键可查且重放返回 409，新键以旧占位未结拒绝并保持无回执。同登录在同一 BFF 的另一空闲需求可正常申请并释放。关停后，新数据库所有者交还，原需求的租约、执行回执、标记、追加字节、镜像及 Git 管理区指纹保持一致。</p>
+  <p><code>caffeinate -i pnpm test tests/integration/t07-owner-crash.test.ts</code> 终跑退出 0，1 项。临时用 <code>held</code> 作为冷启动状态反例时，实际 <code>unconfirmed</code> 命中指定断言并退出 1。写权与所有者邻域首轮 5 个文件、18 项通过。辅助夹具对照用 <code>node --import tsx --input-type=module</code> 运行，固定 Unix socket 在冲突环境变量下仍完成 Docker 启动、端口查询、日志及停止，Git 保留根路径的 HTTPS 监听探测返回 ECONNREFUSED，裸仓和目录仍在。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code> 与 <code>pnpm validate:baseline</code> 返回 0，构建仍提示既有主包体积。</p>
+
+  <p><code>pnpm test</code> 在固定 Docker socket、临时运行根、一次性应用和迁移库中返回 0，56 个文件、341 项通过、1 项条件跳过。回归夹具的合成 Native 端点收到 0 次请求。冷启动自动结算和原会话恢复后的重新鉴权仍待验证。</p>
+
   <h3 id="t11-maintenance-acceptance-20261119">11.21 T11 已确认的导入与人员维护</h3>
   <p>2026-11-19 用户确认需求批量导入采用同页的上传、预览、修正与整批提交。上传后动态显示解析和校验进度，下方逐条呈现需求明细、状态与可定位的问题。用户可在同页修正并重新校验。预览和校验阶段不写业务数据。全部通过后由用户显式整批提交入库，提交结果继续在同页逐条呈现。</p>
   <p>参与者和开发负责人维护按当前项目角色授权。移除参与者或更换负责人时，相关未完成子任务须显式交给当前具备资格的接手人，并保留原分派记录。验收覆盖无资格接手、已有分派记录保留，以及原有阶段与任务按钮权限。</p>

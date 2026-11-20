@@ -1,0 +1,3 @@
+ALTER TABLE "requirement_write_lease" DROP CONSTRAINT "requirement_write_lease_phase";--> statement-breakpoint
+ALTER TABLE "requirement_write_lease" ADD COLUMN "takeover" jsonb;--> statement-breakpoint
+ALTER TABLE "requirement_write_lease" ADD CONSTRAINT "requirement_write_lease_phase" CHECK ("requirement_write_lease"."phase" in ('held', 'draining', 'released') and ("requirement_write_lease"."phase" <> 'released' or "requirement_write_lease"."run_id" is null) and ("requirement_write_lease"."takeover" is null or "requirement_write_lease"."phase" = 'draining'));

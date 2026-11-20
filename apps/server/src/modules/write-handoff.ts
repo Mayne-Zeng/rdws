@@ -12,6 +12,7 @@ import type { DemandWorktrees } from '@rdws/orchestrator';
 import type {
   RequirementWriteAuthority,
   WriteAuthorityCommand as WriteCommand,
+  WriteTakeoverState,
 } from '@rdws/contracts';
 import {
   businessError,
@@ -76,6 +77,19 @@ type PendingRelease = ReleaseRequest & {
   uncertain: boolean;
   assertCurrent: () => void;
   work?: Promise<ReleaseState>;
+};
+type TakeoverTarget = NonNullable<Lease['takeover']>;
+type Takeover = {
+  scope: Scope;
+  commandId: string;
+  previousGeneration: string | null;
+  assertCurrent: () => void;
+  proposed?: Grant;
+  phase: 'initial' | 'verify-initial' | 'draining' | 'verify-final';
+  work?: Promise<void>;
+  rerun?: true;
+  timer?: NodeJS.Timeout;
+  failures: number;
 };
 type AuthorityResolution = 'committed' | 'rolled-back' | 'unknown';
 type AuthorityConfirmation = (tx: Queries) => Promise<AuthorityResolution>;
@@ -179,6 +193,7 @@ export function createOwnedWriteHandoff(
   const settlements = new Map<string, Settlement>();
   const fences = new Set<symbol>();
   const releaseFences = new Map<string, PendingRelease>();
+  const takeovers = new Map<string, Takeover>();
   const pendingCalls = new Set<string>();
   type AuthorityChange = {
     phase: 'changing' | 'unknown' | 'committed';
@@ -265,7 +280,11 @@ export function createOwnedWriteHandoff(
   }
 
   function fenced(requirementId: string) {
-    return fences.size > 0 || releaseFences.has(requirementId);
+    return (
+      fences.size > 0 ||
+      releaseFences.has(requirementId) ||
+      takeovers.has(requirementId)
+    );
   }
 
   async function lockedLease(tx: Queries, requirementId: string) {
@@ -326,7 +345,7 @@ export function createOwnedWriteHandoff(
       await tx
         .update(leases)
         .set({
-          phase: old.runId ? 'draining' : 'released',
+          phase: old.runId || old.takeover ? 'draining' : 'released',
           updatedAt: new Date(),
         })
         .where(
@@ -335,16 +354,17 @@ export function createOwnedWriteHandoff(
             eq(leases.generation, generation),
           ),
         );
-      return old.runId;
+      return { runId: old.runId, takeover: !!old.takeover };
     });
-    if (!runId) {
+    if (!runId?.runId) {
+      if (runId?.takeover) return 'draining' as const;
       forget(requirementId, generation);
       return 'released' as const;
     }
-    const running = executions.get(runId);
+    const running = executions.get(runId.runId);
     running?.controller.abort();
     await running?.done.catch(() => {});
-    const settlement = settlements.get(runId);
+    const settlement = settlements.get(runId.runId);
     if (settlement) await persistSettlement(settlement);
     const [state] = await db
       .select({ phase: leases.phase })
@@ -393,11 +413,12 @@ export function createOwnedWriteHandoff(
         old.phase === 'released'
       )
         businessError(409, '当前执行结算已失效');
-      const phase = !safe
-        ? 'draining'
-        : old.phase === 'draining'
-          ? 'released'
-          : 'held';
+      const phase =
+        !safe || old.takeover
+          ? 'draining'
+          : old.phase === 'draining'
+            ? 'released'
+            : 'held';
       await tx
         .update(leases)
         .set({ phase, runId: safe ? null : runId, updatedAt: new Date() })
@@ -414,6 +435,14 @@ export function createOwnedWriteHandoff(
     });
     if (released) forget(scope.requirementId, generation);
     settlements.delete(runId);
+    const takeover = takeovers.get(scope.requirementId);
+    if (
+      safe &&
+      takeover?.phase === 'draining' &&
+      takeover.previousGeneration === generation
+    )
+      if (takeover.work) takeover.rerun = true;
+      else void reconcileTakeover(takeover);
     return outcome;
   }
 
@@ -508,7 +537,7 @@ export function createOwnedWriteHandoff(
         digestOf(tracked.scope) === digestOf(scope);
       if (
         (tracked && !retryingRolledBackAcquire) ||
-        (old && (old.phase !== 'released' || old.runId))
+        (old && (old.phase !== 'released' || old.runId || old.takeover))
       )
         businessError(409, '已有写会话或进程尚待停稳');
       const expiresAt = Math.min(snapshot.validBefore, Date.now() + leaseMs);
@@ -571,9 +600,9 @@ export function createOwnedWriteHandoff(
       'requirement:' + scope.requirementId,
       'write.' + command.type,
       command.commandId,
-      command.type === 'acquire'
-        ? scope
-        : { scope, generation: command.generation },
+      command.type === 'release'
+        ? { scope, generation: command.generation }
+        : scope,
     );
   }
 
@@ -646,12 +675,433 @@ export function createOwnedWriteHandoff(
     command: WriteCommand,
     assertCurrent: () => void,
   ) {
+    if (command.type === 'takeover') {
+      const result = await readForCommand(scope, assertCurrent, (tx) =>
+        readTakeover(tx, scope, command.commandId),
+      );
+      return result ?? { state: 'unrecorded' as const };
+    }
     const generation = await readForCommand(scope, assertCurrent, (tx) =>
       recordedGeneration(tx, scope, command),
     );
     return generation
       ? { state: 'recorded' as const, generation }
       : { state: 'unrecorded' as const };
+  }
+
+  function takeoverKey(scope: Scope, commandId: string) {
+    return commandKey(scope, { type: 'takeover', commandId });
+  }
+
+  async function readTakeover(
+    tx: Queries,
+    scope: Scope,
+    commandId: string,
+  ): Promise<WriteTakeoverState | undefined> {
+    const receipt = await readReceipt(tx, takeoverKey(scope, commandId));
+    if (!receipt) return;
+    const value = receipt.result as Partial<WriteTakeoverState> | null;
+    if (value?.state === 'pending' || value?.state === 'cancelled')
+      return { state: value.state };
+    if (value?.state === 'acquired' && typeof value.generation === 'string')
+      return { state: 'acquired', generation: value.generation };
+    return businessError(409, '原写权回执无法核实');
+  }
+
+  function targetFor({ scope, commandId }: Takeover): TakeoverTarget {
+    return { ...scope.who, sessionId: scope.sessionId, commandId };
+  }
+
+  function matchesTakeover(
+    old: Lease | undefined,
+    request: Takeover,
+  ): old is Lease {
+    return (
+      !!old &&
+      old.projectId === request.scope.projectId &&
+      old.generation === request.previousGeneration &&
+      old.phase === 'draining' &&
+      !!old.takeover &&
+      digestOf(old.takeover) === digestOf(targetFor(request))
+    );
+  }
+
+  async function lockRequirement(tx: Queries, scope: Scope) {
+    await tx
+      .select({ id: schema.requirement.id })
+      .from(schema.requirement)
+      .where(
+        and(
+          eq(schema.requirement.id, scope.requirementId),
+          eq(schema.requirement.projectId, scope.projectId),
+        ),
+      )
+      .for('update');
+  }
+
+  async function assignTakeover(
+    tx: Queries,
+    request: Takeover,
+    snapshot: Awaited<ReturnType<typeof context>>,
+    deadline: number,
+  ) {
+    const { scope, commandId } = request;
+    const expiresAt = Math.min(snapshot.validBefore, Date.now() + leaseMs);
+    requireLiveLogin(scope);
+    if (
+      stopping ||
+      fences.size ||
+      releaseFences.has(scope.requirementId) ||
+      takeovers.get(scope.requirementId) !== request ||
+      Math.min(expiresAt, deadline) <= Date.now()
+    )
+      businessError(409, '写入授权正在变更或已到期');
+    if (request.phase === 'initial') request.assertCurrent();
+    const grant = {
+      generation: randomUUID(),
+      expiresAt,
+      contextVersion: snapshot.requirement.contextVersion,
+    };
+    const values = {
+      requirementId: scope.requirementId,
+      projectId: scope.projectId,
+      ownerId: scope.who.userId,
+      authSessionId: scope.who.authSessionId,
+      nativeSessionId: scope.sessionId,
+      generation: grant.generation,
+      phase: 'held' as const,
+      expiresAt: new Date(expiresAt),
+      contextVersion: grant.contextVersion,
+      runId: null,
+      takeover: null,
+      updatedAt: new Date(),
+    };
+    await tx
+      .insert(leases)
+      .values(values)
+      .onConflictDoUpdate({ target: leases.requirementId, set: values });
+    const outcome = {
+      state: 'acquired',
+      generation: grant.generation,
+    } as const;
+    await finish(tx, takeoverKey(scope, commandId), outcome);
+    if (request.phase === 'initial') request.assertCurrent();
+    requireLiveLogin(scope);
+    if (stopping || fences.size || Math.min(expiresAt, deadline) <= Date.now())
+      businessError(409, '写入授权正在变更或已到期');
+    request.proposed = grant;
+    propose(scope, grant, commandId);
+    return outcome;
+  }
+
+  async function prepareTakeover(
+    request: Takeover,
+  ): Promise<WriteTakeoverState> {
+    const { scope, commandId, previousGeneration } = request;
+    return transaction(async (tx, deadline) => {
+      const snapshot = await context(tx, scope);
+      const old = await lockedLease(tx, scope.requirementId);
+      const prior = await readTakeover(tx, scope, commandId);
+      if (prior) {
+        if (prior.state === 'pending' && !matchesTakeover(old, request))
+          businessError(409, '原接手状态尚待确认');
+        return prior;
+      }
+      if (
+        (old?.generation ?? null) !== previousGeneration ||
+        old?.takeover ||
+        stopping ||
+        fences.size ||
+        releaseFences.has(scope.requirementId) ||
+        takeovers.get(scope.requirementId) !== request ||
+        Math.min(deadline, snapshot.validBefore) <= Date.now()
+      )
+        businessError(409, '写入状态正在变更，请重新核对');
+      request.assertCurrent();
+      const tracked = holdings.get(scope.requirementId);
+      if ((!old || old.phase === 'released') && !tracked) {
+        await reserve(
+          tx,
+          scope.who,
+          'requirement:' + scope.requirementId,
+          'write.takeover',
+          commandId,
+          scope,
+        );
+        return assignTakeover(tx, request, snapshot, deadline);
+      }
+      if (
+        !old ||
+        old.phase !== 'held' ||
+        !tracked?.confirmed ||
+        !sameHolder(old, tracked.scope, tracked.grant.generation)
+      )
+        businessError(409, '旧执行尚待确认');
+      await reserve(
+        tx,
+        scope.who,
+        'requirement:' + scope.requirementId,
+        'write.takeover',
+        commandId,
+        scope,
+      );
+      if (
+        sameHolder(old, scope, old.generation) &&
+        old.contextVersion === snapshot.requirement.contextVersion &&
+        old.expiresAt.getTime() > Date.now()
+      ) {
+        const outcome = {
+          state: 'acquired',
+          generation: old.generation,
+        } as const;
+        await finish(tx, takeoverKey(scope, commandId), outcome);
+        return outcome;
+      }
+      await tx
+        .update(leases)
+        .set({
+          phase: 'draining',
+          takeover: targetFor(request),
+          updatedAt: new Date(),
+        })
+        .where(eq(leases.requirementId, scope.requirementId));
+      const outcome = { state: 'pending' } as const;
+      await finish(tx, takeoverKey(scope, commandId), {
+        ...outcome,
+        previousGeneration,
+      });
+      request.assertCurrent();
+      requireLiveLogin(scope);
+      if (fences.size || Math.min(deadline, snapshot.validBefore) <= Date.now())
+        businessError(409, '写入状态正在变更，请重新核对');
+      return outcome;
+    });
+  }
+
+  async function verifyTakeover(request: Takeover) {
+    return transaction(async (tx) => {
+      const snapshot = request.proposed
+        ? await takeoverContext(tx, request.scope)
+        : undefined;
+      if (!snapshot) await lockRequirement(tx, request.scope);
+      const old = await lockedLease(tx, request.scope.requirementId);
+      const outcome = await readTakeover(tx, request.scope, request.commandId);
+      if ((outcome?.state === 'pending') !== matchesTakeover(old, request))
+        businessError(409, '原接手状态尚待确认');
+      if (
+        request.proposed &&
+        outcome?.state === 'acquired' &&
+        outcome.generation !== request.proposed.generation
+      )
+        businessError(409, '原写入资格尚待确认');
+      const enable =
+        outcome?.state === 'acquired' &&
+        sameHolder(old, request.scope, outcome.generation) &&
+        old.phase === 'held' &&
+        snapshot?.requirement.contextVersion === old.contextVersion &&
+        snapshot.validBefore > Date.now();
+      return { outcome, enable };
+    });
+  }
+
+  async function takeoverContext(tx: Queries, scope: Scope) {
+    if (stopping) return;
+    try {
+      return await context(tx, scope);
+    } catch (error) {
+      const status = (error as { statusCode?: number }).statusCode;
+      if (status !== 401 && status !== 403 && status !== 404) throw error;
+    }
+  }
+
+  async function finalizeTakeover(
+    request: Takeover,
+  ): Promise<WriteTakeoverState> {
+    const { scope, commandId, previousGeneration } = request;
+    if (!previousGeneration) return businessError(409, '原接手状态尚待确认');
+    await drain(scope.requirementId, previousGeneration);
+    return transaction(async (tx, deadline) => {
+      const snapshot = await takeoverContext(tx, scope);
+      if (!snapshot) await lockRequirement(tx, scope);
+      const old = await lockedLease(tx, scope.requirementId);
+      const result = await readTakeover(tx, scope, commandId);
+      if (result?.state !== 'pending' || !matchesTakeover(old, request))
+        businessError(409, '原接手状态尚待确认');
+      if (old.runId) return result;
+      if (
+        snapshot &&
+        !stopping &&
+        !loginClosed(scope.who.authSessionId) &&
+        snapshot.validBefore > Date.now()
+      )
+        return assignTakeover(tx, request, snapshot, deadline);
+      const outcome = { state: 'cancelled' } as const;
+      await tx
+        .update(leases)
+        .set({ phase: 'released', takeover: null, updatedAt: new Date() })
+        .where(eq(leases.requirementId, scope.requirementId));
+      await finish(tx, takeoverKey(scope, commandId), outcome);
+      return outcome;
+    });
+  }
+
+  async function settleTakeover(
+    request: Takeover,
+    outcome?: WriteTakeoverState,
+    enable = true,
+  ) {
+    const { scope, proposed, previousGeneration } = request;
+    if (proposed) {
+      const tracked = holdings.get(scope.requirementId);
+      if (
+        outcome?.state === 'acquired' &&
+        outcome.generation === proposed.generation
+      ) {
+        if (
+          enable &&
+          !stopping &&
+          !loginClosed(scope.who.authSessionId) &&
+          proposed.expiresAt > Date.now() &&
+          tracked?.grant.generation === proposed.generation
+        )
+          tracked.confirmed = true;
+        else await drain(scope.requirementId, proposed.generation);
+      } else forget(scope.requirementId, proposed.generation);
+      request.proposed = undefined;
+    }
+    if (outcome?.state === 'cancelled' && previousGeneration)
+      forget(scope.requirementId, previousGeneration);
+    clearTimeout(request.timer);
+    if (takeovers.get(scope.requirementId) === request)
+      takeovers.delete(scope.requirementId);
+  }
+
+  function reconcileTakeover(request: Takeover) {
+    if (request.work) return request.work;
+    clearTimeout(request.timer);
+    request.work ??= track(
+      (async () => {
+        try {
+          let outcome: WriteTakeoverState | undefined;
+          if (
+            request.phase === 'verify-initial' ||
+            request.phase === 'verify-final'
+          ) {
+            const verified = await verifyTakeover(request);
+            outcome = verified.outcome;
+            if (outcome?.state !== 'pending')
+              return await settleTakeover(request, outcome, verified.enable);
+            if (request.proposed)
+              forget(request.scope.requirementId, request.proposed.generation);
+            request.proposed = undefined;
+            request.phase = 'draining';
+          }
+          outcome = await finalizeTakeover(request);
+          if (outcome.state !== 'pending') {
+            request.phase = 'verify-final';
+            await settleTakeover(request, outcome);
+          }
+        } catch (error) {
+          if (error instanceof UnknownWriteCommit)
+            request.phase = 'verify-final';
+          else if (request.phase === 'draining' && request.proposed) {
+            forget(request.scope.requirementId, request.proposed.generation);
+            request.proposed = undefined;
+          }
+          if (!stopping) {
+            request.timer = setTimeout(
+              () => {
+                void reconcileTakeover(request);
+              },
+              250 * 2 ** Math.min(request.failures++, 4),
+            ).unref();
+          }
+        }
+      })(),
+    ).finally(() => {
+      request.work = undefined;
+      if (
+        request.rerun &&
+        !stopping &&
+        takeovers.get(request.scope.requirementId) === request
+      ) {
+        request.rerun = undefined;
+        void reconcileTakeover(request);
+      }
+    });
+    return request.work;
+  }
+
+  async function takeover(
+    scope: Scope,
+    commandId: string,
+    assertCurrent: () => void,
+  ) {
+    const { prior, old, validBefore } = await readTransaction(async (tx) => {
+      const { validBefore } = await business.writeContext(
+        tx,
+        scope.who,
+        scope.projectId,
+        scope.requirementId,
+        scope.sessionId,
+        false,
+      );
+      const prior = await readTakeover(tx, scope, commandId);
+      const [old] = await tx
+        .select()
+        .from(leases)
+        .where(eq(leases.requirementId, scope.requirementId));
+      return { prior, old, validBefore };
+    });
+    requireLiveLogin(scope);
+    assertCurrent();
+    const request: Takeover = {
+      scope,
+      commandId,
+      previousGeneration: old?.generation ?? null,
+      assertCurrent,
+      phase: 'initial',
+      failures: 0,
+    };
+    const existing = takeovers.get(scope.requirementId);
+    if (
+      existing &&
+      digestOf(targetFor(existing)) === digestOf(targetFor(request))
+    ) {
+      if (existing.phase !== 'initial' && !existing.work && !stopping) {
+        existing.failures = 0;
+        await reconcileTakeover(existing);
+      }
+      if (prior) return prior;
+      businessError(409, '原接手状态尚待确认');
+    }
+    if (prior && prior.state !== 'pending') return prior;
+    allowed(validBefore, scope);
+    if (prior?.state === 'pending' && !matchesTakeover(old, request))
+      businessError(409, '原接手状态尚待确认');
+    takeovers.set(scope.requirementId, request);
+    const outcome = await prepareTakeover(request).catch(
+      async (error: unknown) => {
+        if (error instanceof UnknownWriteCommit) {
+          request.phase = 'verify-initial';
+          void reconcileTakeover(request);
+        } else await settleTakeover(request);
+        throw error;
+      },
+    );
+    if (outcome.state === 'pending') {
+      request.phase = 'draining';
+      void reconcileTakeover(request);
+    } else {
+      request.phase = 'verify-final';
+      try {
+        await settleTakeover(request, outcome);
+      } catch (error) {
+        void reconcileTakeover(request);
+        throw error;
+      }
+    }
+    return outcome;
   }
 
   async function recordRelease(request: PendingRelease, recovering: boolean) {
@@ -1132,6 +1582,8 @@ export function createOwnedWriteHandoff(
       for (const execution of executions.values()) execution.controller.abort();
       await Promise.allSettled(operations);
       await Promise.allSettled([...releaseFences.values()].map(runRelease));
+      for (const request of takeovers.values()) clearTimeout(request.timer);
+      await Promise.allSettled([...takeovers.values()].map(reconcileTakeover));
       const states = await Promise.allSettled(
         [...holdings.values()].map(({ scope, grant }) =>
           drain(scope.requirementId, grant.generation),
@@ -1139,6 +1591,16 @@ export function createOwnedWriteHandoff(
       );
       if (
         releaseFences.size > 0 ||
+        takeovers.size > 0 ||
+        (
+          await db
+            .select({ id: leases.requirementId })
+            .from(leases)
+            .where(
+              sql`${leases.takeover} is not null or ${leases.runId} is not null`,
+            )
+            .limit(1)
+        ).length > 0 ||
         states.some(
           (state) => state.status === 'rejected' || state.value !== 'released',
         )
@@ -1234,19 +1696,18 @@ export function createOwnedWriteHandoff(
                 lease.nativeSessionId,
               )
             : undefined;
-        const [owned] =
-          actionsEnabled && (!lease || lease.phase === 'released')
-            ? await tx
-                .select({ id: schema.nativeSession.id })
-                .from(schema.nativeSession)
-                .where(
-                  and(
-                    eq(schema.nativeSession.requirementId, requirementId),
-                    eq(schema.nativeSession.ownerId, who.userId),
-                  ),
-                )
-                .limit(1)
-            : [];
+        const [owned] = actionsEnabled
+          ? await tx
+              .select({ id: schema.nativeSession.id })
+              .from(schema.nativeSession)
+              .where(
+                and(
+                  eq(schema.nativeSession.requirementId, requirementId),
+                  eq(schema.nativeSession.ownerId, who.userId),
+                ),
+              )
+              .limit(1)
+          : [];
         const applicant = owned ? await eligible(who, owned.id) : undefined;
         return { reader, lease, holder, applicant };
       },
@@ -1259,6 +1720,23 @@ export function createOwnedWriteHandoff(
 
     const tracked = holdings.get(requirementId);
     const hints = actionsEnabled ? { actionsEnabled: true as const } : {};
+    const mayTakeover =
+      applicant &&
+      applicant.validBefore > now &&
+      !loginClosed(who.authSessionId) &&
+      !stopping &&
+      !fenced(requirementId) &&
+      !lease?.takeover;
+    const takeoverHint =
+      mayTakeover &&
+      lease?.phase === 'held' &&
+      tracked?.confirmed &&
+      sameHolder(lease, tracked.scope, tracked.grant.generation) &&
+      (!lease.runId ||
+        executions.has(lease.runId) ||
+        settlements.has(lease.runId))
+        ? { canTakeover: true as const }
+        : {};
     if (
       !stopping &&
       !fenced(requirementId) &&
@@ -1268,9 +1746,10 @@ export function createOwnedWriteHandoff(
       return {
         ...hints,
         state: 'idle',
-        ...(applicant &&
-          applicant.validBefore > now &&
-          !loginClosed(who.authSessionId) && { canAcquire: true as const }),
+        ...(mayTakeover && {
+          canAcquire: true as const,
+          canTakeover: true as const,
+        }),
       };
     if (
       !tracked?.confirmed ||
@@ -1278,7 +1757,7 @@ export function createOwnedWriteHandoff(
       tracked.grant.contextVersion !== lease.contextVersion ||
       tracked.grant.expiresAt !== lease.expiresAt.getTime()
     )
-      return { ...hints, state: 'unconfirmed' };
+      return { ...hints, ...takeoverHint, state: 'unconfirmed' };
     const execution = lease.runId ? executions.get(lease.runId) : undefined;
     const running =
       execution?.requirementId === requirementId &&
@@ -1307,7 +1786,8 @@ export function createOwnedWriteHandoff(
     )
       return { ...hints, state: 'unconfirmed' };
     const expiresAt = Math.min(lease.expiresAt.getTime(), holder.validBefore);
-    if (expiresAt <= now) return { ...hints, state: 'unconfirmed' };
+    if (expiresAt <= now)
+      return { ...hints, ...takeoverHint, state: 'unconfirmed' };
     const own =
       lease.ownerId === who.userId && lease.authSessionId === who.authSessionId;
     const target = own
@@ -1319,9 +1799,10 @@ export function createOwnedWriteHandoff(
       : undefined;
     const release = actionsEnabled && target ? { releaseTarget: target } : {};
     if (holder.requirement.contextVersion !== lease.contextVersion)
-      return { ...hints, ...release, state: 'unconfirmed' };
+      return { ...hints, ...takeoverHint, ...release, state: 'unconfirmed' };
     return {
       ...hints,
+      ...takeoverHint,
       ...release,
       state: 'held',
       ...(target && { holder: target }),
@@ -1358,6 +1839,8 @@ export function createOwnedWriteHandoff(
     },
     acquire: (scope: Scope, commandId: string, assertCurrent = () => {}) =>
       admit(() => acquire(structuredClone(scope), commandId, assertCurrent)),
+    takeover: (scope: Scope, commandId: string, assertCurrent = () => {}) =>
+      admit(() => takeover(structuredClone(scope), commandId, assertCurrent)),
     execute: (
       scope: Scope,
       input: Invocation,

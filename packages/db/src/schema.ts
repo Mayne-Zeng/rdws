@@ -319,6 +319,12 @@ export const requirementWriteLease = pgTable(
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     contextVersion: integer('context_version').notNull(),
     runId: uuid('run_id'),
+    takeover: jsonb('takeover').$type<{
+      userId: string;
+      authSessionId: string;
+      sessionId: string;
+      commandId: string;
+    }>(),
     ...timestamps,
   },
   (t) => [
@@ -328,7 +334,7 @@ export const requirementWriteLease = pgTable(
     }),
     check(
       'requirement_write_lease_phase',
-      sql`${t.phase} in ('held', 'draining', 'released') and (${t.phase} <> 'released' or ${t.runId} is null)`,
+      sql`${t.phase} in ('held', 'draining', 'released') and (${t.phase} <> 'released' or ${t.runId} is null) and (${t.takeover} is null or ${t.phase} = 'draining')`,
     ),
   ],
 );

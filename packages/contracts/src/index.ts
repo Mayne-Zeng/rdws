@@ -25,22 +25,32 @@ export type RequirementWriteAuthority = (
 ) & {
   actionsEnabled?: true;
   canAcquire?: true;
+  canTakeover?: true;
   releaseTarget?: WriteAuthorityHolder;
 };
 export type WriteAuthorityCommand =
   | { type: 'acquire'; commandId: string }
+  | { type: 'takeover'; commandId: string }
   | { type: 'release'; commandId: string; generation: string };
-export type WriteAuthorityCommandOutcome = {
+export type WriteTakeoverState =
+  | { state: 'pending' | 'cancelled' }
+  | { state: 'acquired'; generation: string };
+export type WriteAuthorityCommandOutcome = { commandId: string } & (
+  | {
+      type: 'acquire' | 'release';
+      generation: string;
+      state: 'acquired' | 'released' | 'draining';
+    }
+  | ({ type: 'takeover' } & WriteTakeoverState)
+);
+export type WriteAuthorityCommandReceipt = {
   type: WriteAuthorityCommand['type'];
   commandId: string;
-  generation: string;
-  state: 'acquired' | 'released' | 'draining';
-};
-export type WriteAuthorityCommandReceipt = Pick<
-  WriteAuthorityCommandOutcome,
-  'type' | 'commandId'
-> &
-  ({ state: 'recorded'; generation: string } | { state: 'unrecorded' });
+} & (
+  | { state: 'recorded'; generation: string }
+  | { state: 'unrecorded' }
+  | WriteTakeoverState
+);
 
 const writeUuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 export function isWriteAuthorityCommand(
@@ -50,7 +60,7 @@ export function isWriteAuthorityCommand(
   const { type, commandId, generation } = value as Record<string, unknown>;
   if (typeof commandId !== 'string' || !writeUuid.test(commandId)) return false;
   const keys = Object.keys(value);
-  return type === 'acquire'
+  return type === 'acquire' || type === 'takeover'
     ? keys.length === 2 && keys.includes('type') && keys.includes('commandId')
     : type === 'release' &&
         typeof generation === 'string' &&

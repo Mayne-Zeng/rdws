@@ -864,6 +864,8 @@ export function createWorkbenchRuntime(
           const receipt = await readFleetCommand(request);
           if (request.routeOptions.url === writeAuthorityCheckPath)
             return JSON.stringify(receipt);
+          if (receipt.type === 'takeover' && receipt.state !== 'unrecorded')
+            return JSON.stringify(receipt);
           if (receipt.state !== 'recorded') fail(503, '写权命令回执尚未确认');
           return payload;
         }
@@ -1139,6 +1141,10 @@ export function createWorkbenchRuntime(
   ): Promise<WriteAuthorityCommandOutcome | WriteAuthorityCommandReceipt> {
     if (check) return readFleetCommand(request);
     const { broker, command, scope, current } = fleetCommand(request);
+    if (command.type === 'takeover') {
+      const outcome = await broker.takeover(scope, command.commandId, current);
+      return { ...command, ...outcome };
+    }
     if (command.type === 'acquire') {
       const grant = await broker.acquire(scope, command.commandId, current);
       return { ...command, generation: grant.generation, state: 'acquired' };

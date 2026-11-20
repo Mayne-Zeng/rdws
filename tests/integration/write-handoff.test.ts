@@ -40,6 +40,11 @@ function controlledCommits() {
     | {
         lose: boolean;
         rollback?: 'settlement' | 'any';
+        takeover?: {
+          commandId: string;
+          state: 'pending' | 'acquired' | 'reserved';
+        };
+        delayLoss?: true;
         entered: boolean;
         wait: Promise<void>;
         release: () => void;
@@ -56,6 +61,8 @@ function controlledCommits() {
     | undefined;
   let pausedSession: ReturnType<typeof pauseQuery> | undefined;
   let pausedReceipt:
+    (ReturnType<typeof pauseQuery> & { commandId: string }) | undefined;
+  let pausedPendingRead:
     (ReturnType<typeof pauseQuery> & { commandId: string }) | undefined;
   function pauseQuery() {
     let release!: () => void;
@@ -75,6 +82,9 @@ function controlledCommits() {
       const query = client.query;
       let brokerTransaction = false;
       let completingExecution = false;
+      let matchingTakeover = false;
+      let readingPending = false;
+      let writingReceipt = false;
       client.query = ((...parameters: unknown[]) => {
         const input = parameters[0] as
           string | { text: string; values?: unknown[] };
@@ -104,6 +114,29 @@ function controlledCommits() {
           );
         }
         if (sql?.includes("synchronous_commit='on'")) brokerTransaction = true;
+        if (sql?.startsWith('update "command_receipt"')) writingReceipt = true;
+        if (
+          pausedPendingRead &&
+          sql?.startsWith('select ') &&
+          sql.includes('from "command_receipt"') &&
+          values?.includes(pausedPendingRead.commandId)
+        )
+          readingPending = true;
+        if (
+          next?.takeover &&
+          sql?.startsWith('update "command_receipt"') &&
+          values?.includes(next.takeover.commandId) &&
+          values.some(
+            (value) =>
+              typeof value === 'string' &&
+              value.startsWith(
+                next!.takeover!.state === 'reserved'
+                  ? '{"status":"reserved"'
+                  : `{"state":"${next!.takeover!.state}"`,
+              ),
+          )
+        )
+          matchingTakeover = true;
         if (
           sql?.startsWith('update "command_receipt"') &&
           values?.some(
@@ -133,6 +166,23 @@ function controlledCommits() {
           );
         }
         if (sql === 'commit' || sql === 'rollback') client.query = query;
+        if (
+          sql === 'commit' &&
+          brokerTransaction &&
+          readingPending &&
+          !writingReceipt &&
+          pausedPendingRead
+        ) {
+          const gate = pausedPendingRead;
+          pausedPendingRead = undefined;
+          return Reflect.apply(query, client, parameters).then(
+            async (result: unknown) => {
+              gate.entered = true;
+              await gate.wait;
+              return result;
+            },
+          );
+        }
         if (sql === 'commit' && completingExecution && settling) {
           const gate = settling;
           settling = undefined;
@@ -151,6 +201,7 @@ function controlledCommits() {
           sql === 'commit' &&
           brokerTransaction &&
           next &&
+          (!next.takeover || matchingTakeover) &&
           (next.rollback !== 'settlement' || completingExecution)
         ) {
           const gate = next;
@@ -161,6 +212,7 @@ function controlledCommits() {
             gate.rollback ? ['rollback'] : parameters,
           ).then(async (result: unknown) => {
             gate.entered = true;
+            if (gate.delayLoss) await gate.wait;
             if (gate.lose) throw new Error('Synthetic commit response lost');
             await gate.wait;
             return result;
@@ -187,6 +239,22 @@ function controlledCommits() {
         release,
       });
     },
+    armTakeover(
+      commandId: string,
+      state: 'pending' | 'acquired' | 'reserved',
+      rollback?: 'any',
+      reply: 'lose' | 'hold' | 'hold-then-lose' = 'lose',
+    ) {
+      if (next) throw new Error('A commit gate is already armed');
+      const pause = pauseQuery();
+      return (next = {
+        ...pause,
+        lose: reply !== 'hold',
+        ...(reply === 'hold-then-lose' && { delayLoss: true as const }),
+        rollback,
+        takeover: { commandId, state },
+      });
+    },
     holdFinalRead(): FinalReadGate {
       if (finalRead) throw new Error('A final read is already armed');
       let release!: () => void;
@@ -207,6 +275,9 @@ function controlledCommits() {
     },
     holdReceipt(commandId: string) {
       return (pausedReceipt = { ...pauseQuery(), commandId });
+    },
+    holdPendingRead(commandId: string) {
+      return (pausedPendingRead = { ...pauseQuery(), commandId });
     },
     restore: () => spy.mockRestore(),
   };
@@ -288,6 +359,14 @@ test.skipIf(process.platform !== 'darwin')(
             [requirementId, actor.who.userId, actor.role],
           );
       }
+      await lab.owner.query(
+        "insert into project_member values ($1,$2,'tester')",
+        [projectId, unassigned.who.userId],
+      );
+      await lab.owner.query(
+        "insert into requirement_participant values ($1,$2,'tester')",
+        [requirementId, unassigned.who.userId],
+      );
       const differentRequirement = randomUUID();
       const differentSession = randomUUID();
       await lab.owner.query(
@@ -393,8 +472,15 @@ test.skipIf(process.platform !== 'darwin')(
         git,
       );
       broker = active;
+      const noTask = await active.acquire(unassigned, randomUUID());
+      expect(noTask.generation).toEqual(expect.any(String));
+      expect(noTask.tasks).toMatchObject([
+        { id: taskId, assigneeId: worker.who.userId },
+      ]);
+      expect(
+        await active.release(unassigned, noTask.generation, randomUUID()),
+      ).toBe('released');
       for (const denied of [
-        unassigned,
         tester,
         administrator,
         { ...lead, sessionId: worker.sessionId },
@@ -1167,6 +1253,348 @@ test.skipIf(process.platform !== 'darwin')(
         statusCode: 401,
       });
 
+      {
+        const previous = await active.acquire(next, randomUUID());
+        let handoffOutput = '';
+        const oldInvocation = {
+          ...input,
+          generation: previous.generation,
+          commandId: randomUUID(),
+          request: {
+            tool: 'shell' as const,
+            script: 'printf "fixture-pid:%s\\n" "$$"; while :; do :; done',
+          },
+        };
+        const oldWork = active.execute(
+          next,
+          oldInvocation,
+          ({ stream, chunk }) => {
+            if (stream === 'stdout') handoffOutput += chunk.toString();
+          },
+        );
+        void oldWork.catch(() => {});
+        const incumbentPid = await isolatedShellPid(() => handoffOutput);
+        const rolledBack = {
+          type: 'takeover' as const,
+          commandId: randomUUID(),
+        };
+        const lostRollback = commits.armTakeover(
+          rolledBack.commandId,
+          'pending',
+          'any',
+        );
+        await expect(
+          active.takeover(unassigned, rolledBack.commandId),
+        ).rejects.toThrow('commit could not be confirmed');
+        expect(lostRollback.entered).toBe(true);
+        await expect
+          .poll(() => readStatus(active))
+          .toEqual({
+            state: 'held',
+            holder: expect.objectContaining({
+              generation: previous.generation,
+            }),
+          });
+        expect(process.kill(-incumbentPid, 0)).toBe(true);
+        expect(await active.checkCommand(unassigned, rolledBack)).toEqual({
+          state: 'unrecorded',
+        });
+
+        const switchCommand = {
+          type: 'takeover' as const,
+          commandId: randomUUID(),
+        };
+        const lostIntent = commits.armTakeover(
+          switchCommand.commandId,
+          'pending',
+        );
+        const heldSettlement = commits.holdSettlement(true);
+        try {
+          await expect(
+            active.takeover(unassigned, switchCommand.commandId),
+          ).rejects.toThrow('commit could not be confirmed');
+          expect(lostIntent.entered).toBe(true);
+          await expect.poll(() => heldSettlement.entered).toBe(true);
+          expect((await currentRows()).rows).toEqual([
+            {
+              generation: previous.generation,
+              phase: 'draining',
+              run_id: null,
+            },
+          ]);
+          expect(await active.checkCommand(unassigned, switchCommand)).toEqual({
+            state: 'pending',
+          });
+          await expect(
+            active.takeover(alternate, randomUUID()),
+          ).rejects.toMatchObject({ statusCode: 409 });
+          await expect(
+            active.execute(next, {
+              ...file,
+              generation: previous.generation,
+              commandId: randomUUID(),
+            }),
+          ).rejects.toMatchObject({ statusCode: 409 });
+        } finally {
+          heldSettlement.release();
+        }
+        expect(await oldWork).toMatchObject({
+          status: 'finished',
+          result: { status: 'aborted', stop: 'confirmed' },
+        });
+        expect(() => process.kill(-incumbentPid, 0)).toThrow(
+          expect.objectContaining({ code: 'ESRCH' }),
+        );
+        await expect
+          .poll(() => active.checkCommand(unassigned, switchCommand))
+          .toMatchObject({ state: 'acquired', generation: expect.any(String) });
+        const completed = await active.checkCommand(unassigned, switchCommand);
+        if (completed.state !== 'acquired')
+          throw new Error('Expected confirmed takeover');
+        expect(
+          await active.takeover(unassigned, switchCommand.commandId),
+        ).toEqual(completed);
+        expect((await currentRows()).rows).toEqual([
+          { generation: completed.generation, phase: 'held', run_id: null },
+        ]);
+
+        const finalCommand = {
+          type: 'takeover' as const,
+          commandId: randomUUID(),
+        };
+        const lostGrant = commits.armTakeover(
+          finalCommand.commandId,
+          'acquired',
+        );
+        expect(await active.takeover(next, finalCommand.commandId)).toEqual({
+          state: 'pending',
+        });
+        await expect.poll(() => lostGrant.entered).toBe(true);
+        await expect
+          .poll(() => active.checkCommand(next, finalCommand))
+          .toMatchObject({ state: 'acquired', generation: expect.any(String) });
+        const finalGrant = await active.checkCommand(next, finalCommand);
+        if (finalGrant.state !== 'acquired')
+          throw new Error('Expected recovered takeover');
+        await expect
+          .poll(() => readStatus(active))
+          .toMatchObject({
+            state: 'held',
+            holder: { generation: finalGrant.generation },
+          });
+        expect(
+          await active.takeover(unassigned, switchCommand.commandId),
+        ).toEqual(completed);
+        expect((await currentRows()).rows[0]?.generation).toBe(
+          finalGrant.generation,
+        );
+
+        const retryFinal = {
+          type: 'takeover' as const,
+          commandId: randomUUID(),
+        };
+        const rolledBackGrant = commits.armTakeover(
+          retryFinal.commandId,
+          'acquired',
+          'any',
+        );
+        expect(await active.takeover(unassigned, retryFinal.commandId)).toEqual(
+          { state: 'pending' },
+        );
+        await expect.poll(() => rolledBackGrant.entered).toBe(true);
+        await expect
+          .poll(() => active.checkCommand(unassigned, retryFinal))
+          .toMatchObject({ state: 'acquired', generation: expect.any(String) });
+        const retriedGrant = await active.checkCommand(unassigned, retryFinal);
+        if (retriedGrant.state !== 'acquired')
+          throw new Error('Expected reacquired takeover');
+        await expect
+          .poll(() =>
+            active.readStatus(
+              unassigned.who,
+              projectId,
+              requirementId,
+              () => {},
+            ),
+          )
+          .toMatchObject({
+            state: 'held',
+            holder: { generation: retriedGrant.generation },
+          });
+
+        let failingOutput = '';
+        const failedExecution = active.execute(
+          unassigned,
+          {
+            ...oldInvocation,
+            generation: retriedGrant.generation,
+            commandId: randomUUID(),
+            request: {
+              tool: 'shell',
+              script:
+                'printf "fixture-pid:%s\\n" "$$"; while [ ! -f finish-with-error ]; do :; done; exit 7',
+            },
+          },
+          ({ stream, chunk }) => {
+            if (stream === 'stdout') failingOutput += chunk.toString();
+          },
+        );
+        void failedExecution.catch(() => {});
+        const failingPid = await isolatedShellPid(() => failingOutput);
+        const afterFailure = {
+          type: 'takeover' as const,
+          commandId: randomUUID(),
+        };
+        const heldIntent = commits.armTakeover(
+          afterFailure.commandId,
+          'pending',
+          undefined,
+          'hold',
+        );
+        const afterFailureRequest = active.takeover(
+          next,
+          afterFailure.commandId,
+        );
+        void afterFailureRequest.catch(() => {});
+        try {
+          await expect.poll(() => heldIntent.entered).toBe(true);
+          expect(process.kill(-failingPid, 0)).toBe(true);
+          await writeFile(join(scope.tree, 'finish-with-error'), 'fixture', {
+            flag: 'wx',
+            mode: 0o600,
+          });
+          expect(await failedExecution).toMatchObject({
+            status: 'finished',
+            result: { status: 'failed', exitCode: 7, stop: 'confirmed' },
+          });
+          expect((await currentRows()).rows[0]).toMatchObject({
+            generation: retriedGrant.generation,
+            phase: 'draining',
+            run_id: null,
+          });
+        } finally {
+          heldIntent.release();
+        }
+        expect(await afterFailureRequest).toEqual({ state: 'pending' });
+        await expect
+          .poll(() => active.checkCommand(next, afterFailure))
+          .toMatchObject({ state: 'acquired', generation: expect.any(String) });
+        await expect
+          .poll(() => readStatus(active))
+          .toMatchObject({
+            state: 'held',
+            holder: { sessionId: next.sessionId },
+          });
+
+        const reserving = {
+          ...file,
+          generation: (await currentRows()).rows[0]!.generation as string,
+          commandId: randomUUID(),
+          request: {
+            ...file.request,
+            path: 'must-not-start.txt',
+            text: 'unexpected write',
+          },
+        };
+        const reservationGate = commits.armTakeover(
+          reserving.commandId,
+          'reserved',
+          undefined,
+          'hold',
+        );
+        const reservedWork = active.execute(next, reserving);
+        void reservedWork.catch(() => {});
+        const lateRun = { type: 'takeover' as const, commandId: randomUUID() };
+        const pendingRead = commits.holdPendingRead(lateRun.commandId);
+        let originalView = true;
+        try {
+          await expect.poll(() => reservationGate.entered).toBe(true);
+          expect(
+            await active.takeover(unassigned, lateRun.commandId, () => {
+              if (!originalView)
+                throw new Error(
+                  'Synthetic original HTTP observation invalidated',
+                );
+            }),
+          ).toEqual({ state: 'pending' });
+          await expect.poll(() => pendingRead.entered).toBe(true);
+          originalView = false;
+          reservationGate.release();
+          expect(await reservedWork).toMatchObject({
+            status: 'finished',
+            result: { stop: 'not-started' },
+          });
+          await expect(
+            readFile(join(scope.tree, 'must-not-start.txt')),
+          ).rejects.toMatchObject({ code: 'ENOENT' });
+          expect(await active.checkCommand(unassigned, lateRun)).toEqual({
+            state: 'pending',
+          });
+        } finally {
+          reservationGate.release();
+          pendingRead.release();
+        }
+        await expect
+          .poll(() => active.checkCommand(unassigned, lateRun))
+          .toMatchObject({ state: 'acquired', generation: expect.any(String) });
+        const moveBack = { type: 'takeover' as const, commandId: randomUUID() };
+        expect(await active.takeover(next, moveBack.commandId)).toEqual({
+          state: 'pending',
+        });
+        await expect
+          .poll(() => active.checkCommand(next, moveBack))
+          .toMatchObject({ state: 'acquired' });
+        await expect
+          .poll(() => readStatus(active))
+          .toMatchObject({
+            state: 'held',
+            holder: { sessionId: next.sessionId },
+          });
+
+        const withdrawn = {
+          type: 'takeover' as const,
+          commandId: randomUUID(),
+        };
+        const revokeGate = commits.armTakeover(
+          withdrawn.commandId,
+          'pending',
+          undefined,
+          'hold',
+        );
+        const withdrawRequest = active.takeover(
+          unassigned,
+          withdrawn.commandId,
+        );
+        void withdrawRequest.catch(() => {});
+        try {
+          await expect.poll(() => revokeGate.entered).toBe(true);
+          await active.changeAuthority(
+            randomUUID(),
+            ({ who }) => who.userId === unassigned.who.userId,
+            (tx) =>
+              tx
+                .delete(schema.requirementParticipant)
+                .where(
+                  sql`${schema.requirementParticipant.requirementId}=${requirementId} and ${schema.requirementParticipant.userId}=${unassigned.who.userId} and ${schema.requirementParticipant.role}='developer'`,
+                ),
+            async () => 'committed',
+          );
+          expect(await active.checkCommand(unassigned, withdrawn)).toEqual({
+            state: 'pending',
+          });
+        } finally {
+          revokeGate.release();
+        }
+        expect(await withdrawRequest).toEqual({ state: 'pending' });
+        await expect
+          .poll(() => active.checkCommand(unassigned, withdrawn))
+          .toEqual({ state: 'cancelled' });
+        expect(await readStatus(active)).toEqual({ state: 'idle' });
+        await expect(
+          active.takeover(unassigned, randomUUID()),
+        ).rejects.toMatchObject({ statusCode: 403 });
+      }
+
       await active.close();
       broker = undefined;
       const shortTicket = randomBytes(32).toString('hex');
@@ -1186,6 +1614,33 @@ test.skipIf(process.platform !== 'darwin')(
         1800,
       );
       broker = short;
+      const beforeExpired = await short.acquire(next, randomUUID());
+      const expiringSwitch = {
+        type: 'takeover' as const,
+        commandId: randomUUID(),
+      };
+      const expiringAck = commits.armTakeover(
+        expiringSwitch.commandId,
+        'acquired',
+        undefined,
+        'hold-then-lose',
+      );
+      try {
+        expect(
+          await short.takeover(alternate, expiringSwitch.commandId),
+        ).toEqual({ state: 'pending' });
+        await expect.poll(() => expiringAck.entered).toBe(true);
+        const expired = await short.checkCommand(alternate, expiringSwitch);
+        if (expired.state !== 'acquired')
+          throw new Error('Expected persisted takeover grant');
+        expect(expired.generation).not.toBe(beforeExpired.generation);
+        await expect
+          .poll(async () => (await currentRows()).rows[0], { timeout: 4_000 })
+          .toMatchObject({ generation: expired.generation, phase: 'released' });
+      } finally {
+        expiringAck.release();
+      }
+      await expect.poll(() => readStatus(short)).toEqual({ state: 'idle' });
       const timed = await short.acquire(next, randomUUID());
       let expiryRunStarted = false;
       const expiryRun = short.execute(

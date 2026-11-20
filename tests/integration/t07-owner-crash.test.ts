@@ -592,6 +592,18 @@ test.skipIf(process.platform !== 'darwin')(
         ...fresh,
         state: 'unrecorded',
       });
+      const takeover = { type: 'takeover' as const, commandId: randomUUID() };
+      const coldTakeover = await command(
+        nextAddress,
+        requirementId,
+        sessionId,
+        takeover,
+      );
+      expect(coldTakeover.status).toBe(409);
+      expect(
+        (await command(nextAddress, requirementId, sessionId, takeover, true))
+          .status,
+      ).toBe(200);
 
       const admitted = await command(
         nextAddress,
@@ -624,12 +636,14 @@ test.skipIf(process.platform !== 'darwin')(
         generation: idleGrant.generation,
       });
       await next.send({ kind: 'stop' });
-      expect(await next.waitForExit()).toEqual([0, null]);
-      expect(next.reports).toContainEqual({ kind: 'stopped' });
-      const releasedOwner = await owner();
-      expect(releasedOwner.generation).toBeNull();
-      expect(releasedOwner.spent).toBe(true);
-      expect(releasedOwner.proof_digest === null).toBe(true);
+      expect(await next.waitForExit()).toEqual([1, null]);
+      expect(next.reports).not.toContainEqual({ kind: 'stopped' });
+      const retainedOwner = await owner();
+      expect(retainedOwner.generation).toBe(replacement.generation);
+      expect(retainedOwner.spent).toBe(true);
+      expect(retainedOwner.proof_digest === replacement.proof_digest).toBe(
+        true,
+      );
       expect(await retained()).toEqual(persisted);
       expect(await readFile(marker, 'utf8')).toBe(markerBytes);
       expect(await readFile(sample, 'utf8')).toBe('baseline|started');

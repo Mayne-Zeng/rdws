@@ -284,7 +284,12 @@ test.skipIf(process.platform !== 'darwin')(
       const idle = await check();
       expect(idle.headers['cache-control']).toBe('no-store');
       expect(idle.headers['set-cookie']).toBeUndefined();
-      const ready = { state: 'idle', actionsEnabled: true, canAcquire: true };
+      const ready = {
+        state: 'idle',
+        actionsEnabled: true,
+        canAcquire: true,
+        canTakeover: true,
+      };
       expect(idle.json()).toEqual(ready);
       expect((await check(viewer)).json()).toEqual({
         state: 'idle',
@@ -384,6 +389,7 @@ test.skipIf(process.platform !== 'darwin')(
       const held = {
         state: 'held',
         actionsEnabled: true,
+        canTakeover: true,
         holder: target,
         releaseTarget: target,
       };
@@ -392,6 +398,7 @@ test.skipIf(process.platform !== 'darwin')(
       expect((await check(separate)).json()).toEqual({
         state: 'held',
         actionsEnabled: true,
+        canTakeover: true,
       });
       expect((await check(viewer)).json()).toEqual({
         state: 'held',
@@ -439,6 +446,7 @@ test.skipIf(process.platform !== 'darwin')(
       expect((await initialVersion.pending).json()).toEqual({
         state: 'unconfirmed',
         actionsEnabled: true,
+        canTakeover: true,
         releaseTarget: {
           sessionId: ownSession,
           generation: next.generation,
@@ -448,6 +456,7 @@ test.skipIf(process.platform !== 'darwin')(
       expect((await check(separate)).json()).toEqual({
         state: 'unconfirmed',
         actionsEnabled: true,
+        canTakeover: true,
       });
       const release = {
         type: 'release',

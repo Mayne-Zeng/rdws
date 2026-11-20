@@ -93,6 +93,7 @@ export class NativeFixtureToolJob {
       contextVersion !== this.contextVersion
     )
       return denied();
+    if (this.options.wire) this.assertWireLease();
     this.authorization = { digest, expiresAt, current, callId, callSeq };
     return this.commandId;
   }
@@ -139,6 +140,7 @@ export class NativeFixtureToolJob {
       permit.expiresAt > Date.now() &&
       permit.current();
     if (!current()) return denied();
+    if (this.options.wire) this.assertWireLease();
     this.state = 'pending';
     this.pending = this.options.broker
       .execute(

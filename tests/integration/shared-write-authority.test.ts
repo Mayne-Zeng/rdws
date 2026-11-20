@@ -1999,6 +1999,7 @@ test.skipIf(process.platform !== 'darwin')(
         };
         const grant = await broker.acquire(scope, randomUUID());
         let running = false;
+        const stop = new AbortController();
         const result = broker.execute(
           scope,
           {
@@ -2013,10 +2014,11 @@ test.skipIf(process.platform !== 'darwin')(
           () => {
             running = true;
           },
+          stop.signal,
         );
         void result.catch(() => {});
         await expect.poll(() => running).toBe(true);
-        return { scope, grant, result };
+        return { scope, grant, result, stop: () => stop.abort() };
       }
       const idle = await launch(maintainer, other, 'other demand');
       const running = await launch(developer, work, 'old worker');
@@ -2126,10 +2128,21 @@ test.skipIf(process.platform !== 'darwin')(
         commitGate.release();
         commitGate.restore();
       }
+      expect(await rows(work.requirementId)).toMatchObject({
+        phase: 'held',
+        generation: running.grant.generation,
+        run_id: expect.any(String),
+      });
+      running.stop();
       expect(await running.result).toMatchObject({
         status: 'finished',
         result: { status: 'aborted', stop: 'confirmed' },
       });
+      await broker.release(
+        running.scope,
+        running.grant.generation,
+        randomUUID(),
+      );
       expect(await rows(work.requirementId)).toMatchObject({
         phase: 'released',
         run_id: null,
@@ -2156,9 +2169,10 @@ test.skipIf(process.platform !== 'darwin')(
         ).toBe(500);
         expect(lost.entered).toBe(true);
         lost.expectIndependentReceipt('COMMIT');
-        expect(await beforeLost.result).toMatchObject({
-          status: 'finished',
-          result: { status: 'aborted', stop: 'confirmed' },
+        expect(await rows(work.requirementId)).toMatchObject({
+          phase: 'held',
+          generation: beforeLost.grant.generation,
+          run_id: expect.any(String),
         });
         expect(
           (await task(developer, 'done', taskId, originalCommand)).statusCode,
@@ -2175,6 +2189,16 @@ test.skipIf(process.platform !== 'darwin')(
         lost.release();
         lost.restore();
       }
+      beforeLost.stop();
+      expect(await beforeLost.result).toMatchObject({
+        status: 'finished',
+        result: { status: 'aborted', stop: 'confirmed' },
+      });
+      await broker.release(
+        beforeLost.scope,
+        beforeLost.grant.generation,
+        randomUUID(),
+      );
       expect((await task(maintainer, 'in_progress')).statusCode).toBe(200);
       const alternate = await login(assigned);
       const beforeUnreadable = await launch(
@@ -2213,9 +2237,14 @@ test.skipIf(process.platform !== 'darwin')(
         'recoverIsolatedWriteAuthority',
       )();
       expect(await rows(work.requirementId)).toMatchObject({
-        phase: 'released',
+        phase: 'held',
         run_id: null,
       });
+      await broker.release(
+        beforeUnreadable.scope,
+        beforeUnreadable.grant.generation,
+        randomUUID(),
+      );
       expect(
         (await task(developer, 'done', taskId, unreadableCommand)).statusCode,
       ).toBe(200);
@@ -2347,6 +2376,12 @@ test.skipIf(process.platform !== 'darwin')(
         },
       });
       expect(replacement.statusCode, replacement.body).toBe(200);
+      expect(await rows(other.requirementId)).toMatchObject({
+        phase: 'held',
+        generation: beforePersonnel.grant.generation,
+        run_id: expect.any(String),
+      });
+      beforePersonnel.stop();
       expect(await beforePersonnel.result).toMatchObject({
         status: 'finished',
         result: { status: 'aborted', stop: 'confirmed' },
@@ -2359,9 +2394,23 @@ test.skipIf(process.platform !== 'darwin')(
           )
         ).rows,
       ).toEqual([{ role: 'developer' }]);
-      await expect(
-        broker.acquire(beforePersonnel.scope, randomUUID()),
-      ).rejects.toMatchObject({ statusCode: 403 });
+      await broker.release(
+        beforePersonnel.scope,
+        beforePersonnel.grant.generation,
+        randomUUID(),
+      );
+      const stillDeveloper = await broker.acquire(
+        beforePersonnel.scope,
+        randomUUID(),
+      );
+      expect(stillDeveloper.generation).not.toBe(
+        beforePersonnel.grant.generation,
+      );
+      await broker.release(
+        beforePersonnel.scope,
+        stillDeveloper.generation,
+        randomUUID(),
+      );
 
       for (const stale of [
         {

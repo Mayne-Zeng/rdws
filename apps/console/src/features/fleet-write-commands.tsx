@@ -49,6 +49,7 @@ export function FleetWriteCommands({
   const [pending, setPending] = useState(() => storedIntent(key));
   const [choice, setChoice] = useState('');
   const [message, setMessage] = useState('');
+  const [canDiscard, setCanDiscard] = useState(false);
   const [busy, setBusy] = useState(false);
   const inFlight = useRef<AbortController>(undefined);
   useLayoutEffect(() => () => inFlight.current?.abort(), []);
@@ -80,6 +81,7 @@ export function FleetWriteCommands({
     }
     setPending(intent);
     setMessage('');
+    setCanDiscard(false);
     const controller = new AbortController();
     const signal = controller.signal;
     inFlight.current = controller;
@@ -104,28 +106,74 @@ export function FleetWriteCommands({
     }
     try {
       const { command } = intent;
-      const result = await api<
-        WriteAuthorityCommandOutcome | WriteAuthorityCommandReceipt
-      >(
-        requirementPath +
-          '/sessions/' +
-          encodeURIComponent(intent.sessionId) +
-          '/write-authority' +
-          (check ? '/check' : '/commands'),
-        {
-          method: 'POST',
-          headers: { ...header, 'content-type': 'application/json' },
-          cache: 'no-store',
-          body: JSON.stringify(command),
-          signal,
-        },
-      );
+      async function receive(readOnly: boolean) {
+        const result = await api<
+          WriteAuthorityCommandOutcome | WriteAuthorityCommandReceipt
+        >(
+          requirementPath +
+            '/sessions/' +
+            encodeURIComponent(intent.sessionId) +
+            '/write-authority' +
+            (readOnly ? '/check' : '/commands'),
+          {
+            method: 'POST',
+            headers: { ...header, 'content-type': 'application/json' },
+            cache: 'no-store',
+            body: JSON.stringify(command),
+            signal,
+          },
+        );
+        if (
+          result.type !== command.type ||
+          result.commandId !== command.commandId
+        )
+          throw new Error();
+        return result;
+      }
+      let result = await receive(check);
       if (!current()) return;
-      if (
-        result.type !== command.type ||
-        result.commandId !== command.commandId
-      )
-        throw new Error();
+      if (command.type === 'takeover') {
+        for (let poll = 0; result.state === 'pending' && poll < 5; poll++) {
+          setMessage('正在核验旧会话是否停稳。');
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          if (!current()) return;
+          result = await receive(true);
+          if (!current()) return;
+        }
+        if (result.state === 'pending') return;
+        if (result.state === 'unrecorded') {
+          setMessage('尚未读到原回执，可核对或重试原操作。');
+          setCanDiscard(true);
+          return;
+        }
+        if (result.state === 'cancelled') {
+          await sampleStatus();
+          if (!current()) return;
+          setMessage('接手已取消，请查看当前写权状态。');
+        } else if (
+          result.state === 'acquired' &&
+          isWriteAuthorityCommand({
+            type: 'release',
+            commandId: command.commandId,
+            generation: result.generation,
+          })
+        ) {
+          const sampled = await sampleStatus();
+          if (!current()) return;
+          const held = sampled.state === 'held' && sampled.holder;
+          setMessage(
+            held &&
+              held.sessionId === intent.sessionId &&
+              held.generation === result.generation &&
+              held.expiresAt > Date.now()
+              ? '已设为可写会话。'
+              : '原接手已确认，请查看当前写权状态。',
+          );
+        } else throw new Error();
+        sessionStorage.removeItem(key);
+        setPending(undefined);
+        return;
+      }
       if (check && result.state === 'unrecorded') {
         setMessage('尚未读到原回执，可重试原操作。');
         return;
@@ -148,7 +196,8 @@ export function FleetWriteCommands({
         const valid = !!held && held.expiresAt > Date.now();
         const departed =
           sampled.state === 'idle' ||
-          (valid && held.generation !== result.generation);
+          (sampled.state === 'held' &&
+            (!held || (valid && held.generation !== result.generation)));
         const matching =
           valid &&
           held.generation === result.generation &&
@@ -187,7 +236,26 @@ export function FleetWriteCommands({
     } catch (error) {
       if (!current()) return;
       const code = (error as { status?: number } | null)?.status;
-      if (code === 401 || code === 403 || code === 404) onAccessLost();
+      if (
+        (code === 401 || code === 403 || code === 404) &&
+        intent.command.type === 'takeover'
+      ) {
+        try {
+          await sampleStatus();
+          if (current())
+            setMessage(
+              code === 403
+                ? '当前会话没有接手资格，可核对原操作。'
+                : '当前写权已变化，可核对原操作。',
+            );
+        } catch (readError) {
+          if (!current()) return;
+          const status = (readError as { status?: number } | null)?.status;
+          if (status === 401 || status === 403 || status === 404)
+            onAccessLost();
+          else setMessage('当前未能读取写权状态，请稍后核对原操作。');
+        }
+      } else if (code === 401 || code === 403 || code === 404) onAccessLost();
       else setMessage('当前未能完成确认，请核对或重试原操作。');
     } finally {
       if (inFlight.current === controller) {
@@ -200,7 +268,7 @@ export function FleetWriteCommands({
     }
   }
 
-  if (!pending && !message && !status?.canAcquire && !mayRelease) return null;
+  if (!pending && !message && !status?.canTakeover && !mayRelease) return null;
   return (
     <div className="fleet-write-commands">
       {pending ? (
@@ -221,10 +289,32 @@ export function FleetWriteCommands({
           >
             重试原操作
           </Button>
+          {canDiscard && (
+            <Button
+              tag="button"
+              variant="text"
+              disabled={busy}
+              onClick={() => {
+                try {
+                  if (sessionStorage.getItem(key) !== JSON.stringify(pending))
+                    return;
+                  sessionStorage.removeItem(key);
+                  setPending(undefined);
+                  setCanDiscard(false);
+                  setMessage('已放下本地操作记录，请查看当前写权状态。');
+                  refreshStatus();
+                } catch {
+                  setMessage('无法更新本地操作记录。');
+                }
+              }}
+            >
+              放下本地记录
+            </Button>
+          )}
         </div>
       ) : (
         <div className="session-actions">
-          {status?.canAcquire && selected && (
+          {status?.canTakeover && selected && (
             <>
               <select
                 aria-label="申请写权的会话"
@@ -246,7 +336,7 @@ export function FleetWriteCommands({
                     {
                       sessionId: selected.id,
                       command: {
-                        type: 'acquire',
+                        type: 'takeover',
                         commandId: crypto.randomUUID(),
                       },
                     },
@@ -254,7 +344,7 @@ export function FleetWriteCommands({
                   )
                 }
               >
-                设为写会话
+                设为可写会话
               </Button>
             </>
           )}

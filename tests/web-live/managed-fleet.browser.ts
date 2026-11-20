@@ -25,7 +25,7 @@ import { journal } from '../helpers/native-journal.ts';
 import { nativeReady } from '../helpers/native-ready.ts';
 import { modelTlsCertificate } from '../helpers/model-tls.ts';
 
-function releaseCommitGate() {
+function releaseCommitGate(operation = 'write.release') {
   let open!: () => void;
   const wait = new Promise<void>((resolve) => {
     open = resolve;
@@ -44,7 +44,7 @@ function releaseCommitGate() {
         if (
           text.startsWith('insert into "command_receipt"') &&
           Array.isArray(params[1]) &&
-          params[1].includes('write.release')
+          params[1].includes(operation)
         )
           releasing = true;
         const response = Reflect.apply(query, client, params);
@@ -198,7 +198,7 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
   const receiptCount = async () =>
     (
       await lab.owner.query(
-        "select count(*)::int as n from command_receipt where scope=$1 and operation in ('write.acquire','write.release')",
+        "select count(*)::int as n from command_receipt where scope=$1 and operation in ('write.acquire','write.takeover','write.release')",
         ['requirement:' + demand],
       )
     ).rows[0]?.n;
@@ -494,9 +494,10 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
     function startLoop(
       scope: Parameters<OwnedWriteHandoff['execute']>[0],
       generation: string,
+      activeBroker = broker,
     ) {
       let pid = 0;
-      const execution = broker.execute(
+      const execution = activeBroker.execute(
         scope,
         {
           generation,
@@ -579,7 +580,7 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
       side.page.getByRole('button', { name: '核对原操作' });
     await expect(status(tester)).toHaveText('暂无写会话');
     await expect(
-      tester.page.getByRole('button', { name: '设为写会话' }),
+      tester.page.getByRole('button', { name: '设为可写会话' }),
     ).toHaveCount(0);
     expect(
       (
@@ -598,7 +599,7 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
     expect(oldIdle.state).toBe('idle');
 
     await a.page.setViewportSize({ width: 390, height: 850 });
-    const setWriter = a.page.getByRole('button', { name: '设为写会话' });
+    const setWriter = a.page.getByRole('button', { name: '设为可写会话' });
     await expect(setWriter).toBeVisible();
     expect((await setWriter.boundingBox())!.height).toBeGreaterThanOrEqual(40);
     expect(
@@ -617,7 +618,7 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
       },
       { times: 1 },
     );
-    await a.page.getByRole('button', { name: '设为写会话' }).click();
+    await a.page.getByRole('button', { name: '设为可写会话' }).click();
     await expect(message(a)).toContainText('未能完成确认');
     expect(lostAcquire?.generation).toEqual(expect.any(String));
     const originalCookies = await a.ctx.cookies();
@@ -646,7 +647,7 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
           commandPath(aSession).replace('/commands', '/check'),
           {
             headers: { origin, 'x-rdws-edit-session': replacement.session.id },
-            data: { type: 'acquire', commandId: lostAcquire!.commandId },
+            data: { type: 'takeover', commandId: lostAcquire!.commandId },
           },
         )
       ).status(),
@@ -738,7 +739,7 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
       requests.push(request.method() + ' ' + new URL(request.url()).pathname),
     );
     await pendingButton(a).click();
-    await expect(message(a)).toContainText('原操作已核对');
+    await expect(message(a)).toHaveText('已设为可写会话。');
     const receiptIndex = requests.indexOf(
       'POST ' + commandPath(aSession).replace('/commands', '/check'),
     );
@@ -842,7 +843,7 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
     await pendingButton(a).click();
     await expect(message(a)).toContainText('原操作已核对');
 
-    const selected = b.page.getByRole('button', { name: '设为写会话' });
+    const selected = b.page.getByRole('button', { name: '设为可写会话' });
     await selected.click();
     await expect(status(b)).toContainText('本人会话');
     const next = await originalStatus();
@@ -1134,12 +1135,12 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
       },
       { times: 1 },
     );
-    await b.page.getByRole('button', { name: '设为写会话' }).click();
+    await b.page.getByRole('button', { name: '设为可写会话' }).click();
     await expect(message(b)).toContainText('未能完成确认');
     expect(expiredAcquire?.generation).toEqual(expect.any(String));
     await broker.release(bScope, expiredAcquire!.generation, randomUUID());
     await pendingButton(b).click();
-    await expect(message(b)).toContainText('原申请已记录，写代已结束');
+    await expect(message(b)).toHaveText('原接手已确认，请查看当前写权状态。');
     await expect(pendingButton(b)).toHaveCount(0);
 
     const releasedSource = await originalStatus();
@@ -1179,21 +1180,13 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
     expect(await readOnly.json()).toEqual({
       state: 'idle',
       actionsEnabled: true,
+      canAcquire: true,
+      canTakeover: true,
     });
-    const receiptsBeforeDenial = await receiptCount();
-    const deniedGrant = await b.ctx.request.post(commandPath(forkSession), {
-      headers: { origin, 'x-rdws-edit-session': b.loginId },
-      data: { type: 'acquire', commandId: randomUUID() },
-    });
-    expect(deniedGrant.status()).toBe(403);
-    expect(await deniedGrant.json()).toEqual({
-      error: '当前开发分派没有写入资格',
-    });
-    expect(await receiptCount()).toBe(receiptsBeforeDenial);
     expect(await originalStatus()).toEqual(releasedSource);
     await b.page.reload();
     await expect(status(b)).toHaveText('暂无写会话');
-    await expect(applicant).toHaveCount(0);
+    await expect(applicant).toBeVisible();
 
     const refreshed = await reassign(successor);
     expect(refreshed).toBeGreaterThan(withoutAssignment);
@@ -1249,7 +1242,7 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
           response.request().method() === 'POST' &&
           new URL(response.url()).pathname === commandPath(recoverySession),
       ),
-      b.page.getByRole('button', { name: '设为写会话' }).click(),
+      b.page.getByRole('button', { name: '设为可写会话' }).click(),
     ]);
     expect(warmAcquired.status()).toBe(200);
     const warmGrant = await warmAcquired.json();
@@ -1328,7 +1321,7 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
         response.request().method() === 'POST' &&
         new URL(response.url()).pathname === commandPath(forkSession),
     );
-    await b.page.getByRole('button', { name: '设为写会话' }).click();
+    await b.page.getByRole('button', { name: '设为可写会话' }).click();
     const grantResponse = await granted;
     expect(grantResponse.status()).toBe(200);
     const { generation: forkGeneration } = await grantResponse.json();
@@ -1504,7 +1497,7 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
     const writeReceipts = async () =>
       (
         await lab.owner.query(
-          "select actor_id, operation, command_id, result from command_receipt where scope=$1 and operation in ('write.acquire','write.release','write.execute') order by operation,command_id",
+          "select actor_id, operation, command_id, result from command_receipt where scope=$1 and operation in ('write.acquire','write.takeover','write.release','write.execute') order by operation,command_id",
           ['requirement:' + demand],
         )
       ).rows;
@@ -1513,7 +1506,7 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
     const originalCommand = originalReceipts.find(
       ({ actor_id, operation, result }) =>
         actor_id === successor &&
-        operation === 'write.acquire' &&
+        operation === 'write.takeover' &&
         result?.generation === warmGrant.generation,
     );
     expect(originalCommand?.command_id).toBe(warmGrant.commandId);
@@ -1650,7 +1643,7 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
       commandPath(recoverySession),
       {
         headers: recoveryHeaders,
-        data: { type: 'acquire', commandId: originalCommand!.command_id },
+        data: { type: 'takeover', commandId: originalCommand!.command_id },
       },
     );
     expect(replayedAcquire.status()).toBe(409);
@@ -1666,19 +1659,8 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
     await resumedPage.getByRole('tab', { name: '编队', exact: true }).click();
     await expect(status(resumed)).toHaveText('暂无写会话');
     await expect(
-      resumedPage.getByRole('button', { name: '设为写会话' }),
-    ).toHaveCount(0);
-    const deniedAssignment = await identity.ctx.request.post(
-      commandPath(recoverySession),
-      {
-        headers: recoveryHeaders,
-        data: { type: 'acquire', commandId: randomUUID() },
-      },
-    );
-    expect(deniedAssignment.status()).toBe(403);
-    expect(await deniedAssignment.json()).toEqual({
-      error: '当前开发分派没有写入资格',
-    });
+      resumedPage.getByRole('button', { name: '设为可写会话' }),
+    ).toBeEnabled();
     expect(await originalStatus()).toEqual(releasedLease);
     expect(await writeReceipts()).toEqual(originalReceipts);
     await resumedPage.locator('.workspace-main').screenshot({
@@ -1740,7 +1722,7 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
           response.request().method() === 'POST' &&
           new URL(response.url()).pathname === commandPath(recoverySession),
       ),
-      resumedPage.getByRole('button', { name: '设为写会话' }).click(),
+      resumedPage.getByRole('button', { name: '设为可写会话' }).click(),
     ]);
     expect(assigned.status()).toBe(200);
     expect(assigned.request().headers()['x-rdws-edit-session']).toBe(
@@ -1750,9 +1732,7 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
     expect(newGrant.state).toBe('acquired');
     expect(newGrant.generation).not.toBe(warmGrant.generation);
     expect(newGrant.generation).not.toBe(forkGeneration);
-    await expect(message(resumed)).toHaveText(
-      '申请已确认，请查看当前写权状态。',
-    );
+    await expect(message(resumed)).toHaveText('已设为可写会话。');
     const current = await originalStatus();
     expect(current).toMatchObject({
       generation: newGrant.generation,
@@ -1988,14 +1968,178 @@ test('fleet handoff, fork and recovered sessions earn scoped write grants', asyn
     }
 
     await resumedPage.getByRole('tab', { name: '编队', exact: true }).click();
-    await resumedPage.getByRole('button', { name: '释放写锁' }).click();
-    await expect(message(resumed)).toHaveText('原写代已释放。');
+    const currentBroker = recoveredApp.getDecorator<() => OwnedWriteHandoff>(
+      'isolatedWriteHandoff',
+    )();
+    const incumbent = startLoop(
+      recoveredScope,
+      current.generation,
+      currentBroker,
+    );
+    await expect.poll(incumbent.pid).toBeGreaterThan(1);
+    executionGroups.add(incumbent.pid());
+    await a.page.goto(fleetUrl);
+    await a.page.emulateMedia({ colorScheme: 'dark' });
+    await expect(status(a)).toHaveText('写权已占用');
+    await a.page
+      .getByRole('combobox', { name: '申请写权的会话' })
+      .selectOption(aSession);
+    const takeover = a.page.getByRole('button', { name: '设为可写会话' });
+    await expect(takeover).toBeEnabled();
+    releaseGate = releaseCommitGate('write.takeover');
+    try {
+      await takeover.click();
+      await expect.poll(releaseGate.entered).toBe(true);
+      expect(process.kill(-incumbent.pid(), 0)).toBe(true);
+      expect(await originalStatus()).toMatchObject({
+        generation: current.generation,
+        phase: 'draining',
+        run_id: expect.any(String),
+      });
+      await expect(
+        a.page.getByRole('button', { name: '重试原操作' }),
+      ).toBeDisabled();
+      const competing = await identity.ctx.request.post(
+        commandPath(forkSession),
+        {
+          headers: recoveryHeaders,
+          data: { type: 'takeover', commandId: randomUUID() },
+        },
+      );
+      expect(competing.status()).toBe(409);
+    } finally {
+      releaseGate.release();
+    }
+    expect(await incumbent.execution).toMatchObject({
+      status: 'finished',
+      result: { stop: 'confirmed' },
+    });
+    expect(() => process.kill(-incumbent.pid(), 0)).toThrow(/ESRCH/);
+    await expect(message(a)).toHaveText('已设为可写会话。');
+    const taken = await originalStatus();
+    expect(taken).toMatchObject({
+      phase: 'held',
+      native_session_id: aSession,
+      auth_session_id: a.loginId,
+      run_id: null,
+    });
+    expect(taken.generation).not.toBe(current.generation);
+    const writeAfterTakeover = {
+      repositoryId: 'app',
+      request: {
+        tool: 'file' as const,
+        operation: 'write' as const,
+        path: 'after-takeover.txt',
+        text: 'Written by the new owner',
+      },
+    };
+    await expect(
+      currentBroker.execute(recoveredScope, {
+        ...writeAfterTakeover,
+        generation: current.generation,
+        commandId: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(
+      await currentBroker.execute(aScope, {
+        ...writeAfterTakeover,
+        generation: taken.generation,
+        commandId: randomUUID(),
+      }),
+    ).toMatchObject({
+      status: 'finished',
+      result: { status: 'ok', stop: 'confirmed' },
+    });
+    expect(
+      await readFile(join(checkout.tree, 'after-takeover.txt'), 'utf8'),
+    ).toBe('Written by the new owner');
+    await expect(a.page.locator('html')).toHaveAttribute('theme-mode', 'dark');
+    expect(
+      await a.page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(390);
+    await a.page.locator('.workspace-main').screenshot({
+      path: testInfo.outputPath('takeover-dark-390.png'),
+      animations: 'disabled',
+    });
+
+    await resumedPage.reload();
+    await expect(status(resumed)).toHaveText('写权已占用');
+    await resumedPage
+      .getByRole('combobox', { name: '申请写权的会话' })
+      .selectOption(recoverySession);
+    let deliverHistorical!: () => void;
+    const historicalGate = new Promise<void>((resolve) => {
+      deliverHistorical = resolve;
+    });
+    let receiptWaiting = false;
+    await resumedPage.route(
+      '**' + commandPath(recoverySession),
+      async (route) => {
+        const response = await route.fetch();
+        expect(response.status()).toBe(200);
+        receiptWaiting = true;
+        await historicalGate;
+        await route.fulfill({ response });
+      },
+      { times: 1 },
+    );
+    try {
+      await resumedPage.getByRole('button', { name: '设为可写会话' }).click();
+      await expect.poll(() => receiptWaiting).toBe(true);
+      await expect.poll(originalStatus).toMatchObject({
+        phase: 'held',
+        native_session_id: recoverySession,
+        auth_session_id: identity.loginId,
+      });
+      await a.page.reload();
+      await expect(status(a)).toHaveText('写权已占用');
+      await takeover.click();
+      await expect(message(a)).toHaveText('已设为可写会话。');
+    } finally {
+      deliverHistorical();
+    }
+    await expect(message(resumed)).toHaveText(
+      '原接手已确认，请查看当前写权状态。',
+    );
+    await expect(pendingButton(resumed)).toHaveCount(0);
+    const readableHistory = resumedPage
+      .getByRole('button', { name: /^回放会话 \d+$/ })
+      .first();
+    for (const [code, error, hint] of [
+      [403, '当前开发角色没有写入资格', '当前会话没有接手资格，可核对原操作。'],
+      [401, '登录已变化，请刷新后重试', '当前写权已变化，可核对原操作。'],
+    ] as const) {
+      await resumedPage.route(
+        '**' + commandPath(recoverySession),
+        (route) => route.fulfill({ status: code, json: { error } }),
+        { times: 1 },
+      );
+      await resumedPage.getByRole('button', { name: '设为可写会话' }).click();
+      await expect(message(resumed)).toHaveText(hint);
+      await readableHistory.click();
+      await expect(readableHistory).toHaveAttribute('aria-expanded', 'true');
+      await readableHistory.click();
+      await pendingButton(resumed).click();
+      await expect(message(resumed)).toContainText('尚未读到原回执');
+      await resumedPage.getByRole('button', { name: '放下本地记录' }).click();
+      await expect(pendingButton(resumed)).toHaveCount(0);
+    }
+    const latestHolder = await originalStatus();
+    expect(latestHolder).toMatchObject({
+      phase: 'held',
+      native_session_id: aSession,
+      auth_session_id: a.loginId,
+    });
+    expect(latestHolder.generation).not.toBe(taken.generation);
+    await a.page.getByRole('button', { name: '释放写锁' }).click();
+    await expect(message(a)).toHaveText('原写代已释放。');
     expect(await originalStatus()).toMatchObject({
       phase: 'released',
-      generation: current.generation,
+      generation: latestHolder.generation,
       run_id: null,
     });
     await resumedPage.goto('about:blank');
+    await a.page.goto('about:blank');
     const stopRecoveredWeb = Promise.resolve(recoveredWeb.close());
     closingWeb = stopRecoveredWeb;
     void stopRecoveredWeb.catch(() => {});

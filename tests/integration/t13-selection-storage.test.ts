@@ -30,6 +30,8 @@ test('managed model selection and dispatch records survive permission refresh an
   const observerLoginId = randomUUID();
   const requirementId = randomUUID();
   const sessionId = randomUUID();
+  const priorSessionId = randomUUID();
+  const priorRequestId = randomUUID();
   const requestId = randomUUID();
   const oldRevision = randomUUID();
   const newRevision = randomUUID();
@@ -40,15 +42,15 @@ test('managed model selection and dispatch records survive permission refresh an
     .digest('hex');
   const lab = await authorityDatabase(endpoint, async (previousOwner, root) => {
     const migrations = join('packages', 'db', 'migrations');
-    const previous = join(root, 'before-session-model-selection');
+    const previous = join(root, 'before-model-first-write');
     await mkdir(join(previous, 'meta'), { recursive: true });
     const journal = JSON.parse(
       await readFile(join(migrations, 'meta', '_journal.json'), 'utf8'),
     ) as {
       entries: { idx: number; tag: string }[];
     };
-    journal.entries = journal.entries.filter(({ idx }) => idx <= 14);
-    expect(journal.entries).toHaveLength(15);
+    journal.entries = journal.entries.filter(({ idx }) => idx <= 15);
+    expect(journal.entries).toHaveLength(16);
     for (const { tag } of journal.entries)
       await copyFile(
         join(migrations, tag + '.sql'),
@@ -71,7 +73,7 @@ test('managed model selection and dispatch records survive permission refresh an
       expect(
         (
           await previousClient.query(
-            "select to_regclass('public.session_prompt_dispatch') as relation",
+            "select to_regclass('public.session_model_first_write') as relation",
           )
         ).rows,
       ).toEqual([{ relation: null }]);
@@ -104,8 +106,32 @@ test('managed model selection and dispatch records survive permission refresh an
       [requirementId, projectId, actorId],
     );
     await previousOwner.query(
-      'insert into native_session(id,requirement_id,owner_id) values($1,$2,$3)',
-      [sessionId, requirementId, actorId],
+      'insert into native_session(id,requirement_id,owner_id) values($1,$2,$3),($4,$2,$3)',
+      [sessionId, requirementId, actorId, priorSessionId],
+    );
+    await previousOwner.query(
+      `insert into session_model_selection (native_session_id,provider,model,revision)
+       values($1,'fixture','model-a',$2)`,
+      [priorSessionId, oldRevision],
+    );
+    await previousOwner.query(
+      `insert into session_prompt_dispatch
+       (native_session_id,request_id,project_id,requirement_id,actor_id,auth_session_id,input_digest,
+        provider,model,selection_revision,state,host_generation,peer_nonce,lease_expires_at,
+        accepted_seq,accepted_message_id)
+       values($1,$2,$3,$4,$5,$6,$7,'fixture','model-a',$8,'accepted',$9,$10,now()+interval '2 minutes',3,'synthetic-message')`,
+      [
+        priorSessionId,
+        priorRequestId,
+        projectId,
+        requirementId,
+        actorId,
+        loginId,
+        inputDigest,
+        oldRevision,
+        hostGeneration,
+        peerNonce,
+      ],
     );
     await previousOwner.query(
       "insert into requirement_participant values($1,$2,'developer')",
@@ -118,7 +144,11 @@ test('managed model selection and dispatch records survive permission refresh an
   const ticket = randomBytes(32).toString('hex');
   let generation: string | null = null;
   try {
-    const relations = ['session_model_selection', 'session_prompt_dispatch'];
+    const relations = [
+      'session_model_first_write',
+      'session_model_selection',
+      'session_prompt_dispatch',
+    ];
     async function assertGuards() {
       const result = await lab.owner.query<{
         table_name: string;
@@ -153,6 +183,25 @@ test('managed model selection and dispatch records survive permission refresh an
         )
       ).rows,
     ).toEqual([{ requirement_id: requirementId, owner_id: actorId }]);
+    expect(
+      (
+        await lab.owner.query(
+          `select s.revision,d.state,d.accepted_seq from session_model_selection s
+           join session_prompt_dispatch d using(native_session_id)
+           where d.native_session_id=$1 and d.request_id=$2`,
+          [priorSessionId, priorRequestId],
+        )
+      ).rows,
+    ).toEqual([
+      { revision: oldRevision, state: 'accepted', accepted_seq: '3' },
+    ]);
+    expect(
+      (
+        await lab.owner.query(
+          'select attempt_id from session_model_first_write',
+        )
+      ).rows,
+    ).toEqual([]);
 
     expect(
       (
@@ -175,6 +224,21 @@ test('managed model selection and dispatch records survive permission refresh an
         'update session_prompt_dispatch set state=state where false',
       ),
     ).rejects.toMatchObject({ code: '55006' });
+    await expect(
+      ordinary.pool.query(
+        'update session_model_first_write set state=state where false',
+      ),
+    ).rejects.toMatchObject({ code: '55006' });
+    await expect(
+      owner.pool.query(
+        'update session_model_first_write set step_seq=1 where false',
+      ),
+    ).rejects.toMatchObject({ code: '42501' });
+    await expect(
+      owner.pool.query(
+        "insert into session_model_first_write(state) values('submitted')",
+      ),
+    ).rejects.toMatchObject({ code: '42501' });
 
     await owner.pool.query(
       'insert into session_model_selection(native_session_id,provider,model,revision) values($1,$2,$3,$4)',

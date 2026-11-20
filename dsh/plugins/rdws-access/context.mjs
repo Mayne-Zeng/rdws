@@ -528,6 +528,24 @@ export function installContext(ctx, config, key, route, requestContext) {
       )
     );
   }
+  function stepStart(record, event) {
+    return (
+      event?.type === 'step/start' &&
+      event.data.turn === record.body.turn &&
+      event.data.step === record.body.modelStep.step
+    );
+  }
+  function stepNote(record, event) {
+    return (
+      event?.type === 'user/message' &&
+      event.surfaceOp === 'append' &&
+      event.data.id === record.body.modelStep.noteId &&
+      event.data.source?.kind === 'rdws-context' &&
+      event.data.source.requirementId === record.body.requirementId &&
+      event.data.source.turn === record.body.turn &&
+      event.data.source.step === record.body.modelStep.step
+    );
+  }
   function release(state, allowNormalFor) {
     if (!state?.binding) return;
     const binding = state.binding;
@@ -621,10 +639,15 @@ export function installContext(ctx, config, key, route, requestContext) {
     ctx.on(
       'session/event',
       (session, event) => {
-        if (event.type !== 'step/end') return;
+        if (!modelPilot && event.type !== 'step/end') return;
         const record = modelSteps.get(String(session.id));
+        if (record?.agent.session !== session) return;
+        if (modelPilot) {
+          if (stepStart(record, event)) record.stepSeq ??= event.seq;
+          if (stepNote(record, event)) record.noteSeq ??= event.seq;
+        }
         if (
-          record?.agent.session === session &&
+          event.type === 'step/end' &&
           record.body.turn === event.data.turn &&
           record.body.modelStep.step === event.data.step
         )
@@ -885,6 +908,98 @@ export function installContext(ctx, config, key, route, requestContext) {
     )
       return record.bindingId;
   }
+  async function confirmModelFirstWrite(options, call) {
+    const unavailable = () => new Error('Native model step proof unavailable');
+    const record = modelSteps.get(options.sessionId);
+    if (
+      !record ||
+      !call.bindingId ||
+      modelBindingFor(options) !== call.bindingId
+    )
+      throw unavailable();
+    const { stepSeq, noteSeq } = record;
+    if (
+      !Number.isSafeInteger(stepSeq) ||
+      !Number.isSafeInteger(noteSeq) ||
+      stepSeq < 0 ||
+      noteSeq <= stepSeq ||
+      noteSeq - stepSeq > 64
+    )
+      throw unavailable();
+    const expiry = Math.min(...record.runs.map(({ expiresAt }) => expiresAt));
+    const signal = AbortSignal.any([
+      record.signal,
+      AbortSignal.timeout(Math.max(1, Math.min(2000, expiry - Date.now()))),
+    ]);
+    const current = () => {
+      if (signal.aborted || modelBindingFor(options) !== call.bindingId)
+        throw unavailable();
+    };
+    const session = record.agent.session;
+    const {
+      relatedRuns: _relatedRuns,
+      modelNewRunIds: _runIds,
+      modelStep,
+      ...binding
+    } = record.body;
+    const sessions = ctx.get('sessions');
+    const persistence = ctx.get('sessionPersistence');
+    if (
+      !persistence ||
+      sessions?.get(session.id) !== session ||
+      !(await sessions.flush(session))
+    )
+      throw unavailable();
+    current();
+    const reader = await persistence.open(session.id, 'read', {
+      signal,
+    });
+    try {
+      if (
+        reader.header.id !== session.header.id ||
+        reader.header.cwd !== session.header.cwd ||
+        reader.header.isSeeded ||
+        stepSeq < reader.inheritedEventCount
+      )
+        throw unavailable();
+      const { events } = await reader.read(stepSeq, noteSeq - stepSeq + 1, {
+        signal,
+      });
+      const start = events[0];
+      const note = events.at(-1);
+      if (
+        start?.seq !== stepSeq ||
+        note?.seq !== noteSeq ||
+        !stepStart(record, start) ||
+        !stepNote(record, note)
+      )
+        throw unavailable();
+    } finally {
+      await reader.close();
+    }
+    current();
+    const proof = {
+      bindingId: call.bindingId,
+      callId: call.id,
+      stepSeq,
+      noteSeq,
+    };
+    const confirmed = await service(
+      'model-first-write-proof',
+      {
+        ...binding,
+        ...proof,
+        step: modelStep.step,
+        noteId: modelStep.noteId,
+      },
+      signal,
+    );
+    current();
+    if (
+      Object.entries(proof).some(([name, value]) => confirmed?.[name] !== value)
+    )
+      throw unavailable();
+  }
   return {
     fixtureToolGate: (exec) => toolProbe?.gate(exec),
     revoke(authSessionId, requirementId, cutoff) {
@@ -905,6 +1020,7 @@ export function installContext(ctx, config, key, route, requestContext) {
           authorized.delete(id);
     },
     modelBindingFor,
+    confirmModelFirstWrite: modelPilot && confirmModelFirstWrite,
     bindIntake(cap, sessionId, image) {
       const run = authorized.get(
         lookup({

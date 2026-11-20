@@ -27,6 +27,7 @@ import type {
   SessionModelPilot,
 } from './session-model-selection.ts';
 import type { CheckedWriteTransaction } from './checked-write-transaction.ts';
+import { createModelFirstWriteReceipts } from './model-first-write.ts';
 import {
   prepareMainModelBody,
   prepareTitleModelBody,
@@ -110,6 +111,9 @@ export function createProjectRuntimes(
 ) {
   if (sessionModelPilot && !pilotTransaction)
     throw new Error('Session model pilot requires a checked model authority');
+  const firstWrites = sessionModelPilot
+    ? createModelFirstWriteReceipts(pilotTransaction!)
+    : undefined;
   const pending = new Map<string, Promise<ProjectRuntime>>();
   const live = new Map<string, ProjectRuntime>();
   let closing = false;
@@ -164,6 +168,7 @@ export function createProjectRuntimes(
               ...pilot,
               destination: policy.destination,
               isCurrent: () => !closing && !native.signal.aborted,
+              firstWrites: firstWrites!,
               lock: (rows, write) => {
                 const [first, ...related] = rows;
                 if (!first) businessError(403, '原消息的模型派发绑定已失效');
@@ -362,6 +367,7 @@ export function createProjectRuntimes(
           }
         }),
       );
+      await firstWrites?.drain();
       if (results.some((result) => result.status === 'rejected'))
         throw new Error(
           'Some project Native instances could not be confirmed stopped',

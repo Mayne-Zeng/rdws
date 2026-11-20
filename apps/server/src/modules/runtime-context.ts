@@ -16,6 +16,10 @@ import {
   type NativeFixtureToolJob,
 } from './native-fixture-tool-job.ts';
 import type { FixtureToolProjection } from './model-egress-policy.ts';
+import type {
+  ModelFirstWrite,
+  ModelFirstWriteReceipts,
+} from './model-first-write.ts';
 import type { AttachmentManifest } from './model-attachment-egress.ts';
 import { readWorkingDirectoryEdits } from './model-attachment-evidence.ts';
 import type {
@@ -141,6 +145,7 @@ type EffectiveModel = {
 type PilotAuthority = SessionModelPilot & {
   destination: string;
   isCurrent(): boolean;
+  firstWrites: ModelFirstWriteReceipts;
   lock<T>(
     dispatch: readonly PromptDispatch[],
     write: (validBefore: number) => T,
@@ -153,6 +158,7 @@ type StepMarker = {
   provider: string;
   model: string;
 };
+type FirstWriteCoordinates = { stepSeq: number; noteSeq: number };
 type ModelStep = {
   id: string;
   stamp: StepMarker;
@@ -161,6 +167,8 @@ type ModelStep = {
   turn: number;
   closed: boolean;
   selection?: EffectiveModel;
+  selectingDispatch?: PromptDispatch;
+  firstWriteCoordinates?: Map<string, FirstWriteCoordinates>;
   validBefore?: number;
   contextVersion?: number;
   fixtureToolUsed?: true;
@@ -646,14 +654,16 @@ export class ContextRuns {
       accept429() {},
     }));
   }
-  authorizeModelWireAttempt(
+  async authorizeModelWireAttempt(
     request: ModelAttempt,
     write: (validBefore: number) => ModelWireOutcome,
     fixtureWire?: FixtureWire,
   ): Promise<ModelWireCommit> {
     if (request.call.purpose === 'session-title')
       return this.authorizeTitleWire(request, write);
-    return this.withAuthorizedAttempt(
+    const pilot = this.modelPilot;
+    let firstWrite: ModelFirstWrite | undefined;
+    const commit = await this.withAuthorizedAttempt(
       request,
       (step, validBefore) => {
         const { attemptId } = request;
@@ -669,7 +679,36 @@ export class ContextRuns {
         };
       },
       fixtureWire,
+      pilot &&
+        ((step) => {
+          const dispatch = step.selectingDispatch;
+          const coordinates = step.firstWriteCoordinates?.get(request.call.id);
+          if (!dispatch || !coordinates || request.routeId !== 'main')
+            return invalidModel();
+          step.wireAttempt = request.attemptId;
+          firstWrite = {
+            ...coordinates,
+            projectId: dispatch.projectId,
+            requirementId: dispatch.requirementId,
+            nativeSessionId: dispatch.nativeSessionId,
+            selectionRequestId: dispatch.requestId,
+            selectionRevision: dispatch.selectionRevision,
+            provider: dispatch.provider,
+            model: dispatch.model,
+            hostGeneration: this.generation,
+            agentGeneration: step.agentGeneration,
+            bindingId: step.id,
+            callId: request.call.id,
+            attemptId: request.attemptId,
+            turn: step.turn,
+            step: step.stamp.step,
+          };
+          return pilot.firstWrites.prepare(firstWrite);
+        }),
     );
+    if (pilot && firstWrite && commit.outcome === 'submitted')
+      pilot.firstWrites.submitted(firstWrite);
+    return commit;
   }
   fixtureWire(request: ModelAttempt) {
     if (request.routeId !== 'main' || request.call.purpose !== undefined)
@@ -834,6 +873,7 @@ export class ContextRuns {
     request: ModelAttempt,
     send: (step: ModelStep, validBefore: number) => T,
     fixtureWire?: FixtureWire,
+    prepare?: (step: ModelStep) => Promise<void>,
   ): Promise<T> {
     const { call, attemptId, routeId, destination, signal } = request;
     const step =
@@ -851,6 +891,7 @@ export class ContextRuns {
       : Infinity;
     if (
       (needsAttachment && !attachment) ||
+      (this.modelPilot && !prepare) ||
       !step ||
       step.closed ||
       step.wireAttempt !== undefined ||
@@ -874,6 +915,7 @@ export class ContextRuns {
     )
       return invalidModel();
     step.attempts.add(attemptId);
+    if (prepare) await prepare(step);
     const run = step.batch[0]!;
     const related = step.batch.slice(1).map(({ who }) => who);
     const shared =
@@ -905,7 +947,7 @@ export class ContextRuns {
         (needsAttachment &&
           this.attachmentManifestFor(request) !== attachment) ||
         step.closed ||
-        step.wireAttempt !== undefined ||
+        step.wireAttempt !== (prepare ? attemptId : undefined) ||
         !this.current(step.batch) ||
         !(deadline > Date.now())
       )
@@ -967,7 +1009,10 @@ export class ContextRuns {
     )
       return invalidModel();
     const added = ordered.slice(prefix.length);
-    if (!added.length) return previous!.selection!;
+    if (!added.length) {
+      step.selectingDispatch = previous!.selectingDispatch;
+      return previous!.selection!;
+    }
     const selected = added[0]!.dispatch;
     if (
       !selected ||
@@ -982,12 +1027,65 @@ export class ContextRuns {
       )
     )
       return invalidModel();
+    step.selectingDispatch = selected;
     return {
       provider: selected.provider,
       model: selected.model,
       revision: selected.selectionRevision,
       routes: { main: pilot.destination },
       isCurrent: pilot.isCurrent,
+    };
+  }
+  private confirmFirstWriteCoordinates(
+    input: Record<string, unknown>,
+    cap: Grant,
+  ) {
+    const step =
+      typeof input.sessionId === 'string'
+        ? this.modelSteps.get(input.sessionId)
+        : undefined;
+    const run = step?.batch[0];
+    const { callId, stepSeq, noteSeq } = input;
+    const validBefore = Math.min(step?.validBefore ?? 0, cap.expiresAt);
+    if (
+      !this.modelPilot ||
+      !step ||
+      !run ||
+      !step.selectingDispatch ||
+      step.closed ||
+      !step.selection?.isCurrent() ||
+      validBefore <= Date.now() ||
+      !this.current(step.batch) ||
+      Object.entries(this.binding(run)).some(
+        ([name, value]) => input[name] !== value,
+      ) ||
+      input.bindingId !== step.id ||
+      input.agentGeneration !== step.agentGeneration ||
+      input.turn !== step.turn ||
+      input.step !== step.stamp.step ||
+      input.noteId !== step.stamp.noteId ||
+      typeof callId !== 'string' ||
+      !uuid.test(callId) ||
+      typeof stepSeq !== 'number' ||
+      typeof noteSeq !== 'number' ||
+      !Number.isSafeInteger(stepSeq) ||
+      !Number.isSafeInteger(noteSeq) ||
+      stepSeq < 0 ||
+      noteSeq <= stepSeq ||
+      noteSeq - stepSeq > 64
+    )
+      return invalidModel();
+    const coordinates = (step.firstWriteCoordinates ??= new Map());
+    const prior = coordinates.values().next().value;
+    if (
+      (prior && (prior.stepSeq !== stepSeq || prior.noteSeq !== noteSeq)) ||
+      (!coordinates.has(callId) && coordinates.size >= 128)
+    )
+      return invalidModel();
+    coordinates.set(callId, { stepSeq, noteSeq });
+    return {
+      result: { bindingId: step.id, callId, stepSeq, noteSeq },
+      validBefore,
     };
   }
   async handle(
@@ -1013,6 +1111,7 @@ export class ContextRuns {
         'context-read',
         'context-release',
         'model-step-release',
+        'model-first-write-proof',
         'model-title-origin',
         'model-title-prepare',
         'model-title-close',
@@ -1029,6 +1128,14 @@ export class ContextRuns {
     )
       businessError(403, '上下文服务请求未获授权');
     this.nonces.set(cap.nonce, cap.expiresAt);
+    if (cap.operation === 'model-first-write-proof') {
+      const { result, validBefore } = this.confirmFirstWriteCoordinates(
+        input,
+        cap,
+      );
+      reply?.(result, validBefore);
+      return result;
+    }
     if (fixtureOperation && fixtureToolJob) {
       let validBefore = cap.expiresAt;
       const result = await fixtureToolJob.control(

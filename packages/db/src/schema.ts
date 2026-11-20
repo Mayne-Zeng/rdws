@@ -253,6 +253,55 @@ export const sessionPromptDispatch = pgTable(
     ),
   ],
 );
+export const sessionModelFirstWrite = pgTable(
+  'session_model_first_write',
+  {
+    projectId: text('project_id').notNull(),
+    requirementId: text('requirement_id').notNull(),
+    nativeSessionId: text('native_session_id').notNull(),
+    selectionRequestId: text('selection_request_id').notNull(),
+    selectionRevision: uuid('selection_revision').notNull(),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    hostGeneration: uuid('host_generation').notNull(),
+    agentGeneration: uuid('agent_generation').notNull(),
+    bindingId: uuid('binding_id').notNull(),
+    callId: uuid('call_id').notNull(),
+    attemptId: uuid('attempt_id').notNull(),
+    turn: integer('turn').notNull(),
+    step: integer('step').notNull(),
+    stepSeq: bigint('step_seq', { mode: 'number' }).notNull(),
+    noteSeq: bigint('note_seq', { mode: 'number' }).notNull(),
+    state: text('state', { enum: ['prepared', 'submitted'] })
+      .notNull()
+      .default('prepared'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.hostGeneration, t.attemptId] }),
+    foreignKey({
+      columns: [t.nativeSessionId, t.selectionRequestId],
+      foreignColumns: [
+        sessionPromptDispatch.nativeSessionId,
+        sessionPromptDispatch.requestId,
+      ],
+      name: 'session_model_first_write_dispatch_fk',
+    }),
+    check(
+      'session_model_first_write_coordinates',
+      sql`${t.turn} > 0 and ${t.step} > 0 and ${t.stepSeq} >= 0 and
+          ${t.noteSeq} > ${t.stepSeq} and ${t.noteSeq} <= 9007199254740991`,
+    ),
+    check(
+      'session_model_first_write_state',
+      sql`(${t.state} = 'prepared' and ${t.submittedAt} is null) or
+          (${t.state} = 'submitted' and ${t.submittedAt} is not null)`,
+    ),
+  ],
+);
 export const requirementWriteLease = pgTable(
   'requirement_write_lease',
   {

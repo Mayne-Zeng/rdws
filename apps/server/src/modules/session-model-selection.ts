@@ -43,7 +43,21 @@ export async function validateSessionModelStorage(
           and pg_catalog.has_table_privilege(current_user,c.oid,'SELECT')
           and pg_catalog.has_table_privilege(current_user,c.oid,'INSERT')
           and pg_catalog.has_table_privilege(current_user,c.oid,'UPDATE')
-          and not pg_catalog.has_table_privilege(current_user,c.oid,'DELETE,TRUNCATE')) as ready`,
+          and not pg_catalog.has_table_privilege(current_user,c.oid,'DELETE,TRUNCATE'))
+      and exists(select 1 from pg_catalog.pg_class c
+        join pg_catalog.pg_namespace n on n.oid=c.relnamespace
+        join pg_catalog.pg_trigger t on t.tgrelid=c.oid
+        where n.nspname='public' and c.relkind='r' and c.relname='session_model_first_write'
+          and t.tgname='rdws_authority_writer' and t.tgtype=62 and t.tgenabled='A'
+          and t.tgfoid=pg_catalog.to_regprocedure('rdws_authority.check_writer()')
+          and pg_catalog.has_table_privilege(current_user,c.oid,'SELECT')
+          and not pg_catalog.has_table_privilege(current_user,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE')
+          and not exists(select 1 from pg_catalog.pg_attribute a
+            where a.attrelid=c.oid and a.attnum>0 and not a.attisdropped
+              and (pg_catalog.has_column_privilege(current_user,c.oid,a.attnum,'INSERT')
+                  <> (a.attname not in ('state','created_at','submitted_at'))
+                or pg_catalog.has_column_privilege(current_user,c.oid,a.attnum,'UPDATE')
+                  <> (a.attname in ('state','submitted_at'))))) as ready`,
     [databaseFixture],
   );
   if (rows[0]?.ready !== true)

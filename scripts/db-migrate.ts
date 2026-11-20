@@ -70,6 +70,19 @@ export async function grantApplication(
           `revoke delete, truncate on ${table} from ${application}`,
         );
     }
+    const hasFirstWrite = await client.query<{ present: boolean }>(
+      "select to_regclass('public.session_model_first_write') is not null as present",
+    );
+    if (hasFirstWrite.rows[0]?.present) {
+      await client.query(
+        `revoke insert, update, delete, truncate on session_model_first_write from ${application}`,
+      );
+      await client.query(
+        `grant insert (project_id,requirement_id,native_session_id,selection_request_id,selection_revision,
+          provider,model,host_generation,agent_generation,binding_id,call_id,attempt_id,turn,step,step_seq,note_seq),
+          update (state,submitted_at) on session_model_first_write to ${application}`,
+      );
+    }
     const authority = await client.query(
       "select exists(select 1 from pg_catalog.pg_namespace where nspname='rdws_authority') as present",
     );

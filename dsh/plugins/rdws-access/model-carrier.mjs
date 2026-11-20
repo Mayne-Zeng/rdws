@@ -196,6 +196,8 @@ export function installModelCarrier(
           ? contextBinding.modelBindingFor(options)
           : title?.bindingId,
       };
+      if (agentRequest && contextBinding.confirmModelFirstWrite)
+        await contextBinding.confirmModelFirstWrite(options, call);
       const origin =
         agentRequest && contextBinding.attachmentCallFor?.(options, call);
       const attachment = origin && {

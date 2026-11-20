@@ -77,6 +77,18 @@ test.skipIf(process.platform !== 'darwin')(
     let loseFreezeCommit: string | undefined;
     let withholdObservation: string | undefined;
     let freezeCommittedWithoutReply = false;
+    let firstWriteFault:
+      | {
+          requestId: string;
+          phase: 'prepare' | 'authorize' | 'settle';
+          outcome: 'commit' | 'rollback' | 'hold';
+          attemptId?: string;
+          completion?: string;
+          checked?: boolean;
+          gate?: Promise<void>;
+        }
+      | undefined;
+    let releaseSettlement: (() => void) | undefined;
     let releaseHeldTls: (() => void) | undefined;
     let heldFreeze:
       | {
@@ -135,25 +147,67 @@ test.skipIf(process.platform !== 'darwin')(
       ) {
         const connection = Reflect.apply(connect, this, args);
         const watchedRequest = loseFreezeCommit ?? heldFreeze?.requestId;
-        if (args.length || !watchedRequest) return connection;
+        const fault = firstWriteFault;
+        if (args.length || (!watchedRequest && !fault)) return connection;
         return connection.then((client: PoolClient) => {
           const query = client.query;
           let freezing = false;
+          let phase: NonNullable<typeof firstWriteFault>['phase'] | undefined;
           client.query = ((...parameters: unknown[]) => {
             const input = parameters[0] as
               string | { text: string; values?: unknown[] };
-            const sql = typeof input === 'string' ? input : input.text;
+            const sql = (typeof input === 'string' ? input : input.text).trim();
             const values = Array.isArray(parameters[1])
               ? parameters[1]
               : typeof input === 'string'
                 ? undefined
                 : input.values;
             if (
+              watchedRequest &&
               sql.startsWith('update "session_prompt_dispatch"') &&
               values?.includes('pending') &&
               values.includes(watchedRequest)
             )
               freezing = true;
+            if (fault) {
+              if (
+                sql.startsWith('insert into "session_model_first_write"') &&
+                values?.[3] === fault.requestId
+              ) {
+                fault.attemptId = String(values[11]);
+                phase = 'prepare';
+              } else if (
+                sql.startsWith('select ') &&
+                sql.includes('from "session_prompt_dispatch"') &&
+                sql.endsWith('for share') &&
+                values?.includes(fault.requestId)
+              ) {
+                phase = 'authorize';
+              } else if (fault.attemptId && values?.includes(fault.attemptId)) {
+                if (sql.startsWith('update "session_model_first_write"'))
+                  phase = 'settle';
+                if (
+                  sql.startsWith('select ') &&
+                  sql.includes('from "session_model_first_write"')
+                )
+                  fault.checked = true;
+              }
+              if (sql === 'commit' && phase === fault.phase) {
+                client.query = query;
+                const statement =
+                  fault.outcome === 'rollback' ? 'rollback' : 'commit';
+                return Reflect.apply(query, client, [statement]).then(
+                  async (value: { command: string }) => {
+                    fault.completion = value.command;
+                    if (fault.outcome === 'hold') {
+                      await fault.gate;
+                      return value;
+                    }
+                    throw new Error('Synthetic first-write commit reply lost');
+                  },
+                );
+              }
+            }
             const result = Reflect.apply(query, client, parameters);
             if (sql === 'commit' || sql === 'rollback') client.query = query;
             const held =
@@ -387,6 +441,18 @@ test.skipIf(process.platform !== 'darwin')(
       ).toEqual([{ generation: null }]);
       await lab.owner.query(
         'alter table command_receipt enable always trigger rdws_authority_writer',
+      );
+      await lab.owner.query(
+        'grant update(step_seq) on session_model_first_write to rdws_test_app',
+      );
+      app = buildApp(config);
+      await expect(app.ready()).rejects.toThrow(
+        'Session model pilot database protection could not be confirmed',
+      );
+      await app.close();
+      app = undefined;
+      await lab.owner.query(
+        'revoke update(step_seq) on session_model_first_write from rdws_test_app',
       );
       app = buildApp(config);
       let address = await app.listen({ host: '127.0.0.1', port: 0 });
@@ -645,6 +711,51 @@ test.skipIf(process.platform !== 'darwin')(
       releaseRetry();
       await expect.poll(completedTurns, { timeout: 8000 }).toBe(1);
       expect(receivedModels).toEqual([model, model]);
+      const modelReceipt = () =>
+        lab.owner.query(
+          `select * from session_model_first_write
+           where native_session_id=$1 and selection_request_id=$2
+           order by created_at,attempt_id`,
+          [sessionId, firstPrompt],
+        );
+      expect((await modelReceipt()).rows).toHaveLength(2);
+      await expect
+        .poll(async () => (await modelReceipt()).rows.map(({ state }) => state))
+        .toEqual(['submitted', 'submitted']);
+      const writes = (await modelReceipt()).rows;
+      const [originalWrite, retriedWrite] = writes;
+      expect(originalWrite).toMatchObject({
+        project_id: projectId,
+        requirement_id: requirementId,
+        native_session_id: sessionId,
+        selection_request_id: firstPrompt,
+        selection_revision: saved.selection.revision,
+        model,
+        turn: 1,
+        step: 1,
+      });
+      expect(retriedWrite).toMatchObject({
+        binding_id: originalWrite.binding_id,
+        step_seq: originalWrite.step_seq,
+        note_seq: originalWrite.note_seq,
+        selection_revision: saved.selection.revision,
+        model,
+      });
+      expect(retriedWrite.attempt_id).not.toBe(originalWrite.attempt_id);
+      const firstJournal = await journal(root, sessionId);
+      expect(
+        firstJournal.events.find(
+          ({ seq }) => seq === Number(originalWrite.step_seq),
+        ),
+      ).toMatchObject({ type: 'step/start', data: { turn: 1, step: 1 } });
+      expect(
+        firstJournal.events.find(
+          ({ seq }) => seq === Number(originalWrite.note_seq),
+        ),
+      ).toMatchObject({
+        type: 'user/message',
+        data: { source: { kind: 'rdws-context', turn: 1, step: 1 } },
+      });
       const repeatedPrompt = await prompt(firstPrompt, firstText);
       expect(repeatedPrompt.status, await repeatedPrompt.clone().text()).toBe(
         200,
@@ -786,6 +897,25 @@ test.skipIf(process.platform !== 'darwin')(
           })),
         ),
       );
+      await expect
+        .poll(
+          async () =>
+            (
+              await lab.owner.query(
+                `select selection_request_id, model, step, state from session_model_first_write
+           where native_session_id=$1 and selection_revision=$2`,
+                [sessionId, steerChoice.revision],
+              )
+            ).rows,
+        )
+        .toEqual([
+          {
+            selection_request_id: steerIds[0],
+            model,
+            step: 2,
+            state: 'submitted',
+          },
+        ]);
       const beforeMixed = supplierRequests;
       const beforeMixedHistory = (await journal(root, sessionId)).events.length;
       nextResponseGate = new Promise<void>((resolve) => {
@@ -825,6 +955,15 @@ test.skipIf(process.platform !== 'darwin')(
         )
         .toBe(true);
       expect(supplierRequests).toBe(beforeMixed + 1);
+      expect(
+        (
+          await lab.owner.query(
+            `select attempt_id from session_model_first_write
+           where native_session_id=$1 and selection_revision=any($2::uuid[])`,
+            [sessionId, revisions],
+          )
+        ).rows,
+      ).toEqual([]);
       const beforeRevocation = supplierRequests;
       const parkWire = new Promise<void>((resolve) => {
         releaseRevocation = resolve;
@@ -1064,6 +1203,8 @@ test.skipIf(process.platform !== 'darwin')(
       expect(supplierRequests).toBe(priorTraffic);
       await app.close();
       app = undefined;
+      expect((await modelReceipt()).rows).toEqual(writes);
+      expect(supplierRequests).toBe(priorTraffic);
       expect(
         (
           await lab.owner.query(
@@ -1254,6 +1395,101 @@ test.skipIf(process.platform !== 'darwin')(
         expect(await databaseOwner()).toBe(generation);
       }
 
+      const receiptState = async (key: string) =>
+        (
+          await lab.owner.query(
+            'select state from session_model_first_write where native_session_id=$1 and selection_request_id=$2',
+            [legacySession, key],
+          )
+        ).rows.map(({ state }) => state);
+      const actualWire = ContextRuns.prototype.authorizeModelWireAttempt;
+      const realWrites: string[] = [];
+      const witness = vi
+        .spyOn(ContextRuns.prototype, 'authorizeModelWireAttempt')
+        .mockImplementation(function (
+          this: ContextRuns,
+          request,
+          write,
+          fixture,
+        ) {
+          return actualWire.call(
+            this,
+            request,
+            (deadline) => {
+              const result = write(deadline);
+              realWrites.push(result);
+              return result;
+            },
+            fixture,
+          );
+        });
+      try {
+        for (const [phase, outcome, expectedState] of [
+          ['prepare', 'commit', 'prepared'],
+          ['authorize', 'commit', 'prepared'],
+          ['settle', 'rollback', 'prepared'],
+          ['settle', 'commit', 'submitted'],
+        ] as const) {
+          const key = randomUUID();
+          const beforeWire = realWrites.length;
+          const traffic = supplierRequests;
+          const turns = (await journal(root, legacySession)).events.filter(
+            ({ type }) => type === 'turn/end',
+          ).length;
+          firstWriteFault = { requestId: key, phase, outcome };
+          const planted = firstWriteFault;
+          const response = await prompt(
+            key,
+            'Synthetic request with a lost first-write transaction acknowledgement',
+            pilotAgain.wire,
+            'queue',
+            legacySession,
+          );
+          expect(response.status, await response.clone().text()).toBe(200);
+          await response.text();
+          await expect
+            .poll(() => planted.completion)
+            .toBe(outcome === 'rollback' ? 'ROLLBACK' : 'COMMIT');
+          if (phase === 'settle')
+            await expect.poll(() => planted.checked).toBe(true);
+          await expect
+            .poll(
+              async () =>
+                (await journal(root, legacySession)).events.filter(
+                  ({ type }) => type === 'turn/end',
+                ).length,
+            )
+            .toBe(turns + 1);
+          expect(await receiptState(key), `${phase} ${outcome}`).toEqual([
+            expectedState,
+          ]);
+          expect(realWrites.slice(beforeWire)).toEqual(
+            phase === 'prepare' ? [] : ['submitted'],
+          );
+          if (phase !== 'authorize')
+            expect(supplierRequests).toBe(
+              traffic + (phase === 'prepare' ? 0 : 1),
+            );
+          const trafficBeforeReplay = supplierRequests;
+          const replay = await prompt(
+            key,
+            'Synthetic request with a lost first-write transaction acknowledgement',
+            pilotAgain.wire,
+            'queue',
+            legacySession,
+          );
+          expect(replay.status).toBe(200);
+          await replay.text();
+          expect(supplierRequests).toBe(trafficBeforeReplay);
+          expect(nativePosts.filter((id) => id === key)).toHaveLength(1);
+          expect(await receiptState(key)).toEqual([expectedState]);
+          firstWriteFault = undefined;
+        }
+      } finally {
+        witness.mockRestore();
+        firstWriteFault = undefined;
+      }
+
       const heldTlsKey = randomUUID();
       let releaseProvider!: () => void;
       nextResponseGate = new Promise<void>((resolve) => {
@@ -1361,6 +1597,54 @@ test.skipIf(process.platform !== 'darwin')(
       heldFreeze = undefined;
       expect(await databaseOwner()).toBeNull();
       expect(nativePosts).not.toContain(duringShutdownKey);
+
+      const settlementPhase = await startNext(config.sessionModelPilot);
+      const settlementKey = randomUUID();
+      const heldSettlement = {
+        requestId: settlementKey,
+        phase: 'settle',
+        outcome: 'hold',
+        gate: new Promise<void>((resolve) => {
+          releaseSettlement = resolve;
+        }),
+      } as const;
+      firstWriteFault = heldSettlement;
+      const settleTraffic = supplierRequests;
+      const priorCompleted = (await journal(root, legacySession)).events.filter(
+        ({ type, data }) =>
+          type === 'turn/end' && data.reason.kind === 'completed',
+      ).length;
+      const settling = await prompt(
+        settlementKey,
+        'Synthetic request with a pending settlement acknowledgement',
+        settlementPhase.wire,
+        'queue',
+        legacySession,
+      );
+      expect(settling.status, await settling.clone().text()).toBe(200);
+      await settling.text();
+      await expect.poll(() => firstWriteFault?.completion).toBe('COMMIT');
+      await expect.poll(() => supplierRequests).toBe(settleTraffic + 1);
+      await expect
+        .poll(
+          async () =>
+            (await journal(root, legacySession)).events.filter(
+              ({ type, data }) =>
+                type === 'turn/end' && data.reason.kind === 'completed',
+            ).length,
+        )
+        .toBe(priorCompleted + 1);
+      expect(await receiptState(settlementKey)).toEqual(['submitted']);
+      const ownerWithSettlement = await databaseOwner();
+      expect(ownerWithSettlement).toEqual(expect.any(String));
+      const settlementClosing = app!.close();
+      void settlementClosing.catch(() => {});
+      await ownerCannotMove(ownerWithSettlement);
+      releaseSettlement!();
+      await settlementClosing;
+      app = undefined;
+      expect(await databaseOwner()).toBeNull();
+      firstWriteFault = undefined;
     } finally {
       releaseRetry();
       releaseSteering();
@@ -1368,6 +1652,7 @@ test.skipIf(process.platform !== 'darwin')(
       releaseRevocation?.();
       releaseHeldTls?.();
       heldFreeze?.release();
+      releaseSettlement?.();
       let stopped = false;
       try {
         await app?.close();

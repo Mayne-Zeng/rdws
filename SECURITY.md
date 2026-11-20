@@ -54,6 +54,8 @@ T13 附件正文验证按锁定的 Native 序列化核对实际 Files 与 Messag
 
 本人会话的两模型试验仅由程序化测试装配启用，限定同一回环 HTTPS 出口、显式隔离运行根和匹配夹具标记的一次性测试库。保存只记录模型引用、修订及回执，派发只记录原键、输入摘要、冻结模型和实际签票关联。接纳状态不明时继续核对同一原键，只有已刷盘的原会话首插正证才能持久确认。实际首写及 429 重试在受检数据库锁内复核原登录、冻结选择和当前精确允许集合。关停关闭试验 HTTP 连接和 Native 载体，待任务、桥与物理数据库连接排空后才释放原所有者。 [两模型回环证据](docs/02-directory-and-engineering-design.html#t13-session-model-pilot-evidence-20261120)
 
+试验的实际首写回执绑定同一 Native 会话的刷盘步骤、选择修订和实际传输尝试。数据库按列保护原身份和位置，只准持证应用登记准备并更新终态。持久正证表示受控 TLS 应用密文前缀已交给内核。供应商完整接收及结果另行验收。准备或首写锁事务失答保留待核对，同一步不会用新尝试重放。终态失答通过新连接查询原键，关停等待终态处理后交还原所有者。回执不含正文、认证头、密文或票据。 [首写回环证据](docs/02-directory-and-engineering-design.html#t13-first-write-receipt-evidence-20261120)
+
 Native 浏览器传输随页面打开时的登录固定。BFF 在准备工作区前核对 bootstrap 的观察登录，随后对 HTTP 和 WebSocket 核对 Cookie、实际需求归属及原绑定。WebSocket 升级前的授权代次贯穿上游 Peer 建立和后续流量。重连轮换短租约代次时沿用原绑定。原 Cookie 仍有效的连接按其原登录鉴权，撤权时关闭。旧页面发现换登录后释放连接，原草稿仅在当前文档内存保留，当前账号相同且需求授权读回后可复制。 [验收证据](docs/02-directory-and-engineering-design.html#t13-native-login-binding-evidence-20261119)
 
 工作台的会话目录与被动历史也携带原观察登录。BFF 以 Cookie 认证并比对，在返回前复核需求读取权及撤权代次。两条 GET 使用 no-store，无头调用仍按当前 Cookie 及既有访问权限处理。工作台收到授权拒绝后清理相应的目录或历史，观察到登录更换时提示重新打开。 [验收证据](docs/02-directory-and-engineering-design.html#t02-passive-session-login-plan-20261119)

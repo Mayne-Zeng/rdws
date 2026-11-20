@@ -396,7 +396,7 @@
     <tr data-source="I2-STATE I6-STAGE" data-owner="T11" data-point="business.stage"><td>I2-STATE I6-STAGE / 阶段与任务维护</td><td><a href="05-development-backlog.md#主计划任务">T11</a></td><td>T01</td><td>已有按钮跳转／回退、本人任务状态；无阶段审批，未来需求维护沿用此约束。</td></tr>
     <tr data-source="I2-AUTH" data-owner="T03" data-point="business.identity"><td>I2-AUTH / 身份与作用域</td><td><a href="05-development-backlog.md#主计划任务">T03</a></td><td>T02 T07 T17</td><td>预置身份与当前角色校验已存在；多项目、成员维护和撤权入口待 T03，代码写另受 T07 控制。</td></tr>
     <tr data-source="I3-TASK I6-TASK" data-owner="T11" data-point="business.task-assignment"><td>I3-TASK I6-TASK / 子任务及后续人员变化</td><td><a href="05-development-backlog.md#主计划任务">T11</a></td><td>T03</td><td>沿用单层／单负责人／初始分派，已验证<a href="#t11-personnel-delivery-20261119">人员变更与显式任务承接</a>、<a href="#t11-import-delivery-20261119">批量导入</a>。</td></tr>
-    <tr data-source="I3-WRITE" data-owner="T07" data-point="execution.single-writer"><td>I3-WRITE / 单写与停止后交接</td><td><a href="05-development-backlog.md#主计划任务">T07</a></td><td>T05 T06</td><td>共享需求工作树、本人有效开发分派、独占资格；进程停稳才交接，租约过期不作为停止证据。</td></tr>
+    <tr data-source="I3-WRITE" data-owner="T07" data-point="execution.single-writer"><td>I3-WRITE / 单写与停止后交接</td><td><a href="05-development-backlog.md#主计划任务">T07</a></td><td>T05 T06</td><td>共享需求工作树、项目与需求开发角色、本人会话、独占资格；先封旧写权再等停稳，详见 <a href="#t07-writable-session-acceptance-20261121">§11.20.20</a>。</td></tr>
     <tr data-source="I3-CONTEXT I6-CONTEXT" data-owner="T12" data-point="context.current-facts"><td>I3-CONTEXT I6-CONTEXT / 动态上下文</td><td><a href="05-development-backlog.md#主计划任务">T12</a></td><td>T02 T07</td><td>已有每步一致快照和当前运行身份；未来编辑背景不替代 PG 事实，不新增已排除的消费索引。</td></tr>
     <tr data-source="I3-DELIVERY" data-owner="T08" data-point="delivery.immutable-snapshot"><td>I3-DELIVERY / 不可变交付快照</td><td><a href="05-development-backlog.md#主计划任务">T08</a></td><td>T09 T10</td><td>候选／实际合入及原提交、集成提交、merge／squash SHA 分开；尚无实体或界面。</td></tr>
     <tr data-source="I4-UI I6-UI" data-owner="T01" data-point="ui.native-composition"><td>I4-UI I6-UI / 真实界面与交接来源</td><td><a href="05-development-backlog.md#主计划任务">T01</a></td><td>T02 T20 T22</td><td>复用 TDesign／RDWS 令牌与公开 Native 客户端；已有四类视图的部分能力，用户 Demo 验收待确认。</td></tr>
@@ -463,7 +463,7 @@
     <tr data-interface="source-mirror"><td>仓库来源／只读镜像</td><td><a href="05-development-backlog.md#主计划任务">T04</a></td><td>仓库配置与 syncer 的唯一 sources 更新接口；业务 API 归 server。</td><td>具名授权 Gitee 已验证 HTTPS 只读镜像、非生产目标读回和 SSH 提交验签。见 <a href="#t04-gitee-live-20261118">T04 真实验收</a>。</td></tr>
     <tr data-interface="demand-workspace"><td>需求工作树／workspace</td><td><a href="05-development-backlog.md#主计划任务">T05</a></td><td>需求私有 bare、baseCommit、工作树与 workspace 路径；编排归 orchestrator。</td><td>不在 sources 登记需求 worktree；header cwd 保持需求根，不建子任务并行树。</td></tr>
     <tr data-interface="sandbox-execution"><td>实际工具／沙箱执行</td><td><a href="05-development-backlog.md#主计划任务">T06</a></td><td>dsh 原生工具、文件、Shell、sandbox 与进程句柄适配；上层编排通过公开层访问。</td><td>所需工具先在隔离环境取证；产品入口零工具维持到 T07 联合门槛。</td></tr>
-    <tr data-interface="write-handoff"><td>写资格／停止交接</td><td><a href="05-development-backlog.md#主计划任务">T07</a></td><td>当前开发分派＋本人会话＋独占写资格，orchestrator 协调 PG 与实际进程。</td><td>WriteLease 尚未实现，lease 及 runtime 锁均不单独证明停止或授写。</td></tr>
+    <tr data-interface="write-handoff"><td>写资格／停止交接</td><td><a href="05-development-backlog.md#主计划任务">T07</a></td><td>受管 BFF 协调 PostgreSQL 写代与 T06 实际执行进程，当前资格及交接目标见 <a href="#t07-writable-session-acceptance-20261121">§11.20.20</a>。</td><td>隔离写代已验证，主动接手及可信冷恢复待实施。租约及运行锁均不能单独证明停稳。</td></tr>
     <tr data-interface="delivery-snapshot"><td>不可变交付快照</td><td><a href="05-development-backlog.md#主计划任务">T08</a></td><td>冻结候选及需求原提交，contracts/db 交付记录；后续被 T09/T10 引用。</td><td>DeliverySnapshot 尚未建，历史／当前候选与实际合入事实分开。</td></tr>
     <tr data-interface="gitlab-merge"><td>GitLab MR／合入回写</td><td><a href="05-development-backlog.md#主计划任务">T09</a></td><td>HTTP GitLab 适配、受控集成检出与 SHA 回写；编排归 orchestrator。</td><td>MergeRequestMapping 尚未建；原 SHA、集成 SHA、merge/squash SHA 不合并。</td></tr>
     <tr data-interface="environment-revert"><td>环境／增量／回退</td><td><a href="05-development-backlog.md#主计划任务">T10</a></td><td>显式同步、环境／多仓库版本映射、revert MR，消费 T08/T09 证据。</td><td>不 rebase／强推，人工合入；部分失败与拒绝不伪造成功或回退。</td></tr>
@@ -1780,6 +1780,15 @@
   <p>普通浏览器通过项目脚本对应的已安装 Playwright 及原 <code>playwright.config.ts</code>，从临时目录运行 <code>test --shard=1/2</code> 和 <code>test --shard=2/2</code>，退出均为 0，共 26 + 25 项。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code> 和 <code>pnpm validate:baseline</code> 返回 0，构建保留既有主包体积提示。</p>
 
   <p>与普通 Chromium 分片使用同一套隔离条件的 <code>pnpm test</code> 退出 0，56 个文件、341 项通过、1 项条件跳过。该回归夹具的合成端点收到 0 次请求。保留占位的授权结算、带历史工具的正式出站范围和用户侧验收仍待核对。</p>
+
+  <h4 id="t07-writable-session-acceptance-20261121">11.20.20 T07 可写会话与正式工具的已确认目标</h4>
+  <p>用户于 2026-11-21 确认<a href="00-decision-ledger.html#t07-writable-session-20261121">台账 §8.16</a>。前序已交付章节保留对应版本的证据。此后写权资格采用项目和需求开发角色加本人会话；工作台提供「设为可写会话」，接手由申请人发起，替代旧版额外开发分派和持有者先释放的规则。</p>
+  <ol>
+    <li><strong>单写与恢复。</strong>封住旧会话的新写入口后，核对所有仍可能落盘的执行及子进程。停稳后完成换代，保留异常结果供审计。未知占位由系统核验，期间需求保持只读。并发接手、原键重试、切换中断和冷恢复均核对该需求至多一个实际写者。取得写权前刷新上下文；派生与恢复均重新验权。</li>
+    <li><strong>首批工具与边界。</strong>复用 T06 实际工作树及受限进程。任一获准读取会话可调用 Read 读取当前文件，已有返回保留为历史。仅当前可写会话可 Edit、Write、Shell 和执行本地 Git。用文件范围和进程隔离验证 Shell／Git 无法绕过写权、访问镜像或操作外部仓库。</li>
+    <li><strong>模型正文。</strong>只投影当前需求实际工具调用所需的源码、编辑变更、主动查询的 Git diff、测试退出码及标准输出／错误。长输出标明截断并支持继续读取。本人恢复会话后使用工具历史前核对当前权限，排除凭据和工作树外私有数据。以本机回环合成供应商实际收取并核对；真实供应商需具名专项授权。</li>
+    <li><strong>联合验收。</strong>两名开发成员分别使用本人会话，在真实工作台完成可写设置、先写单测、用夹具项目实际配置的命令获得预期失败、模型收到必要失败信息、修改实现并重跑同一用例通过。另一个会话重新 Read 核对最新文件，第二名成员接手，旧会话随后写入被拒。另验正在运行的写命令及其子进程、异常退出、切换崩溃核验和两人并发接手。工作树、受限进程、文件实值、回环实收及浏览器操作各自留证；浏览器同时覆盖忙碌、拒绝、失败恢复、明暗与窄屏。保留原验收中测试会话只读、租约过期与停稳区分及逐平台准入要求，T08 继续以前述所有验收为前置。</li>
+  </ol>
 
   <h3 id="t11-maintenance-acceptance-20261119">11.21 T11 已确认的导入与人员维护</h3>
   <p>2026-11-19 用户确认需求批量导入采用同页的上传、预览、修正与整批提交。上传后动态显示解析和校验进度，下方逐条呈现需求明细、状态与可定位的问题。用户可在同页修正并重新校验。预览和校验阶段不写业务数据。全部通过后由用户显式整批提交入库，提交结果继续在同页逐条呈现。</p>

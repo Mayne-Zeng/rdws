@@ -39,8 +39,10 @@ export function installFixtureToolProbe(ctx, currentStep, liveRun, service) {
       render: (_args, value) => [{ type: 'text', text: value }],
     },
     async execute(_args, exec) {
-      if (!currentPermit(exec)) throw new Error('Fixture tool permit expired');
+      const permit = currentPermit(exec);
+      if (!permit) throw new Error('Fixture tool permit expired');
       permits.delete(exec);
+      if (permit.jobId) return executeJob(permit, exec.signal);
       return fixtureResult;
     },
   });
@@ -54,8 +56,45 @@ export function installFixtureToolProbe(ctx, currentStep, liveRun, service) {
       !exec.signal.aborted &&
       currentStep(exec.agent) === permit.step &&
       calls.get(exec.agent.session) === permit.call &&
-      ctx.tools.executable(exec.name, exec.agent, exec.toolSet) === definition
+      ctx.tools.executable(exec.name, exec.agent, exec.toolSet) ===
+        definition &&
+      permit
     );
+  }
+
+  async function executeJob(permit, signal) {
+    const body = { ...permit.body, jobId: permit.jobId };
+    const deadline = Date.now() + 20_000;
+    let cancellation;
+    let settled = false;
+    const cancel = () =>
+      (cancellation ??= service('fixture-tool-cancel', body).catch(() => {
+        cancellation = undefined;
+      }));
+    const requestCancel = () => void cancel();
+    signal.addEventListener('abort', requestCancel, { once: true });
+    try {
+      if (signal.aborted) requestCancel();
+      else await service('fixture-tool-begin', body, signal).catch(() => {});
+      while (Date.now() < deadline) {
+        if (signal.aborted) requestCancel();
+        const result = await service('fixture-tool-status', body).catch(
+          () => undefined,
+        );
+        if (['ok', 'aborted', 'failed', 'unknown'].includes(result?.state)) {
+          settled = true;
+          if (result.state !== 'ok')
+            throw new Error('RDWS fixture worktree state: ' + result.state);
+          return 'RDWS fixture worktree state: ' + result.state;
+        }
+        if (result?.state === 'ready') requestCancel();
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+      throw new Error('Fixture tool result could not be confirmed');
+    } finally {
+      signal.removeEventListener('abort', requestCancel);
+      if (!settled) await cancel();
+    }
   }
 
   ctx.on(
@@ -147,7 +186,14 @@ export function installFixtureToolProbe(ctx, currentStep, liveRun, service) {
           Number.isSafeInteger(permit.expiresAt) &&
           permit.expiresAt <= body.deadline
         )
-          permits.set(exec, { step, call, route, expiresAt: permit.expiresAt });
+          permits.set(exec, {
+            step,
+            call,
+            route,
+            body,
+            jobId: typeof permit.jobId === 'string' ? permit.jobId : undefined,
+            expiresAt: permit.expiresAt,
+          });
       } catch {
         permits.delete(exec);
       }

@@ -11,6 +11,10 @@ import {
   type Actor,
   type createBusiness,
 } from './business.ts';
+import {
+  fixtureToolOperations,
+  type NativeFixtureToolJob,
+} from './native-fixture-tool-job.ts';
 type Detail = Awaited<ReturnType<ReturnType<typeof createBusiness>['read']>>;
 export function contextSnapshot(data: Detail) {
   const r = data.requirement;
@@ -142,7 +146,9 @@ type ModelStep = {
   closed: boolean;
   selection?: EffectiveModel;
   validBefore?: number;
+  contextVersion?: number;
   fixtureToolUsed?: true;
+  fixtureToolJob?: NativeFixtureToolJob;
   attempts: Set<string>;
   wireAttempt?: string;
 };
@@ -303,6 +309,7 @@ export class ContextRuns {
         this.discard(id);
   }
   clear() {
+    for (const step of this.modelSteps.values()) step.fixtureToolJob?.cancel();
     this.runs.clear();
     this.nonces.clear();
     this.modelSteps.clear();
@@ -324,6 +331,7 @@ export class ContextRuns {
     const step = this.modelSteps.get(run.sessionId);
     if (step?.batch.includes(run)) {
       step.closed = true;
+      step.fixtureToolJob?.cancel();
       if (step.batch.every((member) => this.runs.get(member.runId) !== member))
         this.modelSteps.delete(run.sessionId);
     }
@@ -607,9 +615,15 @@ export class ContextRuns {
     token: unknown,
     reply?: (result: unknown, validBefore: number) => void,
     fixtureToolRun?: RunBinding,
+    fixtureToolJob?: NativeFixtureToolJob,
   ) {
     const cap = this.verify(token),
       now = Date.now();
+    const fixtureEnabled = fixtureToolRun && process.env.RDWS_MODE === 'test';
+    const fixtureOperation =
+      fixtureEnabled &&
+      fixtureToolJob &&
+      fixtureToolOperations.find((operation) => operation === cap?.operation);
     for (const [nonce, expiry] of this.nonces)
       if (expiry <= now) this.nonces.delete(nonce);
     if (
@@ -622,9 +636,8 @@ export class ContextRuns {
         'model-title-origin',
         'model-title-prepare',
         'model-title-close',
-        ...(fixtureToolRun && process.env.RDWS_MODE === 'test'
-          ? ['fixture-tool-permit']
-          : []),
+        ...(fixtureEnabled ? ['fixture-tool-permit'] : []),
+        ...(fixtureOperation ? [fixtureOperation] : []),
       ].includes(cap.operation ?? '') ||
       cap.hostGeneration !== this.generation ||
       !isRecord(input) ||
@@ -634,11 +647,30 @@ export class ContextRuns {
     )
       businessError(403, '上下文服务请求未获授权');
     this.nonces.set(cap.nonce, cap.expiresAt);
+    if (fixtureOperation && fixtureToolJob) {
+      let validBefore = cap.expiresAt;
+      const result = await fixtureToolJob.control(
+        fixtureOperation.slice('fixture-tool-'.length) as
+          'begin' | 'status' | 'cancel',
+        input,
+        async ({ who, requirementId, sessionId }) => {
+          const loginClosed = () =>
+            this.closing(who.authSessionId, who.userId, requirementId);
+          if (loginClosed()) return invalidModel();
+          const current = await this.read(who, requirementId, sessionId);
+          validBefore = Math.min(current.validBefore, validBefore);
+          if (loginClosed() || validBefore <= Date.now()) return invalidModel();
+        },
+      );
+      reply?.(result, validBefore);
+      return result;
+    }
     if (cap.operation === 'fixture-tool-permit' && fixtureToolRun) {
       const result = await this.authorizeFixtureTool(
         input,
         cap,
         fixtureToolRun,
+        fixtureToolJob,
       );
       reply?.(result, result.expiresAt);
       return result;
@@ -666,8 +698,10 @@ export class ContextRuns {
         current.agentGeneration === input.agentGeneration &&
         current.turn === input.turn &&
         bodyHash(current.stamp) === bodyHash(stamp)
-      )
+      ) {
         current.closed = true;
+        current.fixtureToolJob?.cancel();
+      }
       const result = { released: true };
       reply?.(result, cap.expiresAt);
       return result;
@@ -766,6 +800,7 @@ export class ContextRuns {
         closed: false,
         attempts: new Set(),
       };
+      previous?.fixtureToolJob?.cancel();
       this.modelSteps.set(run.sessionId, modelStep);
     }
     const { value, validBefore: loginExpiresAt } = await this.read(
@@ -801,6 +836,12 @@ export class ContextRuns {
         routes: Object.freeze({ ...selected.routes }),
       };
       modelStep.validBefore = validBefore;
+      if (
+        isRecord(value.snapshot) &&
+        typeof value.snapshot.contextVersion === 'number' &&
+        Number.isSafeInteger(value.snapshot.contextVersion)
+      )
+        modelStep.contextVersion = value.snapshot.contextVersion;
       result = { ...value, modelBindingId: modelStep.id };
     }
     reply?.(result, validBefore);
@@ -811,6 +852,7 @@ export class ContextRuns {
     input: Record<string, unknown>,
     cap: Grant,
     expected: RunBinding,
+    job?: NativeFixtureToolJob,
   ) {
     const run = this.runs.get(expected.runId);
     const step = this.modelSteps.get(expected.sessionId);
@@ -847,10 +889,9 @@ export class ContextRuns {
     const current = () =>
       this.modelSteps.get(run.sessionId) === step &&
       !step.closed &&
-      !step.fixtureToolUsed &&
       step.selection?.isCurrent() &&
       this.current([run]);
-    if (!current()) return invalidModel();
+    if (step.fixtureToolUsed || !current()) return invalidModel();
     const login = await this.read(run.who, run.requirementId, run.sessionId);
     const expiresAt = Math.min(
       cap.expiresAt,
@@ -858,9 +899,21 @@ export class ContextRuns {
       step.validBefore ?? 0,
       run.expiresAt,
       deadline,
+      job ? Date.now() + 1200 : Infinity,
     );
-    if (!current() || expiresAt <= Date.now()) return invalidModel();
+    if (step.fixtureToolUsed || !current() || expiresAt <= Date.now())
+      return invalidModel();
+    const jobId = job?.offer(
+      run.who,
+      run.requirementId,
+      run.sessionId,
+      step.contextVersion,
+      bodyHash(input),
+      expiresAt,
+      () => !!current(),
+    );
+    step.fixtureToolJob = job;
     step.fixtureToolUsed = true;
-    return { digest: cap.bodyHash, expiresAt };
+    return { digest: cap.bodyHash, expiresAt, ...(jobId && { jobId }) };
   }
 }

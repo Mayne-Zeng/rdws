@@ -1,14 +1,16 @@
-import { execFileSync, fork } from 'node:child_process';
+import { execFileSync, fork, type ChildProcess } from 'node:child_process';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { hashPassword } from 'better-auth/crypto';
 import { taskAssignmentMaterial } from '@rdws/contracts';
 import { NativeWebHost } from '@rdws/dsh/web';
-import { isRecord } from '@rdws/dsh/access';
+import { bodyHash, isRecord, signGrant } from '@rdws/dsh/access';
+import { sessionRpc } from '@rdws/dsh/sessions';
 import { DemandWorktrees } from '@rdws/orchestrator';
 import { buildApp } from '@rdws/server';
 import { RepositoryMirrors } from '@rdws/syncer/mirror';
@@ -16,6 +18,8 @@ import { Client, Pool, type PoolClient } from 'pg';
 import { afterEach, expect, test, vi } from 'vitest';
 import type { OwnedWriteHandoff } from '../../apps/server/src/modules/workbench-write-authority.ts';
 import { checkedWriteTransaction } from '../../apps/server/src/modules/checked-write-transaction.ts';
+import { NativeFixtureToolJob } from '../../apps/server/src/modules/native-fixture-tool-job.ts';
+import { ContextRuns } from '../../apps/server/src/modules/runtime-context.ts';
 import { connectDatabase, schema } from '@rdws/db';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -25,6 +29,735 @@ import { fixtureGit, httpsGitFixture } from '../helpers/https-git.ts';
 import { bootstrapNative, observedLogin } from '../helpers/native-browser.ts';
 
 afterEach(() => vi.unstubAllEnvs());
+
+test.skipIf(process.platform !== 'darwin')(
+  'the formal Native Host drives a single real broker execution through short controls',
+  async () => {
+    vi.stubEnv('RDWS_MODE', 'test');
+    vi.stubEnv('RDWS_NATIVE_MODEL_EGRESS', 'paused');
+    const lab = await authorityDatabase();
+    const projectId = 'poc';
+    const requirementId = randomUUID();
+    const who = { userId: randomUUID(), authSessionId: randomUUID() };
+    const authorityTicket = randomBytes(32).toString('hex');
+    let source: Awaited<ReturnType<typeof httpsGitFixture>> | undefined;
+    let mirrors: RepositoryMirrors | undefined;
+    let trees: DemandWorktrees | undefined;
+    let app: ReturnType<typeof buildApp> | undefined;
+    let failedCleanup: PromiseRejectedResult | undefined;
+    const hosts: NativeWebHost[] = [];
+    const work = new Set<NativeFixtureToolJob>();
+    try {
+      await lab.owner.query(
+        "insert into project (id,name) values ($1,'Tool control fixture')",
+        [projectId],
+      );
+      await lab.owner.query(
+        "insert into auth_user(id,name,email,username,active) values ($1,'Tool owner','tool@fixture.invalid','fixturetool',true)",
+        [who.userId],
+      );
+      await lab.owner.query(
+        "insert into auth_session(id,user_id,token,auth_epoch,expires_at) values ($1,$2,$3,0,now()+interval '10 minutes')",
+        [who.authSessionId, who.userId, randomUUID()],
+      );
+      await lab.owner.query(
+        "insert into project_member values($1,$2,'developer')",
+        [projectId, who.userId],
+      );
+      await lab.owner.query(
+        "insert into requirement(id,project_id,title,description,acceptance,lead_id,created_by,context_version) values($1,$2,'Tools','','',$3,$3,2)",
+        [requirementId, projectId, who.userId],
+      );
+      await lab.owner.query(
+        "insert into requirement_participant values($1,$2,'developer')",
+        [requirementId, who.userId],
+      );
+      source = await httpsGitFixture(projectId);
+      const root = source.root;
+      mirrors = new RepositoryMirrors(root);
+      trees = new DemandWorktrees(root, mirrors);
+      await writeFile(join(source.work, 'sample.txt'), 'baseline');
+      await fixtureGit(['-C', source.work, 'add', '--', 'sample.txt']);
+      await source.commit();
+      await source.update();
+      expect(
+        await mirrors.sync(
+          projectId,
+          'app',
+          'fixture',
+          randomUUID(),
+          (publish) => publish(),
+        ),
+      ).toMatchObject({ status: 'succeeded' });
+      const plan = (await mirrors.captureBaselines(projectId)).map((entry) => ({
+        ...entry,
+        branch: 'rdws/' + requirementId + '/' + entry.repositoryId,
+        worktreePath: 'worktrees/' + entry.repositoryId,
+        gitStorePath: '.gitstore/' + entry.repositoryId + '.git',
+      }));
+      await trees.prepare(projectId, requirementId, plan);
+      await lab.owner.query(
+        'insert into requirement_worktree_plan values ($1,$2)',
+        [requirementId, JSON.stringify(plan)],
+      );
+      const checkout = await trees.executionScope(
+        projectId,
+        requirementId,
+        plan,
+        'app',
+      );
+      const file = join(checkout.tree, 'sample.txt');
+      const configuration = join(root, 'tool-control-profile');
+      const profile = join(configuration, 'profiles', 'rdws');
+      await mkdir(profile, { recursive: true, mode: 0o700 });
+      await writeFile(
+        join(configuration, '.credentials.yaml'),
+        JSON.stringify({
+          version: 1,
+          refs: { TOOL_CONTROL: 'synthetic-only' },
+        }),
+        { mode: 0o600 },
+      );
+      const provider = 'rdws-glm';
+      const model = 'tool-control';
+      const base = 'https://tool-control.invalid/v1';
+      const routes = { pi: base + '/chat/completions' };
+      await writeFile(
+        join(profile, 'cordis.patch.yml'),
+        JSON.stringify([
+          { id: 'session-title-llm', disabled: true },
+          {
+            id: 'llm-pi-ai',
+            config: {
+              providers: {
+                [provider]: {
+                  api: 'openai-completions',
+                  baseURL: base,
+                  apiKeyEnv: 'TOOL_CONTROL',
+                  models: [{ id: model }],
+                },
+              },
+            },
+          },
+        ]),
+        { mode: 0o600 },
+      );
+      const modes = [
+        'once',
+        'stale',
+        'deadline',
+        'prestart-cancel',
+        'cancel',
+        'close',
+        'disconnect',
+      ] as const;
+      const fixtures = [];
+      type ContextHandler = Parameters<NativeWebHost['configureContext']>[0];
+      for (const mode of modes) {
+        const hostRoot = join(root, 'control-host-' + mode);
+        const callId = 'fixture-call-' + mode;
+        type Message = {
+          role: string;
+          tool_call_id?: string;
+          content?: unknown;
+        };
+        const modelResults: Message[] = [];
+        const host = new NativeWebHost(
+          hostRoot,
+          configuration,
+          projectId,
+          undefined,
+          'mediated',
+          {
+            routes,
+            async handle(request): Promise<Response> {
+              const input = (await new Response(request.body).json()) as {
+                messages: Message[];
+                tools?: { function: { name: string } }[];
+              };
+              const result = input.messages.find(
+                (message) => message.tool_call_id === callId,
+              );
+              if (result) modelResults.push(result);
+              else
+                expect(
+                  input.tools?.map(({ function: spec }) => spec.name),
+                ).toEqual(['rdws_authority_probe']);
+              const [delta, finish] = result
+                ? [{ role: 'assistant', content: 'Fixture finished' }, 'stop']
+                : [
+                    {
+                      role: 'assistant',
+                      tool_calls: [
+                        {
+                          index: 0,
+                          id: callId,
+                          type: 'function',
+                          function: {
+                            name: 'rdws_authority_probe',
+                            arguments: '{}',
+                          },
+                        },
+                      ],
+                    },
+                    'tool_calls',
+                  ];
+              return runs.authorizeModelAttempt(
+                request,
+                () =>
+                  new Response(
+                    [
+                      { index: 0, delta, finish_reason: null },
+                      { index: 0, delta: {}, finish_reason: finish },
+                    ]
+                      .map(
+                        (choice) =>
+                          'data: ' +
+                          JSON.stringify({
+                            id: 'tool-control',
+                            object: 'chat.completion.chunk',
+                            created: 1,
+                            model,
+                            choices: [choice],
+                          }) +
+                          '\n\n',
+                      )
+                      .join('') + 'data: [DONE]\n\n',
+                    { headers: { 'content-type': 'text/event-stream' } },
+                  ),
+              );
+            },
+          },
+        );
+        hosts.push(host);
+        host.enableFixtureToolProbe();
+        let reads = 0;
+        let beforeNextRead: (() => Promise<void>) | undefined;
+        const runs: ContextRuns = new ContextRuns(
+          host.contextGeneration,
+          (token) => host.verifyContext(token),
+          async (actor, demand, session) => {
+            const pause = beforeNextRead;
+            beforeNextRead = undefined;
+            const {
+              rows: [row],
+            } = await lab.owner.query<{ version: number; expires_at: Date }>(
+              `select r.context_version as version, a.expires_at
+                from requirement r join native_session n on n.requirement_id=r.id
+                join auth_session a on a.user_id=n.owner_id
+                where r.id=$1 and n.id=$2 and a.id=$3 and n.owner_id=$4`,
+              [demand, session, actor.authSessionId, actor.userId],
+            );
+            await pause?.();
+            if (!row) throw new Error('Fixture original login missing');
+            reads++;
+            return {
+              value: {
+                snapshot: {
+                  requirementId,
+                  contextVersion:
+                    mode === 'stale' && reads === 1 ? 1 : row.version,
+                },
+                digest: 'tool-control-fixture',
+              },
+              validBefore: row.expires_at.getTime(),
+            };
+          },
+          () => false,
+          async () => ({
+            provider,
+            model,
+            revision: 'fixture',
+            routes,
+            isCurrent: () => !host.signal.aborted,
+          }),
+        );
+        let contextHandler: ContextHandler | undefined;
+        host.configureContext((...args) => {
+          if (!contextHandler)
+            throw new Error('Fixture control handler is not ready');
+          return contextHandler(...args);
+        });
+        const workspace = await host.workspace(
+          requirementId,
+          'Tool control workspace',
+        );
+        const identity = { ...who, requirementId, ...workspace };
+        const { sessionId } = (await sessionRpc(
+          host,
+          { ...identity, purpose: 'create' },
+          'session/create',
+          {
+            workspaceId: workspace.workspaceId,
+          },
+        )) as { sessionId: string };
+        await lab.owner.query(
+          'insert into native_session(id,requirement_id,owner_id) values($1,$2,$3)',
+          [sessionId, requirementId, who.userId],
+        );
+        const browser = host.ticket({
+          ...identity,
+          purpose: 'browser',
+          readSessionIds: [sessionId],
+          ownSessionIds: [sessionId],
+        });
+        fixtures.push({
+          host,
+          hostRoot,
+          runs,
+          mode,
+          sessionId,
+          browser,
+          modelResults,
+          callId,
+          setContextHandler(handler: ContextHandler) {
+            contextHandler = handler;
+          },
+          pauseNextRead(pause: () => Promise<void>) {
+            beforeNextRead = pause;
+          },
+        });
+      }
+      await lab.owner.query(
+        'update rdws_authority.owner set managed=true,ticket_digest=$1 where singleton',
+        [createHash('sha256').update(authorityTicket).digest('hex')],
+      );
+      const bff = buildApp({
+        databaseUrl: lab.databaseUrl,
+        secret: lab.childEnv.BETTER_AUTH_SECRET!,
+        origin: lab.childEnv.RDWS_ORIGIN!,
+        authorityTicket,
+        repositoryHome: root,
+        nativeRuntimeRoot: root,
+        isolatedWrite: {
+          gitPath: execFileSync('/usr/bin/which', ['git'], {
+            encoding: 'utf8',
+          }).trim(),
+        },
+      });
+      app = bff;
+      await bff.ready();
+      const broker = bff.getDecorator<() => OwnedWriteHandoff>(
+        'isolatedWriteHandoff',
+      )();
+      const owner = async () =>
+        (
+          await lab.owner.query(
+            'select generation from rdws_authority.owner where singleton',
+          )
+        ).rows[0]?.generation;
+      const generation = await owner();
+      expect(generation).toBeTruthy();
+      const lease = async () =>
+        (
+          await lab.owner.query(
+            'select phase,generation,run_id from requirement_write_lease where requirement_id=$1',
+            [requirementId],
+          )
+        ).rows[0];
+      const receipt = async (id: string) =>
+        (
+          await lab.owner.query(
+            'select result from command_receipt where command_id=$1',
+            [id],
+          )
+        ).rows[0]?.result;
+      for (const {
+        host,
+        hostRoot,
+        runs,
+        mode,
+        sessionId,
+        browser,
+        modelResults,
+        callId,
+        setContextHandler,
+        pauseNextRead,
+      } of fixtures) {
+        const scope = { who, projectId, requirementId, sessionId };
+        const grant = await broker.acquire(scope, randomUUID());
+        expect(grant.contextVersion).toBe(2);
+        const requestId = randomUUID();
+        const run = runs.admit(
+          who,
+          requirementId,
+          sessionId,
+          requestId,
+          host.claims(browser)!.nonce,
+        );
+        await host.control('run', {
+          ...run,
+          authSessionId: who.authSessionId,
+          fixtureTool: true,
+        });
+        let output = '';
+        const job = new NativeFixtureToolJob({
+          scope,
+          grant,
+          broker,
+          hostSignal: host.signal,
+          repositoryId: 'app',
+          request: {
+            tool: 'shell',
+            script: ['cancel', 'close', 'disconnect'].includes(mode)
+              ? 'printf "started:%s\\n" "$$"; while :; do :; done'
+              : "printf '|real-fd3' >> sample.txt; printf 'ran'",
+          },
+          onOutput: ({ stream, chunk }) => {
+            if (stream === 'stdout') output += chunk.toString();
+          },
+        });
+        work.add(job);
+        const controls: string[] = [];
+        let expiresAt = 0;
+        let lostAcknowledgment = false;
+        let staleDenied = false;
+        const heldStatus = mode === 'cancel' ? latch() : undefined;
+        const releaseStatus = mode === 'cancel' ? latch() : undefined;
+        const releaseNativeSteps =
+          mode === 'cancel' || mode === 'prestart-cancel' ? latch() : undefined;
+        let cancelAccepted = false;
+        let pendingStatusInput: unknown;
+        const key = (
+          await readFile(join(hostRoot, 'secrets', 'dsh-bff-key'), 'utf8')
+        ).trim();
+        const sign = (op: string, input: unknown) =>
+          signGrant(key, {
+            aud: 'rdws:bff:' + host.contextGeneration,
+            purpose: 'service',
+            operation: op,
+            runId: run.runId,
+            hostGeneration: host.contextGeneration,
+            bodyHash: bodyHash(input),
+          });
+        let statusHeld = false;
+        let selected = 0;
+        const pauseStart =
+          mode === 'deadline' || mode === 'prestart-cancel'
+            ? holdCheckoutResult(
+                (sql) =>
+                  sql.includes('from "requirement_write_lease"') &&
+                  sql.endsWith('for update') &&
+                  ++selected === 2,
+              )
+            : undefined;
+        let pauseSettlement: ReturnType<typeof holdCheckoutResult> | undefined;
+        const handleContext: ContextHandler = async (body, token, reply) => {
+          const cap = host.verifyContext(token);
+          const operation = cap?.operation ?? '';
+          if (operation.startsWith('fixture-tool-')) controls.push(operation);
+          try {
+            if (
+              heldStatus &&
+              releaseStatus &&
+              operation === 'fixture-tool-status' &&
+              !statusHeld
+            ) {
+              statusHeld = true;
+              pendingStatusInput = body;
+              pauseNextRead(async () => {
+                heldStatus.resolve();
+                await releaseStatus.promise;
+              });
+            }
+            if (
+              releaseNativeSteps &&
+              (operation === 'model-step-release' ||
+                operation === 'context-release')
+            )
+              await releaseNativeSteps.promise;
+            if (operation === 'fixture-tool-permit') {
+              const result = (await runs.handle(
+                body,
+                token,
+                undefined,
+                run,
+                job,
+              )) as { expiresAt: number };
+              expiresAt = result.expiresAt;
+              reply(result, expiresAt);
+              return result;
+            }
+            if (
+              mode === 'once' &&
+              operation === 'fixture-tool-begin' &&
+              !lostAcknowledgment
+            ) {
+              const result = await runs.handle(
+                body,
+                token,
+                undefined,
+                run,
+                job,
+              );
+              lostAcknowledgment = true;
+              const wrong = {
+                ...(body as Record<string, unknown>),
+                jobId: randomUUID(),
+              };
+              await expect(
+                runs.handle(
+                  wrong,
+                  sign('fixture-tool-status', wrong),
+                  undefined,
+                  run,
+                  job,
+                ),
+              ).rejects.toMatchObject({ statusCode: 403 });
+              expect(
+                await runs.handle(
+                  body,
+                  sign(operation, body),
+                  undefined,
+                  run,
+                  job,
+                ),
+              ).toEqual({ accepted: true });
+              return result;
+            }
+            const result = await runs.handle(body, token, reply, run, job);
+            if (operation === 'fixture-tool-cancel') cancelAccepted = true;
+            return result;
+          } catch (error) {
+            if (
+              mode === 'stale' &&
+              operation === 'fixture-tool-permit' &&
+              (error as { statusCode?: number }).statusCode === 403
+            )
+              staleDenied = true;
+            throw error;
+          }
+        };
+        setContextHandler(handleContext);
+        try {
+          expect(
+            await sessionRpc(host, browser, 'session/prompt', {
+              sessionId,
+              requestId,
+              mode: 'queue',
+              content: [
+                { type: 'text', text: 'Run the exact tool-control fixture' },
+              ],
+            }),
+          ).toEqual({ accepted: true });
+          const events = async () =>
+            (
+              (await sessionRpc(host, browser, 'session/events', {
+                address: { kind: 'session', sessionId },
+              })) as {
+                records: {
+                  event: {
+                    type: string;
+                    seq: number;
+                    sourceEventSeqs?: number[];
+                    data: unknown;
+                  };
+                }[];
+              }
+            ).records.map(({ event }) => event);
+          if (pauseStart) {
+            await pauseStart.persisted.wait();
+            expect((await receipt(job.commandId))?.status).toBe('reserved');
+            expect(controls).toContain('fixture-tool-begin');
+            if (mode === 'prestart-cancel') {
+              await sessionRpc(host, browser, 'session/cancel', { sessionId });
+              await expect.poll(() => cancelAccepted).toBe(true);
+            } else {
+              await delay(Math.max(0, expiresAt - Date.now()) + 10);
+              expect(Date.now()).toBeGreaterThan(expiresAt);
+            }
+            pauseStart.finish.resolve();
+          }
+          if (mode === 'cancel' || mode === 'close' || mode === 'disconnect') {
+            await expect.poll(() => output).toMatch(/started:[1-9][0-9]*\n/);
+            const pid = Number(/started:([1-9][0-9]*)\n/.exec(output)![1]);
+            expect(pid).toBeGreaterThan(1);
+            const ids = execFileSync(
+              '/bin/ps',
+              ['-o', 'ppid=', '-o', 'pgid=', '-p', String(pid)],
+              { encoding: 'utf8' },
+            )
+              .trim()
+              .split(/\s+/)
+              .map(Number);
+            expect(ids).toEqual([process.pid, pid]);
+            if (mode === 'cancel') {
+              await heldStatus!.wait();
+              await expect(
+                runs.handle(
+                  pendingStatusInput,
+                  sign('fixture-tool-status', pendingStatusInput),
+                  undefined,
+                  run,
+                  job,
+                ),
+              ).rejects.toMatchObject({ statusCode: 403 });
+              await sessionRpc(host, browser, 'session/cancel', { sessionId });
+              await expect.poll(() => cancelAccepted).toBe(true);
+            } else if (mode === 'close') {
+              await host.close();
+              await job.close();
+              expect(await owner()).toBe(generation);
+            } else {
+              const activeLease = await lease();
+              expect(activeLease.run_id).toBeTruthy();
+              pauseSettlement = holdCheckoutResult(
+                (sql, params) =>
+                  sql.startsWith('update "command_receipt"') &&
+                  params.some(
+                    (entry) =>
+                      Array.isArray(entry) && entry.includes(job.commandId),
+                  ) &&
+                  params.some(
+                    (entry) =>
+                      Array.isArray(entry) &&
+                      entry.some(
+                        (value) =>
+                          typeof value === 'string' &&
+                          value.includes('"stop":"confirmed"'),
+                      ),
+                  ),
+              );
+              const child = Reflect.get(host, 'process') as ChildProcess;
+              expect(child.connected).toBe(true);
+              child.disconnect();
+              await pauseSettlement.persisted.wait();
+              expect(host.signal.aborted).toBe(true);
+              const closed = (async () => {
+                await host.close();
+                await job.close();
+                await bff.close();
+              })();
+              void closed.catch(() => {});
+              expect(await owner()).toBe(generation);
+              expect(await lease()).toMatchObject({
+                run_id: activeLease.run_id,
+              });
+              expect(() => process.kill(-pid, 0)).toThrow(
+                expect.objectContaining({ code: 'ESRCH' }),
+              );
+              pauseSettlement.finish.resolve();
+              await closed;
+              expect(await owner()).toBeNull();
+              app = undefined;
+            }
+            await expect
+              .poll(async () => (await receipt(job.commandId))?.status)
+              .toBe('finished');
+            expect(await receipt(job.commandId), mode).toMatchObject({
+              status: 'finished',
+              result: { status: 'aborted', stop: 'confirmed' },
+            });
+            for (const target of [pid, -pid])
+              expect(() => process.kill(target, 0)).toThrow(
+                expect.objectContaining({ code: 'ESRCH' }),
+              );
+            releaseStatus?.resolve();
+          }
+          if (mode === 'once') {
+            await expect
+              .poll(() => modelResults.length, { timeout: 10_000 })
+              .toBe(1);
+            expect(lostAcknowledgment).toBe(true);
+            expect(await receipt(job.commandId)).toMatchObject({
+              status: 'finished',
+              result: { status: 'ok', stop: 'confirmed' },
+            });
+            expect(modelResults).toEqual([
+              expect.objectContaining({
+                role: 'tool',
+                tool_call_id: callId,
+                content: 'RDWS fixture worktree state: ok',
+              }),
+            ]);
+            expect(
+              controls.filter(
+                (operation) => operation === 'fixture-tool-begin',
+              ),
+            ).toHaveLength(1);
+            expect(controls).toContain('fixture-tool-status');
+            const all = await events();
+            const call = all.find(({ type }) => type === 'tool/call');
+            expect(
+              all.find(({ type }) => type === 'tool/result'),
+            ).toMatchObject({
+              sourceEventSeqs: [call?.seq],
+              data: { message: { toolCallId: callId } },
+            });
+          }
+          if (mode === 'stale') {
+            await expect.poll(() => staleDenied).toBe(true);
+            expect(controls).not.toContain('fixture-tool-begin');
+            expect(await receipt(job.commandId)).toBeUndefined();
+          }
+          if (mode === 'deadline' || mode === 'prestart-cancel') {
+            await expect
+              .poll(async () => (await receipt(job.commandId))?.status)
+              .toBe('finished');
+            expect(await receipt(job.commandId)).toMatchObject({
+              status: 'finished',
+              result: { status: 'aborted', stop: 'not-started' },
+            });
+            expect(output).toBe('');
+            if (mode === 'deadline')
+              await expect
+                .poll(
+                  async () =>
+                    (await events()).find(({ type }) => type === 'tool/result')
+                      ?.data,
+                )
+                .toMatchObject({
+                  message: { toolCallId: callId, isError: true },
+                });
+          }
+          releaseNativeSteps?.resolve();
+          expect(await readFile(file, 'utf8')).toBe('baseline|real-fd3');
+          if (mode !== 'disconnect') {
+            await host.close();
+            await job.close();
+            expect(await lease()).toMatchObject({
+              phase: 'held',
+              generation: grant.generation,
+              run_id: null,
+            });
+            expect(
+              await broker.release(scope, grant.generation, randomUUID()),
+            ).toBe('released');
+          }
+          work.delete(job);
+        } finally {
+          releaseStatus?.resolve();
+          releaseNativeSteps?.resolve();
+          for (const paused of [pauseStart, pauseSettlement]) {
+            paused?.finish.resolve();
+            paused?.restore();
+          }
+        }
+      }
+    } finally {
+      const hostsClosed = await Promise.allSettled(
+        hosts.map((host) => host.close()),
+      );
+      const jobsClosed = await Promise.allSettled(
+        [...work].map((job) => job.close()),
+      );
+      failedCleanup = [...hostsClosed, ...jobsClosed].find(
+        (result): result is PromiseRejectedResult =>
+          result.status === 'rejected',
+      );
+      try {
+        if (!failedCleanup) await app?.close();
+      } finally {
+        await trees?.close();
+        await mirrors?.close();
+        await source?.close();
+        await lab.close();
+      }
+    }
+    if (failedCleanup) throw failedCleanup.reason;
+  },
+  90_000,
+);
 
 function latch() {
   let resolve!: () => void;

@@ -1519,6 +1519,20 @@
   <p>在预准备停点先取消单次调用，数据库仍保留 <code>held</code> 和原占位。随后由原持有者主动释放，沿原 <code>draining</code> 定序确认 <code>released</code>。在另一个隔离工作树上有针对性截留真实进程组停止信号，读取到 <code>unknown</code>、旧写代与占位保留，新执行被拒。复审要求异常收尾也复核目标组归属并有界核对组消失，实际夹具通过。现有按代撤权、到期和提交失确认路径随相邻套件回归。</p>
   <p>最新定点 <code>pnpm test tests/integration/write-handoff.test.ts</code> 返回 0，1 项。邻域 <code>caffeinate -i pnpm test tests/integration/{write-handoff,shared-write-authority,native-tool-authority-boundary,local-execution}.test.ts</code> 返回 0，4 文件、33 项。最终整仓 <code>caffeinate -i pnpm test</code> 返回 0，54 文件、320 项通过、1 项条件跳过。类型、lint、当前 Git 文件的 Prettier 检查、构建和基线均通过。父 Broker 部分在本地提交 <code>feat: cancel individual write broker calls</code>，正式 Native 执行与编队继续按 T07 联合验收。</p>
 
+  <h4 id="t07-native-broker-control-20261120">11.20.10 T07 正式 Native Host 与父 Broker 执行联测</h4>
+  <p>Change / R3，基线 <code>d32e524</code>。沿 I2-AUTH、I3-WRITE、I3-CONTEXT、台账 §8.15 和 §11.20.5–9，证明正式锁版 Native 执行对象通过现有 FD3 调用同进程受管 BFF 的父 Broker，真实修改隔离工作树，结果经合成 FD4 进入下一模型步骤。双面技术裁决选用短 <code>begin</code>、<code>status</code>、<code>cancel</code> 与父端独立等待；首个固定动作只需结构化终态。程序化隔离装配用独立正式 mediated Host、合成模型、与现有 paused BFF 同一受管 PostgreSQL。生产模型正文、公开写入口和编队继续按其验收条件接续。</p>
+  <ol>
+    <li>父端在现有测试限定的单次许可中固定 Host、原运行、项目需求、本人会话、原登录、对端、Agent、当前步、原生调用事件与参数摘要，同时固定写代和该步读取的数据库上下文版本。原参数在锁版工具守卫校验为空，具体执行动作由可信父夹具固定。许可同时登记原作业键；控制操作复用现有签名、正文摘要、nonce 和 FD3 大小期限，每次只访问该原键。默认装配保持原门槛。</li>
+    <li><code>begin</code> 在真实当前步、签名绝对许可和 FD3 短请求期限有效时同步登记并只受理一次，父端持有实际 Broker Promise，受理回包与执行分开。原 Host 作业键、Native 运行 ID 和 Broker 持久执行 ID 分别保存。回包丢失后用同作业和新 nonce 回查，<code>status</code> 仅读原登录有权查看的有限投影。<code>cancel</code> 在原步撤回后仍可用新签名停止同一个作业，先于 begin 时在该父作业登记禁新标记。控制与回查用独立短期限，子端每次只轮询一个原作业，父端一个已配置作业、一个有界在途状态查询，取消和上下文调用保持可达。Broker 最终持锁同步起跑前再核当前步、Host 存活、写代、冻结版本、取消和绝对起跑截止。已开始的执行沿原生命周期和 T06 独立上限。</li>
+    <li>父端在原步替换、关闭、运行撤销或 Host 断开时先关闭对应作业准入并停止任务。隔离夹具显式负责先停独立 Host、等待父端 Broker 执行与持久结算，再关闭 paused BFF 归还受管所有者。真实独立 Host 主动关闭与继承 IPC 异常断开均沿此路径；活执行掉线后卡住持久终态确认时，独立读回旧 PG owner 与占位。已知停稳按原回执清理，未知或标记仍在时保留旧写代及占位。工具只返回有限状态，不携带工作树正文、凭据或进程输出。错作业、旧步、原票重放和同作业重复 begin 均不能重启。</li>
+    <li>真实锁版 Host、FD3、合成 FD4、隔离 PostgreSQL 与 T06 工作树联测覆盖一次写入及原关联结果。父端实际登记后丢弃受理回包，验证 Native 按同键回查、Broker 回执及文件只写一次。独立核对错作业无状态、过旧步骤零启动；冻结版本反例保持当前数据库版本与有效写代匹配，仅 Native 步骤冻结版本过旧；另在 begin 已受理且真实预留之后卡最后 SQL 起跑，越过绝对截止再验证零启动和原键终态。SDK 原生 <code>session/cancel</code> 经子端发送同作业 FD3 取消，测试分别覆盖起跑前零执行和活组退出且仍有效写代续用。关停对照验证状态占位时取消或上下文仍可达，以及持久步受阻时 DB owner 尚未归还。停稳失确认沿 §11.20.9 的真实 Broker 反例。先跑定点与相邻套件，再跑双面交付复审、类型、lint、格式、构建、整仓和基线。回退单批提交前先排空受理作业，保留原键及未确认占位。</li>
+  </ol>
+
+  <p id="t07-native-broker-control-evidence-20261120">方案及交付双面独立复审 APPROVE。真实锁版 mediated Host 通过 FD3 向同进程受管 paused BFF 的父 Broker 受理固定测试工具，在真实隔离工作树中只追加一次。实际丢弃受理回包后同原作业回查。独立 PostgreSQL 确认原键 <code>finished</code>、<code>ok</code> 和进程组确认停稳，下一合成模型请求收到对应原生结果。另用新签名重复受理获取同一确认，错作业状态拒绝。返回投影只有有限状态，只有 <code>ok</code> 产生原生工具成功。</p>
+  <p>数据库当前版本与写代均为 2 时，冻结版本 1 的 Native 步骤在许可处被拒。另以实际预留与最终持锁 SQL 为停点，越过绝对起跑期限后确认零启动、同键未启动终态及原生错误。复审要求把状态占位放入真实授权读取。同作业的新 nonce 第二次查询被拒，真实 SDK 取消仍经 FD3 到达父端，并在自动步骤释放被延迟时独立完成原调用停止。起跑前取消零执行，启动后确认子进程和组退出，保留仍有效的原写代。</p>
+  <p>活动 Host 主动关闭与实际继承 IPC 异常断开分别取证。异常断开先触发物理停止，再在原 Broker 持久结算处阻塞，独立 PostgreSQL 读回旧 owner 和执行占位。夹具联合关停在放开持久结算并排空任务后交还 owner，复审确认失败侧保持归还门槛。测试合计七组隔离情形，生产配线与编队验收仍随 T07 推进。</p>
+  <p>最新定点 <code>pnpm test tests/integration/shared-write-authority.test.ts -t 'formal Native Host drives'</code> 通过 1 项。邻域 <code>pnpm test tests/integration/{shared-write-authority,native-tool-authority-boundary,write-handoff,local-execution,context-sync}.test.ts</code> 通过 5 文件、46 项。最终整仓 <code>caffeinate -i pnpm test</code> 返回 0，54 文件、321 项通过、1 项条件跳过。类型、lint、当前 Git 文件的 Prettier 检查、构建及基线通过。本地提交 <code>feat: connect native tool controls to the write broker</code> 记录本切片。下一阶段双面裁决将真实登录的同 BFF Workbench Prompt、精确工具正文和实际回环 TLS 首写放入同一隔离联合验收。</p>
+
   <h3 id="t11-maintenance-acceptance-20261119">11.21 T11 已确认的导入与人员维护</h3>
   <p>2026-11-19 用户确认需求批量导入采用同页的上传、预览、修正与整批提交。上传后动态显示解析和校验进度，下方逐条呈现需求明细、状态与可定位的问题。用户可在同页修正并重新校验。预览和校验阶段不写业务数据。全部通过后由用户显式整批提交入库，提交结果继续在同页逐条呈现。</p>
   <p>参与者和开发负责人维护按当前项目角色授权。移除参与者或更换负责人时，相关未完成子任务须显式交给当前具备资格的接手人，并保留原分派记录。验收覆盖无资格接手、已有分派记录保留，以及原有阶段与任务按钮权限。</p>

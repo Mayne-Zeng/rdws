@@ -148,6 +148,7 @@
   - 已本地交付联测：[锁版 Native 工具与父 Broker](02-directory-and-engineering-design.html#t07-native-parent-broker-evidence-20261120)。实际工具经测试 IPC 调用受管 BFF Broker，验证一次写入、原键复核、旧代拒绝、释放在途拒新及停稳换代。双面复审、邻域 22 项、整仓 309 项和基线通过。
   - 已本地交付联测：[正式 Native Host 单次工具授权](02-directory-and-engineering-design.html#t07-native-host-tool-permit-evidence-20261120)。经真实私有 IPC 验证原运行、当步、参数、时限与一次消费，拒绝错会话及取消后迟到许可，实际合成模型续步收到原关联结果。双面复审、整仓 320 项和基线通过。真实工作树写入与物理取消继续接线。
   - 已本地交付子项：[父 Broker 逐调用取消](02-directory-and-engineering-design.html#t07-broker-call-cancel-evidence-20261120)。真实 PostgreSQL 和 macOS 用例覆盖起跑前零写入、实际进程组退出、原键回读、写代续用、主动释放交错和停稳不明时保留占位。双面复审、邻域 33 项、整仓 320 项和基线通过。正式 Native 与父 Broker 的执行控制继续接线。
+  - 已本地交付联测：[正式 Native 与父 Broker 执行控制](02-directory-and-engineering-design.html#t07-native-broker-control-evidence-20261120)。真实短 IPC、隔离 PG 和 T06 验证一次写入、失答按原键回查、原生取消、主动关闭及断连后物理停稳。双面复审、邻域 46 项、整仓 321 项和基线通过。同一 BFF Workbench 入口、工具精确出站与编队仍待联合验收。
   - 来源：I2-AUTH、I3-WRITE、I3-CONTEXT。
 
 - [ ] **T08 · 变更查看与交付快照**

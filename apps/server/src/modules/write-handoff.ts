@@ -51,6 +51,7 @@ type Settlement = {
 type Grant = { generation: string; expiresAt: number; contextVersion: number };
 type IssuedGrant = Grant & { ownerGeneration: string };
 type OnOutput = NonNullable<Parameters<typeof runMacosWorktree>[3]>['onOutput'];
+type BeforeCallStart = (contextVersion: number) => void;
 type Running = {
   requirementId: string;
   generation: string;
@@ -604,6 +605,7 @@ export function createOwnedWriteHandoff(
     input: Invocation,
     onOutput?: OnOutput,
     callSignal?: AbortSignal,
+    beforeCallStart?: BeforeCallStart,
   ) {
     await recoverReleases();
     const saved = [...settlements.values()].find(
@@ -746,6 +748,7 @@ export function createOwnedWriteHandoff(
               scope,
             );
             confirmConnection();
+            beforeCallStart?.(snapshot.requirement.contextVersion);
             signal.throwIfAborted();
             start();
             started = true;
@@ -941,6 +944,7 @@ export function createOwnedWriteHandoff(
     input: Invocation,
     onOutput?: OnOutput,
     signal?: AbortSignal,
+    beforeCallStart?: BeforeCallStart,
   ) {
     const key = digestOf([
       scope.requirementId,
@@ -950,7 +954,7 @@ export function createOwnedWriteHandoff(
     if (pendingCalls.has(key)) businessError(409, '原执行正在处理，请稍后核对');
     pendingCalls.add(key);
     try {
-      return await execute(scope, input, onOutput, signal);
+      return await execute(scope, input, onOutput, signal, beforeCallStart);
     } finally {
       pendingCalls.delete(key);
     }
@@ -964,6 +968,7 @@ export function createOwnedWriteHandoff(
       input: Invocation,
       onOutput?: OnOutput,
       signal?: AbortSignal,
+      beforeCallStart?: BeforeCallStart,
     ) =>
       admit(() =>
         submit(
@@ -971,6 +976,7 @@ export function createOwnedWriteHandoff(
           structuredClone(input),
           onOutput,
           signal,
+          beforeCallStart,
         ),
       ),
     release: (scope: Scope, generation: string, commandId: string) =>

@@ -6,6 +6,8 @@ import {
   readDeepSeekMessagesEvidence,
 } from '../../apps/server/src/modules/model-attachment-evidence.ts';
 
+import { workingDirectorySpan } from '../../dsh/plugins/rdws-access/context.mjs';
+
 const model = 'fixture-vision';
 const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const fileName = 'dsh-0123456789abcdef-01234567.png';
@@ -245,19 +247,22 @@ test('projects only signed generated positions while preserving the independent 
       ...message,
       messages: [{ role: 'user', content }, message.messages[1]],
     });
+  const userContentSha256 = sha(
+    JSON.stringify([
+      ['text', handleA.text],
+      ['image'],
+      ['image'],
+      ['text', literal.text],
+      ['image'],
+    ]),
+  );
   const proof = {
+    workingDirectoryEdits: [],
+    projectedUserContentSha256: userContentSha256,
     imageHandleDigests: [handleA, handleB, handleA].map(({ text }) =>
       sha(JSON.stringify(text)),
     ),
-    userContentSha256: sha(
-      JSON.stringify([
-        ['text', handleA.text],
-        ['image'],
-        ['image'],
-        ['text', literal.text],
-        ['image'],
-      ]),
-    ),
+    userContentSha256,
   };
   const raw = payload([
     handleA,
@@ -312,9 +317,194 @@ test('projects only signed generated positions while preserving the independent 
   const plain = {
     imageHandleDigests: [],
     userContentSha256: sha(JSON.stringify([['text', literal.text]])),
+    workingDirectoryEdits: [],
+    projectedUserContentSha256: sha(JSON.stringify([['text', literal.text]])),
   };
   expect(project(textOnly, plain)?.body).toBe(textOnly);
   expect(
     project(textOnly, { ...plain, userContentSha256: sha('[]') }),
   ).toBeUndefined();
+});
+
+const directoryName = 'working-directory:current';
+const initialReminder =
+  '<system-reminder>\nThe following information describes your current session:\n\n';
+const updatedReminder =
+  '<system-reminder>\nThe following information describes your current session. It replaces earlier versions of this context, including any retained in conversation summaries.\n\n';
+const runtimeReminder = (
+  sections: { name: string; text: string }[],
+  opening = initialReminder,
+) => ({
+  role: 'user',
+  content: [
+    {
+      type: 'text',
+      text:
+        opening +
+        sections
+          .map(({ text }) => text)
+          .join('\n\n')
+          .replace(/<\/system-reminder\s*>/gi, (tag) => '<\\' + tag.slice(1)) +
+        '\n</system-reminder>',
+    },
+  ],
+  source: { kind: 'runtime-context', form: 'snapshot', sections },
+});
+
+const originalDirectory = {
+  name: directoryName,
+  text:
+    'Current working directory: ' +
+    JSON.stringify('/fixture/🧪/</system-reminder>') +
+    '.',
+};
+const retained = {
+  name: 'fixture:retained',
+  text: 'Other 🧩 facts </SYSTEM-REMINDER > remain.',
+};
+const projectedDirectory = {
+  ...originalDirectory,
+  text: 'Current working directory: ".".',
+};
+
+test('proves the exact directory span only in a typed locked Native reminder', () => {
+  for (const opening of [initialReminder, updatedReminder]) {
+    const input = runtimeReminder(
+      [retained, originalDirectory, retained],
+      opening,
+    );
+    const serialized = JSON.stringify(input);
+    const { start, end } = workingDirectorySpan(input)!;
+    const { text } = input.content[0]!;
+    expect(text!.slice(start, end)).toBe('"/fixture/🧪/<\\/system-reminder>"');
+    expect(text!.slice(0, start) + '"."' + text!.slice(end)).toBe(
+      runtimeReminder([retained, projectedDirectory, retained], opening)
+        .content[0]!.text,
+    );
+    expect(JSON.stringify(input)).toBe(serialized);
+    expect(
+      workingDirectorySpan({ ...input, source: { kind: 'user' } }),
+    ).toBeUndefined();
+  }
+
+  const cleared = {
+    ...runtimeReminder([]),
+    content: [
+      {
+        type: 'text',
+        text: '<system-reminder>\nCurrent runtime context: none. Earlier runtime-context snapshots no longer apply.\n</system-reminder>',
+      },
+    ],
+  };
+  expect(workingDirectorySpan(cleared)).toBeUndefined();
+  expect(workingDirectorySpan(runtimeReminder([retained]))).toBeUndefined();
+  const known = runtimeReminder([originalDirectory]);
+  for (const invalid of [
+    { ...known, source: { kind: 'runtime-context' } },
+    { ...known, source: { kind: 'working-directory' } },
+    {
+      ...known,
+      content: [{ type: 'text', text: known.content[0]!.text + 'extra' }],
+    },
+    { ...known, role: 'assistant' },
+    runtimeReminder([]),
+    runtimeReminder([originalDirectory, originalDirectory]),
+    runtimeReminder([originalDirectory, { name: 'fixture:empty', text: '' }]),
+    runtimeReminder([
+      {
+        ...originalDirectory,
+        text: 'Current working directory: "./relative".',
+      },
+    ]),
+    runtimeReminder([
+      { ...originalDirectory, text: 'Current working directory: "/fixture" .' },
+    ]),
+  ])
+    expect(() => workingDirectorySpan(invalid)).toThrow(
+      'Native attachment evidence unavailable',
+    );
+});
+
+test('checks both signed sequences and edits only their trusted user text coordinates', () => {
+  const first = runtimeReminder([retained, originalDirectory]);
+  const later = runtimeReminder([originalDirectory, retained], updatedReminder);
+  const projectedFirst = runtimeReminder([retained, projectedDirectory]);
+  const projectedLater = runtimeReminder(
+    [projectedDirectory, retained],
+    updatedReminder,
+  );
+  const fake = { type: 'text', text: first.content[0]!.text };
+  const before = wireMessage({
+    ...message,
+    messages: [
+      { role: 'user', content: [...first.content, fake] },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'independent reply' }],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Synthetic native handle' },
+          inline,
+          ...later.content,
+        ],
+      },
+    ],
+  });
+  const expected = wireMessage({
+    ...message,
+    messages: [
+      { role: 'user', content: [...projectedFirst.content, fake] },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'independent reply' }],
+      },
+      { role: 'user', content: [inline, ...projectedLater.content] },
+    ],
+  });
+  const userContent = (firstText: string, finalText: string) =>
+    sha(
+      JSON.stringify([
+        ['text', firstText],
+        ['text', fake.text],
+        ['image'],
+        ['text', finalText],
+      ]),
+    );
+  const proof = {
+    imageHandleDigests: [sha(JSON.stringify('Synthetic native handle'))],
+    userContentSha256: userContent(
+      first.content[0]!.text,
+      later.content[0]!.text,
+    ),
+    projectedUserContentSha256: userContent(
+      projectedFirst.content[0]!.text,
+      projectedLater.content[0]!.text,
+    ),
+    workingDirectoryEdits: [
+      { index: 0, ...workingDirectorySpan(first)! },
+      { index: 3, ...workingDirectorySpan(later)! },
+    ],
+  };
+  const project = (commitment = proof) =>
+    projectDeepSeekMessages(before, 'application/json', model, commitment);
+  expect(project()?.body.equals(expected)).toBe(true);
+  const [one, two] = proof.workingDirectoryEdits;
+  for (const workingDirectoryEdits of [
+    [],
+    [two!, one!],
+    [one!, { ...two!, index: 2 }],
+    [one!, { ...two!, end: later.content[0]!.text.length + 1 }],
+    [one!, { ...two!, start: two!.start + 1 }],
+    [one!, { ...two!, index: 0 }],
+    [{ ...one!, index: 1 }, two!],
+  ])
+    expect(Boolean(project({ ...proof, workingDirectoryEdits }))).toBe(false);
+  expect(Boolean(project({ ...proof, userContentSha256: sha('[]') }))).toBe(
+    false,
+  );
+  expect(
+    Boolean(project({ ...proof, projectedUserContentSha256: sha('[]') })),
+  ).toBe(false);
 });

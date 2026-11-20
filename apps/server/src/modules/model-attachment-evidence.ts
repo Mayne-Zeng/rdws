@@ -3,6 +3,7 @@ import { isRecord, onlyKeys } from '@rdws/dsh/access';
 
 const bodyLimit = 1024 * 1024;
 const imageLimit = 600;
+const directoryEditLimit = 64;
 const multipartType =
   /^multipart\/form-data; boundary=(----formdata-undici-[0-9]{12})$/;
 const fileHeader =
@@ -252,6 +253,50 @@ export function readDeepSeekMessagesEvidence(
   return inspectDeepSeekMessages(body, contentType, model)?.evidence;
 }
 
+export type WorkingDirectoryEdit = Readonly<{
+  index: number;
+  start: number;
+  end: number;
+}>;
+
+export function readWorkingDirectoryEdits(value: unknown) {
+  if (!Array.isArray(value) || value.length > directoryEditLimit) return;
+  const bounded = (position: unknown): position is number =>
+    typeof position === 'number' &&
+    Number.isSafeInteger(position) &&
+    position >= 0 &&
+    position <= bodyLimit;
+  const edits: WorkingDirectoryEdit[] = [];
+  let previous = -1;
+  for (const edit of value) {
+    if (
+      !isRecord(edit) ||
+      !onlyKeys(edit, ['index', 'start', 'end']) ||
+      !bounded(edit.index) ||
+      !bounded(edit.start) ||
+      !bounded(edit.end) ||
+      edit.index <= previous ||
+      edit.end <= edit.start
+    )
+      return;
+    edits.push(
+      Object.freeze({ index: edit.index, start: edit.start, end: edit.end }),
+    );
+    previous = edit.index;
+  }
+  return Object.freeze(edits);
+}
+
+function userContentDigest(blocks: readonly Record<string, unknown>[]) {
+  return digest(
+    JSON.stringify(
+      blocks.map(({ type, text }) =>
+        type === 'text' ? ['text', text] : ['image'],
+      ),
+    ),
+  );
+}
+
 export function projectDeepSeekMessages(
   body: Buffer,
   contentType: string,
@@ -259,6 +304,8 @@ export function projectDeepSeekMessages(
   proof: {
     imageHandleDigests: readonly string[];
     userContentSha256: string;
+    workingDirectoryEdits: readonly WorkingDirectoryEdit[];
+    projectedUserContentSha256: string;
   },
 ) {
   const parsed = inspectDeepSeekMessages(body, contentType, model);
@@ -294,18 +341,32 @@ export function projectDeepSeekMessages(
         }
       : message;
   });
-  const userContent = messages
+  const userBlocks = messages
     .filter(({ role }) => role === 'user')
-    .flatMap(({ content }) =>
-      content.map(({ type, text }) =>
-        type === 'text' ? ['text', text] : ['image'],
-      ),
-    );
-  if (digest(JSON.stringify(userContent)) !== proof.userContentSha256) return;
+    .flatMap(({ content }) => content);
+  if (userContentDigest(userBlocks) !== proof.userContentSha256) return;
+  const edits = readWorkingDirectoryEdits(proof.workingDirectoryEdits);
+  if (!edits) return;
+  for (const { index, start, end } of edits) {
+    const block = userBlocks[index];
+    if (
+      block?.type !== 'text' ||
+      typeof block.text !== 'string' ||
+      end > block.text.length ||
+      end - start < 3 ||
+      block.text[start] !== '"' ||
+      block.text[end - 1] !== '"'
+    )
+      return;
+    block.text = block.text.slice(0, start) + '"."' + block.text.slice(end);
+  }
+  if (userContentDigest(userBlocks) !== proof.projectedUserContentSha256)
+    return;
   return {
     evidence: parsed.evidence,
-    body: removals.size
-      ? Buffer.from(JSON.stringify({ ...parsed.value, messages }))
-      : body,
+    body:
+      removals.size || edits.length
+        ? Buffer.from(JSON.stringify({ ...parsed.value, messages }))
+        : body,
   };
 }

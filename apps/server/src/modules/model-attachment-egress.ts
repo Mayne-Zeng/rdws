@@ -9,6 +9,7 @@ import {
   projectDeepSeekMessages,
   readDeepSeekFilesEvidence,
   type readDeepSeekMessagesEvidence,
+  type WorkingDirectoryEdit,
 } from './model-attachment-evidence.ts';
 
 type FilesEvidence = NonNullable<ReturnType<typeof readDeepSeekFilesEvidence>>;
@@ -27,6 +28,8 @@ export type AttachmentManifest = Readonly<{
   images: readonly Readonly<Image>[];
   imageHandleDigests: readonly string[];
   userContentSha256: string;
+  workingDirectoryEdits: readonly WorkingDirectoryEdit[];
+  projectedUserContentSha256: string;
 }>;
 
 type UploadScope = {
@@ -86,6 +89,12 @@ const manifestKey = (scope: AttachmentManifest) =>
     scope.images.map(imageKey),
     scope.imageHandleDigests,
     scope.userContentSha256,
+    scope.workingDirectoryEdits.map(({ index, start, end }) => [
+      index,
+      start,
+      end,
+    ]),
+    scope.projectedUserContentSha256,
   ]);
 
 async function readBytes(
@@ -281,6 +290,9 @@ export function createLoopbackAttachmentEgress(
       ...trusted,
       images: trusted.images.map((image) => ({ ...image })),
       imageHandleDigests: [...trusted.imageHandleDigests],
+      workingDirectoryEdits: trusted.workingDirectoryEdits.map((edit) => ({
+        ...edit,
+      })),
     };
     const bound = manifestKey(manifest);
     const identity = identityKey(manifest);

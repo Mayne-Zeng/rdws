@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test, vi } from 'vitest';
 import { bodyHash, signGrant, verifyGrant } from '@rdws/dsh/access';
+import type { WorkingDirectoryEdit } from '../../apps/server/src/modules/model-attachment-evidence.ts';
 import { ContextRuns } from '../../apps/server/src/modules/runtime-context.ts';
 
 const route = 'https://fixture.invalid/v1/chat/completions';
@@ -514,6 +515,8 @@ test('the attachment grant binds the original batch and retires by call', async 
     bindingId,
     images: [image],
     userContentSha256,
+    workingDirectoryEdits: [] as readonly WorkingDirectoryEdit[],
+    projectedUserContentSha256: userContentSha256,
   };
   const prepare = (input = frame, hostGeneration?: string) =>
     f.runs.handle(
@@ -530,6 +533,20 @@ test('the attachment grant binds the original batch and retires by call', async 
     { ...frame, projectId: 'untrusted-project' },
     { ...frame, images: [{ ...image, handleSha256: 'synthetic-raw-handle' }] },
     { ...frame, userContentSha256: 'synthetic-raw-user-content' },
+    { ...frame, projectedUserContentSha256: '0'.repeat(64) },
+    {
+      ...frame,
+      workingDirectoryEdits: [
+        { index: 2, start: 1, end: 5 },
+        { index: 1, start: 1, end: 5 },
+      ],
+    },
+    {
+      ...frame,
+      workingDirectoryEdits: [
+        { index: 0, start: 1, end: 5, path: '/synthetic/private' },
+      ],
+    },
   ])
     await expect(prepare(invalid)).rejects.toMatchObject({ statusCode: 403 });
   await expect(prepare(frame, randomUUID())).rejects.toMatchObject({
@@ -564,6 +581,8 @@ test('the attachment grant binds the original batch and retires by call', async 
     bindingId,
     images: [{ bytes: 20, mediaType: 'image/png', sha256: 'b'.repeat(64) }],
     userContentSha256,
+    workingDirectoryEdits: [],
+    projectedUserContentSha256: userContentSha256,
     imageHandleDigests: [image.handleSha256],
   };
   expect(f.runs.attachmentManifestFor(wire)).toEqual(policy);

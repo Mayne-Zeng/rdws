@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 
 export const name = 'test-native-attachment-variant';
-export const inject = ['attachments', 'llm'];
+export const inject = ['attachments', 'llm', 'systemPrompt'];
 
 const image = {
   type: 'image',
@@ -31,8 +31,15 @@ const identity = (message) => ({
 
 export function apply(
   ctx,
-  { accepted, late, evidencePath, repeatImages, file },
+  { accepted, late, evidencePath, repeatImages, file, runtimeNote },
 ) {
+  if (runtimeNote)
+    ctx.systemPrompt.context({
+      name: 'fixture:retained-runtime',
+      order: -1000,
+      interpolate: false,
+      text: () => runtimeNote,
+    });
   const attachments = ctx.attachments;
   const scope = new AsyncLocalStorage();
   const inserted = new Map();

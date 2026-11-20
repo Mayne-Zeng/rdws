@@ -12,6 +12,7 @@ import {
   type createBusiness,
 } from './business.ts';
 import type { AttachmentManifest } from './model-attachment-egress.ts';
+import { readWorkingDirectoryEdits } from './model-attachment-evidence.ts';
 type Detail = Awaited<ReturnType<ReturnType<typeof createBusiness>['read']>>;
 export function contextSnapshot(data: Detail) {
   const r = data.requirement;
@@ -406,7 +407,14 @@ export class ContextRuns {
         'modelStep',
         'bindingId',
         'callId',
-        ...(closing ? [] : ['images', 'userContentSha256']),
+        ...(closing
+          ? []
+          : [
+              'images',
+              'userContentSha256',
+              'workingDirectoryEdits',
+              'projectedUserContentSha256',
+            ]),
       ]) ||
       Object.entries(this.binding(run)).some(
         ([key, value]) => input[key] !== value,
@@ -435,6 +443,9 @@ export class ContextRuns {
     }
     if (step.attachment && step.attachment.validBefore <= Date.now())
       step.attachment = undefined;
+    const workingDirectoryEdits = readWorkingDirectoryEdits(
+      input.workingDirectoryEdits,
+    );
     if (
       calls.size >= maxAttachmentCalls ||
       calls.has(callId) ||
@@ -443,6 +454,11 @@ export class ContextRuns {
       step.wireAttempt !== undefined ||
       typeof input.userContentSha256 !== 'string' ||
       !imageDigest.test(input.userContentSha256) ||
+      typeof input.projectedUserContentSha256 !== 'string' ||
+      !imageDigest.test(input.projectedUserContentSha256) ||
+      !workingDirectoryEdits ||
+      (!workingDirectoryEdits.length &&
+        input.projectedUserContentSha256 !== input.userContentSha256) ||
       !Array.isArray(input.images) ||
       input.images.length > maxAttachmentOccurrences
     )
@@ -525,6 +541,8 @@ export class ContextRuns {
         images: Object.freeze(images),
         imageHandleDigests: Object.freeze(imageHandleDigests),
         userContentSha256: input.userContentSha256,
+        workingDirectoryEdits,
+        projectedUserContentSha256: input.projectedUserContentSha256,
       }),
     };
     return { bindingId: step.id, callId, grant };

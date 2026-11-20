@@ -35,6 +35,10 @@ import { modelTlsCertificate } from '../helpers/model-tls.ts';
 const fixtureCredential = 'synthetic-variant-only';
 const receiptId = 'synthetic-native-variant';
 const authoredPath = '/fixture-user/explicit-attachment-context';
+const runtimeNote =
+  'Synthetic retained runtime fact 🧩 with literal </SYSTEM-REMINDER >.';
+const directoryNote = (path: string) =>
+  'Current working directory: ' + JSON.stringify(path) + '.';
 const credentialGeneration = 'native-variant-fixture';
 const sha = (value: Buffer | string) =>
   createHash('sha256').update(value).digest('hex');
@@ -95,6 +99,7 @@ function observeMessages(
   wire: Buffer,
   contentType: string | null,
   model: string,
+  cwd?: string,
 ) {
   const request = readDeepSeekMessagesEvidence(wire, contentType, model);
   if (!request) throw new Error('Expected locked Native Messages');
@@ -112,19 +117,69 @@ function observeMessages(
       image.blockIndex - 1,
       1,
     );
-  const userContent = decoded.messages
+  const userBlocks = decoded.messages
     .filter(({ role }) => role === 'user')
-    .flatMap(({ content }) =>
-      content.map(({ type, text }) =>
-        type === 'text' ? ['text', text] : ['image'],
+    .flatMap(({ content }) => content);
+  const userContentSha = () =>
+    sha(
+      JSON.stringify(
+        userBlocks.map(({ type, text }) =>
+          type === 'text' ? ['text', text] : ['image'],
+        ),
       ),
     );
+  const userContentSha256 = userContentSha();
+  const originalReminderDigests: string[] = [];
+  const workingDirectoryEdits = [];
+  if (cwd) {
+    const original = directoryNote(cwd);
+    for (const [index, block] of userBlocks.entries()) {
+      if (
+        block.type !== 'text' ||
+        !block.text?.startsWith('<system-reminder>\n') ||
+        !block.text.includes(original)
+      )
+        continue;
+      const start =
+        block.text.indexOf(original) + 'Current working directory: '.length;
+      workingDirectoryEdits.push({
+        index,
+        start,
+        end: start + JSON.stringify(cwd).length,
+      });
+      originalReminderDigests.push(sha(block.text));
+      block.text = block.text.replace(original, directoryNote('.'));
+    }
+  }
   return {
     handles,
     imageHandleDigests: handles.map((handle) => sha(JSON.stringify(handle))),
-    userContentSha256: sha(JSON.stringify(userContent)),
+    userContentSha256,
+    workingDirectoryEdits,
+    projectedUserContentSha256: userContentSha(),
+    originalReminderDigests,
     projectedSha256: sha(JSON.stringify(decoded)),
   };
+}
+
+function readTypedReminder(
+  snapshots: { data: Record<string, unknown> }[],
+  cwd: string,
+) {
+  expect(snapshots).toHaveLength(1);
+  const { id, content, source } = snapshots[0]!.data;
+  expect(id).toBeTypeOf('string');
+  expect(source).toMatchObject({
+    kind: 'runtime-context',
+    form: 'snapshot',
+    sections: expect.arrayContaining([
+      { name: 'working-directory:current', text: directoryNote(cwd) },
+      { name: 'fixture:retained-runtime', text: runtimeNote },
+    ]),
+  });
+  const text = (content as { text: string }[])[0]!.text;
+  expect(text.includes(directoryNote(cwd))).toBe(true);
+  return sha(text);
 }
 
 function syntheticMessages(model: string) {
@@ -178,12 +233,14 @@ test
     'native revoked',
     'native offload mixed',
     'native offload all',
+    'native text replay',
   ] as const)(
   'Native variant evidence follows the original claimed input with %s',
   async (transport) => {
     const useTls = transport !== 'inline';
     const nativeManifest = transport.startsWith('native ');
     const nativeInline = transport === 'native inline';
+    const textReplay = transport === 'native text replay';
     const loseAck = transport === 'native lost ACK';
     const revokeBeforeCarrier = transport === 'native revoked';
     const offload =
@@ -221,6 +278,7 @@ test
         nonce: string;
         requestId: string;
         requirementId: string;
+        cwd: string;
       }
     >();
     const contextReads: {
@@ -232,6 +290,7 @@ test
     let replies = 0;
     const receivedImages: Attempt['messageImages'][] = [];
     const receivedTextBoundaries: boolean[] = [];
+    const authoredFollowUpDigests: string[][] = [];
     const wireGrants = new Set<string>();
     const visibleGrants: boolean[] = [];
     const httpEntries: string[] = [];
@@ -372,10 +431,46 @@ test
                 });
                 response.end(receipt);
               } else if (path === '/v1/messages') {
+                const received = JSON.parse(wire.toString('utf8')) as {
+                  messages: {
+                    role: string;
+                    content: { type: string; text?: string }[];
+                  }[];
+                };
+                const userTexts = received.messages
+                  .filter(({ role }) => role === 'user')
+                  .flatMap(({ content }) =>
+                    content.flatMap(({ type, text }) =>
+                      type === 'text' && typeof text === 'string' ? [text] : [],
+                    ),
+                  );
+                const reminders = userTexts.filter((text) =>
+                  text.startsWith('<system-reminder>\n'),
+                );
+                authoredFollowUpDigests.push(
+                  userTexts
+                    .filter((text) =>
+                      text.startsWith('Synthetic follow-up text at'),
+                    )
+                    .map(sha),
+                );
                 receivedTextBoundaries.push(
                   !wire.includes(attachmentObjects) &&
                     !wire.includes('rdws-synthetic-picture-') &&
-                    wire.includes(authoredPath),
+                    wire.includes(authoredPath) &&
+                    (!nativeManifest ||
+                      (reminders.some(
+                        (text) =>
+                          text.includes(directoryNote('.')) &&
+                          text.includes('Synthetic retained runtime fact'),
+                      ) &&
+                        reminders.every(
+                          (text) =>
+                            !text.includes(
+                              'Current working directory: "' +
+                                join(root, 'projects', project, 'demands'),
+                            ),
+                        ))),
                 );
                 receivedImages.push(
                   readDeepSeekMessagesEvidence(
@@ -458,6 +553,7 @@ test
                         wire,
                         attempt.contentType,
                         request.call.model,
+                        originals.get(request.call.sessionId!)?.cwd,
                       );
                       attempt.projectedSha256 =
                         attempt.projection.projectedSha256;
@@ -572,6 +668,10 @@ test
                       ? projection.imageHandleDigests
                       : images.map(() => sha('Legacy Files fixture')),
                   userContentSha256: projection?.userContentSha256 ?? sha('[]'),
+                  workingDirectoryEdits:
+                    projection?.workingDirectoryEdits ?? [],
+                  projectedUserContentSha256:
+                    projection?.projectedUserContentSha256 ?? sha('[]'),
                 };
                 attempt.manifest = manifest;
                 attempts.push(attempt);
@@ -793,6 +893,7 @@ test
                   late,
                   evidencePath,
                   repeatImages: nativeManifest,
+                  runtimeNote: nativeManifest ? runtimeNote : undefined,
                   file,
                 },
               },
@@ -842,7 +943,7 @@ test
               workspaceId: workspace.workspaceId,
             },
           )) as { sessionId: string });
-        if (database) {
+        if (database && !reopened) {
           const { pool } = database;
           const { userId, authSessionId } = identity;
           await pool.query(
@@ -907,6 +1008,7 @@ test
           requestId,
           requirementId,
           nonce,
+          cwd: identity.cwd,
         });
         await host.control('run', {
           ...runs.admit(identity, requirementId, sessionId, requestId, nonce),
@@ -950,9 +1052,7 @@ test
         ).toEqual({ accepted: true });
         if (nativeManifest) {
           const currentTurn = async () =>
-            (await currentEvents()).find(
-              ({ type, data }) => type === 'turn/end' && data.turn === 1,
-            );
+            (await currentEvents()).find(({ type }) => type === 'turn/end');
           await expect
             .poll(async () => Boolean(await currentTurn()), { timeout: 15000 })
             .toBe(true);
@@ -961,6 +1061,12 @@ test
             kind: completed ? 'completed' : 'error',
           });
           const observed = await currentEvents();
+          const snapshots = observed.filter(
+            ({ type, data }) =>
+              type === 'user/message' &&
+              isRecord(data.source) &&
+              data.source.kind === 'runtime-context',
+          );
           const replies = observed.filter(
             ({ type }) => type === 'assistant/message',
           );
@@ -996,6 +1102,7 @@ test
             previousEvents,
             offloadCount,
             typedFile,
+            snapshots,
           };
         }
         const expectedRoutes =
@@ -1135,9 +1242,70 @@ test
           previousEvents,
           offloadCount: 0,
           typedFile: false,
+          snapshots: [],
         };
       }
 
+      if (textReplay) {
+        const first = await send(
+          'Synthetic initial text at ' + authoredPath,
+          true,
+        );
+        const reminder = readTypedReminder(first.snapshots, first.identity.cwd);
+        const laterText =
+          'Synthetic follow-up text at ' +
+          authoredPath +
+          '\n' +
+          directoryNote(first.identity.cwd);
+        const later = await send(laterText, true, first);
+        expect(later.snapshots).toEqual([]);
+        expect(later.previousEvents).toContainEqual(first.snapshots[0]);
+        await host.close();
+        expect(carrierEntries).toEqual(['messages', 'messages']);
+        expect(httpEntries).toEqual(['/v1/messages', '/v1/messages']);
+        expect(authorityEntries).toBe(2);
+        expect(
+          lockReads.map(({ authSessionId, outcome }) => ({
+            authSessionId,
+            outcome,
+          })),
+        ).toEqual(
+          Array.from({ length: 2 }, () => ({
+            authSessionId: first.identity.authSessionId,
+            outcome: 'submitted',
+          })),
+        );
+        expect(registrations).toHaveLength(4);
+        expect(
+          new Set(nativeAttempts.map(({ bindingId }) => bindingId)).size,
+        ).toBe(2);
+        expect(receivedTextBoundaries).toEqual([true, true]);
+        expect(authoredFollowUpDigests).toEqual([[], [sha(laterText)]]);
+        expect(receivedImages).toEqual([[], []]);
+        expect(replies).toBe(2);
+        for (const attempt of nativeAttempts) {
+          expect(attempt.projection?.originalReminderDigests).toEqual([
+            reminder,
+          ]);
+          expect(attempt.projection?.workingDirectoryEdits).toHaveLength(1);
+          expect(attempt.manifest).toMatchObject({
+            images: [],
+            workingDirectoryEdits: attempt.projection?.workingDirectoryEdits,
+            userContentSha256: attempt.projection?.userContentSha256,
+            projectedUserContentSha256:
+              attempt.projection?.projectedUserContentSha256,
+          });
+        }
+        expect(
+          arrivals.map(({ method, wireSha256 }) => ({ method, wireSha256 })),
+        ).toEqual(
+          nativeAttempts.map(({ projectedSha256 }) => ({
+            method: 'POST',
+            wireSha256: projectedSha256,
+          })),
+        );
+        return;
+      }
       const warm = await send(accepted, true);
       if (nativeManifest) {
         const origin = {
@@ -1244,6 +1412,10 @@ test
         );
         for (const attempt of messages) {
           const projection = attempt.projection!;
+          expect(projection.originalReminderDigests).toEqual([
+            readTypedReminder(warm.snapshots, warm.identity.cwd),
+          ]);
+          expect(projection.workingDirectoryEdits).toHaveLength(1);
           expect(projection.handles).toHaveLength(3);
           for (const handle of projection.handles)
             expect(handle.includes(attachmentObjects)).toBe(true);
@@ -1263,6 +1435,8 @@ test
           expect(attempt.manifest).toMatchObject({
             imageHandleDigests: projection.imageHandleDigests,
             userContentSha256: projection.userContentSha256,
+            workingDirectoryEdits: projection.workingDirectoryEdits,
+            projectedUserContentSha256: projection.projectedUserContentSha256,
           });
           expect(attempt.wireSha256).not.toBe(attempt.projectedSha256);
         }

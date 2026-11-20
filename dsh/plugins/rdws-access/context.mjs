@@ -1,5 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 import { signGrant, bodyHash } from '../../bridge/access.ts';
 import { cancelTitleOrigins, rememberTitleOrigin } from './title-binding.mjs';
 
@@ -7,6 +8,92 @@ const imageId = /^sha256:[a-f0-9]{64}$/;
 const maxImageOccurrences = 64;
 const attachmentUnavailable = () =>
   new Error('Native attachment evidence unavailable');
+const workingDirectoryPrefix = 'Current working directory: ';
+const workingDirectorySection = 'working-directory:current';
+const reminderIntros = [
+  '<system-reminder>\nThe following information describes your current session:\n\n',
+  '<system-reminder>\nThe following information describes your current session. It replaces earlier versions of this context, including any retained in conversation summaries.\n\n',
+];
+const reminderEnd = '\n</system-reminder>';
+const clearedReminder =
+  '<system-reminder>\nCurrent runtime context: none. Earlier runtime-context snapshots no longer apply.\n</system-reminder>';
+const escapeReminder = (value) =>
+  value.replace(/<\/system-reminder\s*>/gi, (tag) => '<\\' + tag.slice(1));
+
+export function workingDirectorySpan(message) {
+  const source = message.source;
+  if (source?.kind === 'working-directory') throw attachmentUnavailable();
+  if (source?.kind !== 'runtime-context') return;
+  const block = Array.isArray(message.content) && message.content[0];
+  const sections = source.sections;
+  if (
+    message.role !== 'user' ||
+    source.form !== 'snapshot' ||
+    !Array.isArray(message.content) ||
+    message.content.length !== 1 ||
+    block?.type !== 'text' ||
+    typeof block.text !== 'string' ||
+    !Array.isArray(sections) ||
+    sections.some(
+      (section) =>
+        !section ||
+        typeof section.name !== 'string' ||
+        typeof section.text !== 'string' ||
+        !section.text,
+    )
+  )
+    throw attachmentUnavailable();
+
+  const text = block.text;
+  if (!sections.length) {
+    if (text !== clearedReminder) throw attachmentUnavailable();
+    return;
+  }
+  const texts = sections.map((section) => section.text);
+  const body = escapeReminder(texts.join('\n\n'));
+  const opening = reminderIntros.find(
+    (intro) => text === intro + body + reminderEnd,
+  );
+  if (!opening) throw attachmentUnavailable();
+
+  const index = sections.findIndex(
+    ({ name }) => name === workingDirectorySection,
+  );
+  if (index < 0) return;
+  if (
+    sections.findLastIndex(({ name }) => name === workingDirectorySection) !==
+    index
+  )
+    throw attachmentUnavailable();
+  const section = texts[index];
+  if (!section.startsWith(workingDirectoryPrefix) || !section.endsWith('.'))
+    throw attachmentUnavailable();
+  const quoted = section.slice(workingDirectoryPrefix.length, -1);
+  let directory;
+  try {
+    directory = JSON.parse(quoted);
+  } catch {
+    throw attachmentUnavailable();
+  }
+  if (
+    typeof directory !== 'string' ||
+    !isAbsolute(directory) ||
+    JSON.stringify(directory) !== quoted
+  )
+    throw attachmentUnavailable();
+
+  const leading = [...texts.slice(0, index), workingDirectoryPrefix].join(
+    '\n\n',
+  );
+  const start = opening.length + escapeReminder(leading).length;
+  const end = start + escapeReminder(quoted).length;
+  texts[index] = workingDirectoryPrefix + '".".';
+  const projected = text.slice(0, start) + '"."' + text.slice(end);
+  if (projected !== opening + escapeReminder(texts.join('\n\n')) + reminderEnd)
+    throw attachmentUnavailable();
+  return { start, end };
+}
+
 export function installContext(ctx, config, key, route, requestContext) {
   const authorized = new Map(),
     agents = new WeakMap(),
@@ -736,8 +823,10 @@ export function installContext(ctx, config, key, route, requestContext) {
           return;
         const expected = [];
         const userContent = [];
+        const workingDirectoryEdits = [];
         const seen = new Set();
         for (const message of options.messages) {
+          const directory = workingDirectorySpan(message);
           for (const part of message.content) {
             if (
               part.type === 'file' ||
@@ -745,8 +834,14 @@ export function installContext(ctx, config, key, route, requestContext) {
             )
               throw attachmentUnavailable();
             if (message.role !== 'user') continue;
-            if (part.type === 'text' && part.text)
+            if (part.type === 'text' && part.text) {
+              if (directory)
+                workingDirectoryEdits.push({
+                  index: userContent.length,
+                  ...directory,
+                });
               userContent.push(['text', part.text]);
+            }
             if (part.type === 'image') userContent.push(['image']);
           }
           if (!message.content.some((part) => part.type === 'image')) continue;
@@ -779,7 +874,16 @@ export function installContext(ctx, config, key, route, requestContext) {
           callId: call.id,
           bindingId: call.bindingId,
         };
+        if (workingDirectoryEdits.length > 64) throw attachmentUnavailable();
         const userContentSha256 = bodyHash(userContent);
+        for (const { index, start, end } of workingDirectoryEdits) {
+          const [type, text] = userContent[index];
+          userContent[index] = [
+            type,
+            text.slice(0, start) + '"."' + text.slice(end),
+          ];
+        }
+        const projectedUserContentSha256 = bodyHash(userContent);
         return {
           expected,
           signal: record.signal,
@@ -787,7 +891,13 @@ export function installContext(ctx, config, key, route, requestContext) {
           prepare: (images, signal) =>
             service(
               'model-attachment-prepare',
-              { ...cause, images, userContentSha256 },
+              {
+                ...cause,
+                images,
+                userContentSha256,
+                workingDirectoryEdits,
+                projectedUserContentSha256,
+              },
               signal,
             ),
           close: () =>

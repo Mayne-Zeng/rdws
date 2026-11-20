@@ -372,6 +372,8 @@ async function supplierFixture(authority?: DatabaseAuthority) {
       images: [{ mediaType, bytes: image.length, sha256: sha(image) }],
       imageHandleDigests: [bodyHash(generatedText.text)],
       userContentSha256: bodyHash([['image']]),
+      workingDirectoryEdits: [],
+      projectedUserContentSha256: bodyHash([['image']]),
     });
     const callId = randomUUID();
     const request = (
@@ -404,7 +406,13 @@ async function supplierFixture(authority?: DatabaseAuthority) {
   function replaceProjectionProof(
     request: ModelCarrierRequest,
     proof: Partial<
-      Pick<AttachmentManifest, 'imageHandleDigests' | 'userContentSha256'>
+      Pick<
+        AttachmentManifest,
+        | 'imageHandleDigests'
+        | 'userContentSha256'
+        | 'workingDirectoryEdits'
+        | 'projectedUserContentSha256'
+      >
     >,
   ) {
     const id = request.call.bindingId!;
@@ -985,6 +993,13 @@ test.skipIf(process.platform !== 'darwin')(
             egress(step.request('messages', { ...cached, bytes })),
           ).rejects.toThrow('Attachment egress unavailable');
         }
+        const wrongProjection = step.request('messages', cached);
+        replaceProjectionProof(wrongProjection, {
+          projectedUserContentSha256: '0'.repeat(64),
+        });
+        await expect(egress(wrongProjection)).rejects.toThrow(
+          'Attachment egress unavailable',
+        );
         expect(connections()).toBe(initialConnections);
         expect(applicationBytes).toHaveLength(initialConnections);
         expect(lockReads).toEqual([step.authSessionId]);
@@ -993,6 +1008,13 @@ test.skipIf(process.platform !== 'darwin')(
         for (const proof of [
           {
             imageHandleDigests: [sha(Buffer.from('Another handle commitment'))],
+          },
+          { workingDirectoryEdits: [{ index: 0, start: 1, end: 5 }] },
+          {
+            projectedUserContentSha256: bodyHash([
+              ['text', 'Changed projection'],
+              ['image'],
+            ]),
           },
           {
             userContentSha256: bodyHash([

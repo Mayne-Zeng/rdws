@@ -119,6 +119,72 @@ const mainKeys = [
 ];
 const roles = ['system', 'developer', 'user', 'assistant'];
 const messageKeys = ['role', 'content', 'reasoning_content'];
+const fixtureName = 'rdws_authority_probe';
+const fixtureDescription =
+  'Return the fixed result of the isolated permission probe';
+const fixtureResult = 'RDWS fixture worktree state: ok';
+
+export type FixtureToolProjection =
+  { kind: 'declaration' } | { kind: 'history'; callId: string };
+
+function fixtureDeclaration(value: unknown) {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 1 ||
+    !isRecord(value[0]) ||
+    !onlyKeys(value[0], ['type', 'function']) ||
+    value[0].type !== 'function' ||
+    !isRecord(value[0].function)
+  )
+    return false;
+  const fn = value[0].function;
+  return (
+    onlyKeys(fn, ['name', 'description', 'parameters']) &&
+    fn.name === fixtureName &&
+    fn.description === fixtureDescription &&
+    isRecord(fn.parameters) &&
+    onlyKeys(fn.parameters, ['type', 'properties', 'additionalProperties']) &&
+    fn.parameters.type === 'object' &&
+    fn.parameters.additionalProperties === false &&
+    isRecord(fn.parameters.properties) &&
+    Object.keys(fn.parameters.properties).length === 0
+  );
+}
+
+function fixtureHistory(messages: unknown[], callId: string) {
+  const start = messages.findIndex(
+    (message) => isRecord(message) && message.tool_calls !== undefined,
+  );
+  const assistant = messages[start];
+  const result = messages[start + 1];
+  if (
+    !isRecord(assistant) ||
+    !onlyKeys(assistant, ['role', 'content', 'tool_calls']) ||
+    assistant.role !== 'assistant' ||
+    (assistant.content !== null && assistant.content !== '') ||
+    !Array.isArray(assistant.tool_calls) ||
+    assistant.tool_calls.length !== 1 ||
+    !isRecord(result) ||
+    !onlyKeys(result, ['role', 'tool_call_id', 'content']) ||
+    result.role !== 'tool' ||
+    result.tool_call_id !== callId ||
+    result.content !== fixtureResult
+  )
+    return false;
+  const call = assistant.tool_calls[0];
+  return (
+    isRecord(call) &&
+    onlyKeys(call, ['id', 'type', 'function']) &&
+    call.id === callId &&
+    call.type === 'function' &&
+    isRecord(call.function) &&
+    onlyKeys(call.function, ['name', 'arguments']) &&
+    call.function.name === fixtureName &&
+    call.function.arguments === '{}' &&
+    messages.slice(0, start).every(textMessage) &&
+    messages.slice(start + 2).every(textMessage)
+  );
+}
 
 function textMessage(entry: unknown) {
   return (
@@ -141,7 +207,11 @@ function textMessage(entry: unknown) {
   );
 }
 
-export function prepareMainModelBody(body: Buffer, model: string) {
+export function prepareMainModelBody(
+  body: Buffer,
+  model: string,
+  fixture?: FixtureToolProjection,
+) {
   try {
     const value: unknown = JSON.parse(
       new TextDecoder('utf-8', { fatal: true }).decode(body),
@@ -154,8 +224,10 @@ export function prepareMainModelBody(body: Buffer, model: string) {
       (value.store !== undefined && value.store !== false) ||
       (value.enable_thinking !== undefined &&
         typeof value.enable_thinking !== 'boolean') ||
-      (value.tools !== undefined &&
-        (!Array.isArray(value.tools) || value.tools.length > 0)) ||
+      (fixture?.kind === 'declaration'
+        ? !fixtureDeclaration(value.tools)
+        : value.tools !== undefined &&
+          (!Array.isArray(value.tools) || value.tools.length > 0)) ||
       (value.stream_options !== undefined &&
         (!isRecord(value.stream_options) ||
           !onlyKeys(value.stream_options, ['include_usage']) ||
@@ -168,7 +240,9 @@ export function prepareMainModelBody(body: Buffer, model: string) {
       ) ||
       !Array.isArray(value.messages) ||
       value.messages.length === 0 ||
-      !value.messages.every(textMessage)
+      (fixture?.kind === 'history'
+        ? !fixtureHistory(value.messages, fixture.callId)
+        : !value.messages.every(textMessage))
     )
       return;
     return Buffer.from(JSON.stringify(value));

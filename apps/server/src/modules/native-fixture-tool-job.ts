@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { bodyHash } from '@rdws/dsh/access';
+import { bodyHash, isRecord, onlyKeys } from '@rdws/dsh/access';
 import { businessError, type Actor } from './business.ts';
 import type {
   createOwnedWriteHandoff,
@@ -10,6 +10,13 @@ type Broker = ReturnType<typeof createOwnedWriteHandoff>;
 type Invocation = Parameters<Broker['execute']>[1];
 type State = 'ready' | 'pending' | 'ok' | 'aborted' | 'failed' | 'unknown';
 type Control = 'begin' | 'status' | 'cancel';
+export type FixtureToolArm = {
+  scope: WriteHandoffScope;
+  requestId: string;
+  grant: { generation: string; contextVersion: number };
+  broker: Broker;
+};
+export type FixtureToolAssembly = { arm?: FixtureToolArm };
 
 export const fixtureToolOperations = [
   'fixture-tool-begin',
@@ -29,6 +36,8 @@ export class NativeFixtureToolJob {
     digest: string;
     expiresAt: number;
     current: () => boolean;
+    callId: string;
+    callSeq: number;
   };
   private state: State = 'ready';
   private pending?: Promise<void>;
@@ -44,6 +53,7 @@ export class NativeFixtureToolJob {
       request: Invocation['request'];
       hostSignal: AbortSignal;
       onOutput?: Parameters<Broker['execute']>[2];
+      wire?: true;
     },
   ) {
     if (process.env.RDWS_MODE !== 'test' || process.platform !== 'darwin')
@@ -70,6 +80,8 @@ export class NativeFixtureToolJob {
     digest: string,
     expiresAt: number,
     current: () => boolean,
+    callId: string,
+    callSeq: number,
   ) {
     if (
       this.authorization ||
@@ -81,8 +93,40 @@ export class NativeFixtureToolJob {
       contextVersion !== this.contextVersion
     )
       return denied();
-    this.authorization = { digest, expiresAt, current };
+    this.authorization = { digest, expiresAt, current, callId, callSeq };
     return this.commandId;
+  }
+
+  get wireLease() {
+    return this.options.wire
+      ? {
+          generation: this.invocation.generation,
+          contextVersion: this.contextVersion,
+        }
+      : undefined;
+  }
+
+  assertWireLease() {
+    this.options.broker.assertWireLease(
+      this.scope,
+      this.invocation.generation,
+      this.contextVersion,
+    );
+  }
+
+  history(value: unknown) {
+    if (
+      this.state !== 'ok' ||
+      !this.authorization ||
+      !isRecord(value) ||
+      !onlyKeys(value, ['callId', 'callSeq', 'resultSeq']) ||
+      value.callId !== this.authorization.callId ||
+      value.callSeq !== this.authorization.callSeq ||
+      !Number.isSafeInteger(value.resultSeq) ||
+      Number(value.resultSeq) <= this.authorization.callSeq
+    )
+      return denied();
+    return this.authorization.callId;
   }
 
   private start() {

@@ -307,6 +307,10 @@ export async function registerNativeTransport(
             await native.control('run', {
               ...pendingRun,
               authSessionId: scope.who.authSessionId,
+              ...(scope.runtime.offerFixtureTool?.(pendingRun, scope.who) && {
+                fixtureTool: true,
+                fixtureToolWire: true,
+              }),
             });
           }
           await confirmAccess(request.headers, original);

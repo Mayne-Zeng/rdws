@@ -15,6 +15,7 @@ import {
   fixtureToolOperations,
   type NativeFixtureToolJob,
 } from './native-fixture-tool-job.ts';
+import type { FixtureToolProjection } from './model-egress-policy.ts';
 type Detail = Awaited<ReturnType<ReturnType<typeof createBusiness>['read']>>;
 export function contextSnapshot(data: Detail) {
   const r = data.requirement;
@@ -149,8 +150,13 @@ type ModelStep = {
   contextVersion?: number;
   fixtureToolUsed?: true;
   fixtureToolJob?: NativeFixtureToolJob;
+  fixtureWire?: FixtureWire;
   attempts: Set<string>;
   wireAttempt?: string;
+};
+type FixtureWire = {
+  job: NativeFixtureToolJob;
+  projection: FixtureToolProjection;
 };
 type ModelAttempt = Pick<
   ModelCarrierRequest,
@@ -220,6 +226,7 @@ export class ContextRuns {
       sessionId: string,
       relatedActors: Actor[],
       write: (validBefore: number) => T,
+      writeLease?: NonNullable<NativeFixtureToolJob['wireLease']>,
     ) => Promise<T>,
     private allowTitles = false,
   ) {}
@@ -381,22 +388,34 @@ export class ContextRuns {
   authorizeModelWireAttempt(
     request: ModelAttempt,
     write: (validBefore: number) => ModelWireOutcome,
+    fixtureWire?: FixtureWire,
   ): Promise<ModelWireCommit> {
     if (request.call.purpose === 'session-title')
       return this.authorizeTitleWire(request, write);
-    return this.withAuthorizedAttempt(request, (step, validBefore) => {
-      const { attemptId } = request;
-      step.wireAttempt = attemptId;
-      const outcome = write(validBefore);
-      if (outcome === 'not-sent') step.wireAttempt = undefined;
-      return {
-        outcome,
-        accept429: () => {
-          if (outcome === 'submitted' && step.wireAttempt === attemptId)
-            step.wireAttempt = undefined;
-        },
-      };
-    });
+    return this.withAuthorizedAttempt(
+      request,
+      (step, validBefore) => {
+        const { attemptId } = request;
+        step.wireAttempt = attemptId;
+        const outcome = write(validBefore);
+        if (outcome === 'not-sent') step.wireAttempt = undefined;
+        return {
+          outcome,
+          accept429: () => {
+            if (outcome === 'submitted' && step.wireAttempt === attemptId)
+              step.wireAttempt = undefined;
+          },
+        };
+      },
+      fixtureWire,
+    );
+  }
+  fixtureWire(request: ModelAttempt) {
+    if (request.routeId !== 'main' || request.call.purpose !== undefined)
+      return;
+    const step = this.modelSteps.get(request.call.sessionId ?? '');
+    if (step && !step.closed && request.call.bindingId === step.id)
+      return step.fixtureWire;
   }
   private async authorizeTitleWire(
     request: ModelAttempt,
@@ -537,6 +556,7 @@ export class ContextRuns {
   private async withAuthorizedAttempt<T>(
     request: ModelAttempt,
     send: (step: ModelStep, validBefore: number) => T,
+    fixtureWire?: FixtureWire,
   ): Promise<T> {
     const { call, attemptId, routeId, destination, signal } = request;
     const step =
@@ -548,6 +568,8 @@ export class ContextRuns {
       !step ||
       step.closed ||
       step.wireAttempt !== undefined ||
+      step.fixtureWire !== fixtureWire ||
+      (fixtureWire && !this.lockModelAuthority) ||
       !selection ||
       !this.selectModel ||
       !request.isCurrent() ||
@@ -577,6 +599,11 @@ export class ContextRuns {
       run.sessionId,
     );
     const finalize = (validBefore: number) => {
+      const deadline = Math.min(
+        validBefore,
+        fixtureWire ? (step.validBefore ?? 0) : Infinity,
+        ...step.batch.map(({ expiresAt }) => expiresAt),
+      );
       if (
         !fresh ||
         fresh.revision !== selection.revision ||
@@ -592,13 +619,11 @@ export class ContextRuns {
         step.closed ||
         step.wireAttempt !== undefined ||
         !this.current(step.batch) ||
-        !(validBefore > Date.now())
+        !(deadline > Date.now())
       )
         return invalidModel();
-      return send(
-        step,
-        Math.min(validBefore, ...step.batch.map(({ expiresAt }) => expiresAt)),
-      );
+      fixtureWire?.job.assertWireLease();
+      return send(step, deadline);
     };
     if (this.lockModelAuthority)
       return this.lockModelAuthority(
@@ -607,6 +632,7 @@ export class ContextRuns {
         run.sessionId,
         related,
         finalize,
+        fixtureWire?.job.wireLease,
       );
     return finalize(shared!.validBefore);
   }
@@ -777,9 +803,10 @@ export class ContextRuns {
       r.turn = Number(input.turn);
     }
     let modelStep: ModelStep | undefined;
+    let previous: ModelStep | undefined;
     if (input.modelStep !== undefined) {
       const stamp = parseStepMarker(input.modelStep);
-      const previous = this.modelSteps.get(run.sessionId);
+      previous = this.modelSteps.get(run.sessionId);
       if (
         !this.selectModel ||
         new Set(batch).size !== batch.length ||
@@ -800,7 +827,10 @@ export class ContextRuns {
         closed: false,
         attempts: new Set(),
       };
-      previous?.fixtureToolJob?.cancel();
+      if (previous) {
+        previous.closed = true;
+        previous.fixtureToolJob?.cancel();
+      }
       this.modelSteps.set(run.sessionId, modelStep);
     }
     const { value, validBefore: loginExpiresAt } = await this.read(
@@ -842,6 +872,38 @@ export class ContextRuns {
         Number.isSafeInteger(value.snapshot.contextVersion)
       )
         modelStep.contextVersion = value.snapshot.contextVersion;
+      const wireLease = fixtureToolJob?.wireLease;
+      if (fixtureToolJob && wireLease && fixtureToolRun?.runId === run.runId) {
+        if (
+          batch.length !== 1 ||
+          modelStep.contextVersion !== wireLease.contextVersion
+        )
+          return invalidModel();
+        if (
+          modelStep.stamp.step === 1 &&
+          input.fixtureToolHistory === undefined
+        )
+          modelStep.fixtureWire = {
+            job: fixtureToolJob,
+            projection: { kind: 'declaration' },
+          };
+        else if (
+          previous?.closed &&
+          previous.fixtureToolJob === fixtureToolJob &&
+          previous.batch[0] === run &&
+          previous.agentGeneration === modelStep.agentGeneration &&
+          previous.turn === modelStep.turn &&
+          previous.stamp.step + 1 === modelStep.stamp.step
+        )
+          modelStep.fixtureWire = {
+            job: fixtureToolJob,
+            projection: {
+              kind: 'history',
+              callId: fixtureToolJob.history(input.fixtureToolHistory),
+            },
+          };
+        else return invalidModel();
+      } else if (input.fixtureToolHistory !== undefined) return invalidModel();
       result = { ...value, modelBindingId: modelStep.id };
     }
     reply?.(result, validBefore);
@@ -861,6 +923,10 @@ export class ContextRuns {
     if (
       !run ||
       !step ||
+      (job?.wireLease &&
+        (step.fixtureWire?.projection.kind !== 'declaration' ||
+          step.fixtureWire.job !== job ||
+          !step.wireAttempt)) ||
       step.batch.length !== 1 ||
       step.batch[0] !== run ||
       Object.entries(this.binding(run)).some(
@@ -911,6 +977,8 @@ export class ContextRuns {
       bodyHash(input),
       expiresAt,
       () => !!current(),
+      input.toolCallId,
+      Number(input.toolCallSeq),
     );
     step.fixtureToolJob = job;
     step.fixtureToolUsed = true;

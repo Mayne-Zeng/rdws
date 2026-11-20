@@ -505,6 +505,14 @@ export function installContext(ctx, config, key, route, requestContext) {
           };
           if (record.runs.some((run) => !run))
             throw new Error('Unbound model step');
+          const fixtureToolHistory = toolProbe?.history(
+            agent.session,
+            record.runs,
+            turn,
+            step,
+          );
+          if (fixtureToolHistory)
+            record.body.fixtureToolHistory = fixtureToolHistory;
           closeModelStep(modelSteps.get(record.body.sessionId));
           modelSteps.set(record.body.sessionId, record);
           signal.addEventListener('abort', record.close, { once: true });

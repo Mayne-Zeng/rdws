@@ -7,7 +7,10 @@ import { promisify } from 'node:util';
 import { expect, test, vi } from 'vitest';
 import { NativeWebHost, resolveNativeModelEgress } from '@rdws/dsh/web';
 import { buildApp } from '@rdws/server';
-import { prepareMainModelBody } from '../../apps/server/src/modules/model-egress-policy.ts';
+import {
+  prepareMainModelBody,
+  type FixtureToolProjection,
+} from '../../apps/server/src/modules/model-egress-policy.ts';
 
 test('Native model egress rejects unknown settings before creating the BFF', () => {
   expect(resolveNativeModelEgress()).toBe('direct');
@@ -55,6 +58,98 @@ test('the mediated Chat route admits only the bound text request shape', () => {
     },
   ])
     expect(prepare(bad)).toBeUndefined();
+});
+
+test('the isolated wire projector admits one exact tool or its exact adjacent history', () => {
+  const callId = 'fixture-call';
+  const name = 'rdws_authority_probe';
+  const ordinary = { role: 'user', content: 'Read the fixture' };
+  const base = { model: 'fixture', stream: true, messages: [ordinary] };
+  const parameters = {
+    type: 'object',
+    properties: {},
+    additionalProperties: false,
+  };
+  const fn = {
+    name,
+    description: 'Return the fixed result of the isolated permission probe',
+    parameters,
+  };
+  const declaration = { type: 'function', function: fn };
+  const toolCall = {
+    id: callId,
+    type: 'function',
+    function: { name, arguments: '{}' },
+  };
+  const assistant = {
+    role: 'assistant',
+    content: null,
+    tool_calls: [toolCall],
+  };
+  const tool = {
+    role: 'tool',
+    tool_call_id: callId,
+    content: 'RDWS fixture worktree state: ok',
+  };
+  const run = (value: unknown, proof?: FixtureToolProjection) =>
+    prepareMainModelBody(
+      Buffer.from(JSON.stringify(value)),
+      'fixture',
+      proof,
+    )?.toString();
+  const first = { ...base, tools: [declaration] };
+  const next = { ...base, messages: [ordinary, assistant, tool, ordinary] };
+  const declared: FixtureToolProjection = { kind: 'declaration' };
+  const followed: FixtureToolProjection = { kind: 'history', callId };
+  expect(run(first, declared)).toBe(JSON.stringify(first));
+  expect(run(next, followed)).toBe(JSON.stringify(next));
+  expect(run(first)).toBeUndefined();
+  expect(run(next)).toBeUndefined();
+  for (const bad of [
+    base,
+    { ...first, tools: [declaration, declaration] },
+    {
+      ...first,
+      tools: [{ ...declaration, function: { ...fn, description: 'other' } }],
+    },
+    {
+      ...first,
+      tools: [
+        {
+          ...declaration,
+          function: {
+            ...fn,
+            parameters: { ...parameters, additionalProperties: true },
+          },
+        },
+      ],
+    },
+    { ...first, messages: next.messages },
+  ])
+    expect(run(bad, declared)).toBeUndefined();
+  for (const messages of [
+    [ordinary, tool],
+    [ordinary, tool, assistant],
+    [ordinary, assistant, ordinary, tool],
+    [ordinary, assistant, { ...tool, tool_call_id: 'other' }],
+    [ordinary, assistant, { ...tool, content: 'other' }],
+    [ordinary, assistant, { ...tool, name }],
+    [ordinary, { ...assistant, content: 'other' }, tool],
+    [ordinary, { ...assistant, reasoning_content: 'other' }, tool],
+    [
+      ordinary,
+      {
+        ...assistant,
+        tool_calls: [
+          { ...toolCall, function: { name, arguments: '{"extra":true}' } },
+        ],
+      },
+      tool,
+    ],
+    [ordinary, assistant, tool, assistant, tool],
+  ])
+    expect(run({ ...base, messages }, followed)).toBeUndefined();
+  expect(run({ ...next, tools: [declaration] }, followed)).toBeUndefined();
 });
 
 test.skipIf(process.platform !== 'darwin')(

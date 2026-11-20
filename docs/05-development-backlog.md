@@ -135,20 +135,21 @@
   - 交付证据：[macOS 隔离执行](02-directory-and-engineering-design.html#t06-execution-delivery-20261118)。真实 Seatbelt 文件、进程、网络及 Git 验收和独立复审通过。聚焦 12 项通过，最新整仓 129 项通过、2 项超时，超时用例分组复跑通过，类型、lint、格式、构建和基线校验通过。T07 的 macOS 前置已满足。产品执行工具按 T07 联合验收启用。
   - 已补验：[macOS 系统 Git 启动器](02-directory-and-engineering-design.html#t06-apple-git-launcher-20261120)。查到当前系统工具链的实际 Git 后，继续通过原有 Seatbelt 只读查询和最终启动授权。Apple Git 两套聚焦 17 项及 Homebrew Git 执行套件 12 项通过。
 
-- [ ] **T07 · 单写与安全交接**（进行中：隔离单写与停稳交接已交付，待 Native 和编队联合验收）
+- [ ] **T07 · 单写与安全交接**（进行中：同 BFF 回环联测通过，待产品写权与编队验收）
   - 说明：落实当前开发分派、本人会话和独占写资格，协调数据库授权、实际执行进程、停止确认及异常恢复。
   - 可验收目标：同需求同时只有一个实际写会话；旧任务及子进程确认停稳后才交接；租约过期不冒称已停止；不能确认时保持只读；恢复／派生重新鉴权，取得写权前刷新上下文；测试人员会话代码只读。macOS 产品写入口只在本任务的当前身份、分派、独占写权及进程停止检查全部通过后启用；其他平台逐平台验证，不随 macOS 通过自动开启。
   - 前置：T02、T06 的 macOS 隔离执行边界验收；无需等待 T21。
   - 前置核对：T02 用户侧验收及 T06 macOS 隔离验收均已满足。
   - 已确认规则：具有本项目和本需求开发角色、操作本人会话，并担任开发负责人或至少有一项未完成子任务。主动交接由当前持有者释放，新会话再申请。租约到期或撤权由系统发起停止，确认停稳后才授予下一写权。[决定台账](00-decision-ledger.html#t07-write-eligibility-20261120) · [首切片方案](02-directory-and-engineering-design.html#t07-isolated-write-handoff-plan-20261120)
   - 已交付子项：[隔离单写与停稳交接](02-directory-and-engineering-design.html#t07-isolated-write-handoff-evidence-20261120)。一次性受管 PostgreSQL、真实 T05 工作树与 macOS Seatbelt 核对一个写代、旧进程停稳及下一会话实际写入。定点 19 项、整仓 273 项、静态检查和基线通过。产品工具接线、运行状态恢复及编队 UI 继续按 T07 验收。
-  - 接线前核对：[Native 工具与受管模型请求](02-directory-and-engineering-design.html#t07-native-tool-wire-evidence-20261120)。从锁定 SDK 的三个实际回环请求核对文本、工具声明及历史；现有 BFF 只接受文本。记录同库所有者复用、当步工具限定及后续联合验收。
+  - 接线前核对：[Native 工具与受管模型请求](02-directory-and-engineering-design.html#t07-native-tool-wire-evidence-20261120)。从锁定 SDK 的三个实际回环请求核对文本、工具声明及历史。记录同库所有者复用、当步工具限定及后续联合验收。
   - 接线前核对：[Native 声明与执行的独立边界](02-directory-and-engineering-design.html#t07-native-tool-boundary-evidence-20261120)。正式 Host 实际模型回包在已声明和无声明场景中都受现有根守卫，执行体零入口。锁包对照复验声明后撤权、无声明及许可执行一次。14 项邻域和故障反例通过。
   - 已交付子项：[共享 BFF 所有者与写资格撤销](02-directory-and-engineering-design.html#t07-shared-bff-delivery-20261120)。真实 PostgreSQL 借用终止、独立后端回查及断开客户端后的关停均通过，A/B 交付复审批准。整仓 308 项、静态、构建及基线通过。本地提交，待 Native 写工具与编队联合验收。
   - 已本地交付联测：[锁版 Native 工具与父 Broker](02-directory-and-engineering-design.html#t07-native-parent-broker-evidence-20261120)。实际工具经测试 IPC 调用受管 BFF Broker，验证一次写入、原键复核、旧代拒绝、释放在途拒新及停稳换代。双面复审、邻域 22 项、整仓 309 项和基线通过。
   - 已本地交付联测：[正式 Native Host 单次工具授权](02-directory-and-engineering-design.html#t07-native-host-tool-permit-evidence-20261120)。经真实私有 IPC 验证原运行、当步、参数、时限与一次消费，拒绝错会话及取消后迟到许可，实际合成模型续步收到原关联结果。双面复审、整仓 320 项和基线通过。真实工作树写入与物理取消继续接线。
   - 已本地交付子项：[父 Broker 逐调用取消](02-directory-and-engineering-design.html#t07-broker-call-cancel-evidence-20261120)。真实 PostgreSQL 和 macOS 用例覆盖起跑前零写入、实际进程组退出、原键回读、写代续用、主动释放交错和停稳不明时保留占位。双面复审、邻域 33 项、整仓 320 项和基线通过。正式 Native 与父 Broker 的执行控制继续接线。
-  - 已本地交付联测：[正式 Native 与父 Broker 执行控制](02-directory-and-engineering-design.html#t07-native-broker-control-evidence-20261120)。真实短 IPC、隔离 PG 和 T06 验证一次写入、失答按原键回查、原生取消、主动关闭及断连后物理停稳。双面复审、邻域 46 项、整仓 321 项和基线通过。同一 BFF Workbench 入口、工具精确出站与编队仍待联合验收。
+  - 已本地交付联测：[正式 Native 与父 Broker 执行控制](02-directory-and-engineering-design.html#t07-native-broker-control-evidence-20261120)。真实短 IPC、隔离 PG 和 T06 验证一次写入、失答按原键回查、原生取消、主动关闭及断连后物理停稳。双面复审、邻域 46 项、整仓 321 项和基线通过。
+  - 已本地交付联测：[Workbench Prompt、父 Broker 与工具出站](02-directory-and-engineering-design.html#t07-workbench-tool-wire-evidence-20261120)。同一受管 macOS 测试 BFF 验证真实登录、固定工具单次写入、实际 TLS 续步、两种释放顺序与步骤过期时的零首写。双面复审、整仓 323 项、浏览器 48 项和基线通过。编队先推进需求会话目录和固定切点回放，产品写权及正式工具继续按 T07 验收。
   - 来源：I2-AUTH、I3-WRITE、I3-CONTEXT。
 
 - [ ] **T08 · 变更查看与交付快照**

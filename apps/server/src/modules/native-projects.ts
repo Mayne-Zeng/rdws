@@ -1,14 +1,24 @@
+import { createHash } from 'node:crypto';
 import {
   LEGACY_POC_PROJECT_ID,
   NativeWebHost,
   createModelHttpsRelay,
   projectNativeConfiguration,
   validProjectId,
+  type ModelCarrierRequest,
   type NativeModelEgress,
 } from '@rdws/dsh/web';
 import type { createBusiness } from './business.ts';
-import { businessError } from './business.ts';
-import { ContextRuns, contextSnapshot } from './runtime-context.ts';
+import { businessError, type Actor } from './business.ts';
+import {
+  ContextRuns,
+  contextSnapshot,
+  type RunBinding,
+} from './runtime-context.ts';
+import {
+  NativeFixtureToolJob,
+  type FixtureToolAssembly,
+} from './native-fixture-tool-job.ts';
 import { createSessionOperations } from './session-operations.ts';
 import {
   prepareMainModelBody,
@@ -57,6 +67,7 @@ export function createProjectRuntimes(
   nativeProfiles?: ReadonlyMap<string, string>,
   modelEgress: NativeModelEgress = 'direct',
   mainPolicy?: MainModelPolicy,
+  fixture?: FixtureToolAssembly,
 ) {
   const pending = new Map<string, Promise<ProjectRuntime>>();
   const live = new Map<string, ProjectRuntime>();
@@ -64,7 +75,9 @@ export function createProjectRuntimes(
   const readContext = createProjectContextReader(business);
   function register(native: NativeWebHost, policy?: MainModelPolicy) {
     const project = native.projectId;
-    const runtime = {
+    let offered: { run: RunBinding; job: NativeFixtureToolJob } | undefined;
+    if (fixture && policy) native.enableFixtureToolProbe();
+    const runtime: ProjectRuntime = {
       native,
       catalogModel: policy && {
         provider: policy.provider,
@@ -87,7 +100,7 @@ export function createProjectRuntimes(
             })
           : undefined,
         policy
-          ? (who, requirementId, sessionId, relatedActors, write) =>
+          ? (who, requirementId, sessionId, relatedActors, write, writeLease) =>
               business.withModelAuthority(
                 who,
                 project,
@@ -95,6 +108,7 @@ export function createProjectRuntimes(
                 sessionId,
                 relatedActors,
                 write,
+                writeLease,
               )
           : undefined,
         policy?.firstMessageTitle === true,
@@ -102,12 +116,55 @@ export function createProjectRuntimes(
       inFlightPrompts: new Set<string>(),
       acceptedPrompts: new Map<string, number>(),
       abandonedRuns: new Set<string>(),
+      ...(fixture &&
+        policy && {
+          offerFixtureTool(run: RunBinding, who: Actor) {
+            const arm = fixture.arm;
+            if (
+              offered ||
+              !arm ||
+              arm.scope.projectId !== project ||
+              arm.scope.requirementId !== run.requirementId ||
+              arm.scope.sessionId !== run.sessionId ||
+              arm.requestId !== run.requestId ||
+              arm.scope.who.userId !== who.userId ||
+              arm.scope.who.authSessionId !== who.authSessionId
+            )
+              return false;
+            arm.broker.assertWireLease(
+              arm.scope,
+              arm.grant.generation,
+              arm.grant.contextVersion,
+            );
+            offered = {
+              run,
+              job: new NativeFixtureToolJob({
+                ...arm,
+                hostSignal: native.signal,
+                repositoryId: 'app',
+                wire: true,
+                request: {
+                  tool: 'shell',
+                  script: "printf '|workbench-tool' >> sample.txt",
+                },
+              }),
+            };
+            return true;
+          },
+          closeFixture: async () => offered?.job.close(),
+        }),
     };
     native.configureContext((input, token, reply) => {
       if (closing) businessError(403, '原生项目正在停止');
-      return runtime.runs.handle(input, token, (result, validBefore) => {
-        if (!closing) reply(result, validBefore);
-      });
+      return runtime.runs.handle(
+        input,
+        token,
+        (result, validBefore) => {
+          if (!closing) reply(result, validBefore);
+        },
+        offered?.run,
+        offered?.job,
+      );
     });
     live.set(project, runtime);
     return runtime;
@@ -133,10 +190,30 @@ export function createProjectRuntimes(
       if (closing) businessError(503, '项目运行时暂不可用');
       if (mainPolicy?.projectId === project) {
         if (!configuration) businessError(503, '项目运行时尚未配置');
+        const projections = new WeakMap<
+          ModelCarrierRequest,
+          {
+            proof: NonNullable<ReturnType<ContextRuns['fixtureWire']>>;
+            digest: string;
+          }
+        >();
         const relay = createModelHttpsRelay(
           mainPolicy.destination,
           undefined,
-          (body) => prepareMainModelBody(body, mainPolicy.model),
+          (body, request) => {
+            const proof = runtime.runs.fixtureWire(request);
+            const normalized = prepareMainModelBody(
+              body,
+              mainPolicy.model,
+              proof?.projection,
+            );
+            if (normalized && proof)
+              projections.set(request, {
+                proof,
+                digest: createHash('sha256').update(normalized).digest('hex'),
+              });
+            return normalized;
+          },
         );
         const titleRelay = mainPolicy.firstMessageTitle
           ? createModelHttpsRelay(
@@ -158,9 +235,18 @@ export function createProjectRuntimes(
             handle: (request) =>
               (request.call.purpose === 'session-title' && titleRelay
                 ? titleRelay
-                : relay)(request, (write) =>
-                runtime.runs.authorizeModelWireAttempt(request, write),
-              ),
+                : relay)(request, (write, digest) => {
+                const projected = projections.get(request);
+                if (projected && projected.digest !== digest)
+                  return Promise.reject(
+                    new Error('Model body projection changed'),
+                  );
+                return runtime.runs.authorizeModelWireAttempt(
+                  request,
+                  write,
+                  projected?.proof,
+                );
+              }),
           },
         );
         const runtime: ProjectRuntime = register(native, mainPolicy);
@@ -190,9 +276,13 @@ export function createProjectRuntimes(
       closing = true;
       await Promise.allSettled([...pending.values()]);
       const results = await Promise.allSettled(
-        [...live.values()].map(async ({ native, runs }) => {
+        [...live.values()].map(async ({ native, runs, closeFixture }) => {
           runs.clear();
-          await native.close();
+          try {
+            await closeFixture?.();
+          } finally {
+            await native.close();
+          }
         }),
       );
       if (results.some((result) => result.status === 'rejected'))
@@ -222,4 +312,6 @@ export interface ProjectRuntime {
   inFlightPrompts: Set<string>;
   acceptedPrompts: Map<string, number>;
   abandonedRuns: Set<string>;
+  offerFixtureTool?(run: RunBinding, who: Actor): boolean;
+  closeFixture?(): Promise<void>;
 }

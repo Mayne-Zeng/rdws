@@ -1459,6 +1459,7 @@ export function createBusiness(db: Database) {
     sessionId: string,
     relatedActors: Actor[],
     write: (validBefore: number) => T,
+    writeLease?: { generation: string; contextVersion: number },
   ): Promise<T> {
     const deadline = Date.now() + 1800;
     return db.transaction(
@@ -1468,6 +1469,46 @@ export function createBusiness(db: Database) {
         await tx.execute(sql`set local lock_timeout='650ms'`);
         await tx.execute(sql`update ${schema.session} set id = id where false`);
         let validBefore = deadline;
+        if (writeLease) {
+          if (relatedActors.length) businessError(403, '批次身份不匹配');
+          const snapshot = await writeContext(
+            tx,
+            who,
+            projectId,
+            requirementId,
+            sessionId,
+          );
+          const leases = schema.requirementWriteLease;
+          const [lease] = await tx
+            .select()
+            .from(leases)
+            .where(
+              and(
+                eq(leases.requirementId, requirementId),
+                eq(leases.projectId, projectId),
+                eq(leases.nativeSessionId, sessionId),
+                eq(leases.ownerId, who.userId),
+                eq(leases.authSessionId, who.authSessionId),
+                eq(leases.generation, writeLease.generation),
+              ),
+            )
+            .for('share');
+          if (
+            lease?.phase !== 'held' ||
+            lease.runId ||
+            lease.contextVersion !== writeLease.contextVersion ||
+            lease.contextVersion !== snapshot.requirement.contextVersion
+          )
+            businessError(403, '当前写会话资格已失效');
+          validBefore = Math.min(
+            validBefore,
+            snapshot.validBefore,
+            lease.expiresAt.getTime(),
+          );
+          if (validBefore <= Date.now())
+            businessError(403, '当前写会话资格已失效');
+          return write(validBefore);
+        }
         const actors = [who, ...relatedActors].sort((a, b) =>
           a.authSessionId.localeCompare(b.authSessionId),
         );

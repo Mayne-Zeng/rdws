@@ -1,4 +1,5 @@
 import { hasSubscribers } from 'node:diagnostics_channel';
+import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import {
   request as httpRequest,
@@ -28,6 +29,7 @@ export type ModelWireCommit = {
 };
 type AuthorizeWire = (
   write: (validBefore: number) => ModelWireOutcome,
+  bodyDigest: string,
 ) => Promise<ModelWireCommit>;
 
 const bodyLimit = 1024 * 1024;
@@ -187,7 +189,10 @@ function responseStream(incoming: IncomingMessage, drain: () => Promise<void>) {
 export function createModelHttpsRelay(
   destination: string,
   ca?: string | Buffer,
-  projectBody?: (body: Buffer) => Buffer | undefined,
+  projectBody?: (
+    body: Buffer,
+    request: ModelCarrierRequest,
+  ) => Buffer | undefined,
   purpose?: 'session-title',
 ) {
   return modelHttpsRelay(destination, ca, projectBody, purpose);
@@ -205,7 +210,10 @@ export function createLoopbackAttachmentHttpsRelay(
 function modelHttpsRelay(
   destination: string,
   ca: string | Buffer | undefined,
-  projectBody?: (body: Buffer) => Buffer | undefined,
+  projectBody?: (
+    body: Buffer,
+    request: ModelCarrierRequest,
+  ) => Buffer | undefined,
   purpose?: 'session-title',
   attachmentRoute?: 'files' | 'messages',
 ) {
@@ -278,7 +286,7 @@ function modelHttpsRelay(
     request.signal.addEventListener('abort', stop, { once: true });
     try {
       const buffered = await readBody(request.body, signal);
-      const body = projectBody ? projectBody(buffered) : buffered;
+      const body = projectBody ? projectBody(buffered, request) : buffered;
       if (!body || body.length > bodyLimit) throw unavailable();
       const headers = requestHeaders(request.headers, url, body.length);
       signal.throwIfAborted();
@@ -422,7 +430,7 @@ function modelHttpsRelay(
         )
           return 'not-sent';
         return submitModelPrefix(raw, fd, prefix, validBefore);
-      });
+      }, createHash('sha256').update(body).digest('hex'));
       const commit = await untilClosed(authorization, signal);
       if (commit.outcome !== 'submitted') throw unavailable();
       signal.throwIfAborted();

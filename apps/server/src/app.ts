@@ -11,6 +11,10 @@ import {
 } from '@rdws/dsh/web';
 import { registerWorkbench } from './modules/workbench.ts';
 import { mainModelPolicy } from './modules/model-egress-policy.ts';
+import type {
+  FixtureToolArm,
+  FixtureToolAssembly,
+} from './modules/native-fixture-tool-job.ts';
 import {
   createOwnedWriteHandoff,
   validateWriteHandoffDatabase,
@@ -31,7 +35,7 @@ export function buildApp(options: {
   nativeProfiles?: ReadonlyMap<string, string>;
   authorityTicket?: string;
   mainModelPolicy?: unknown;
-  isolatedWrite?: { gitPath: string };
+  isolatedWrite?: { gitPath: string; fixtureTool?: true };
 }) {
   const modelEgress = resolveNativeModelEgress(
     process.env.RDWS_NATIVE_MODEL_EGRESS,
@@ -42,12 +46,13 @@ export function buildApp(options: {
     );
   const ticket = options.authorityTicket;
   const isolatedWrite = options.isolatedWrite;
+  const fixtureTool = isolatedWrite?.fixtureTool === true;
   if (
     isolatedWrite &&
     (process.env.RDWS_MODE !== 'test' ||
       process.platform !== 'darwin' ||
       !ticket ||
-      modelEgress !== 'paused' ||
+      modelEgress !== (fixtureTool ? 'mediated' : 'paused') ||
       options.nativeHost ||
       !isAbsolute(isolatedWrite.gitPath))
   )
@@ -67,6 +72,13 @@ export function buildApp(options: {
   const policy = mediated
     ? mainModelPolicy(options.mainModelPolicy)
     : undefined;
+  if (
+    fixtureTool &&
+    (!policy ||
+      policy.firstMessageTitle ||
+      new URL(policy.destination).hostname !== '127.0.0.1')
+  )
+    throw new Error('Isolated tool probe requires a loopback model supplier');
   if (
     policy?.firstMessageTitle &&
     (process.env.RDWS_MODE !== 'test' ||
@@ -90,6 +102,7 @@ export function buildApp(options: {
     !!isolatedWrite,
   );
   let ownedWrite: ReturnType<typeof createOwnedWriteHandoff> | undefined;
+  const fixture: FixtureToolAssembly | undefined = fixtureTool ? {} : undefined;
   let workbench: Awaited<ReturnType<typeof registerWorkbench>> | undefined;
   const auth = createAuth(database.db, {
     secret: options.secret,
@@ -148,6 +161,28 @@ export function buildApp(options: {
     app.decorate('isolatedWriteHandoff', () => ownedWrite);
     app.decorate('recoverIsolatedWriteAuthority', () =>
       workbench?.recoverWriteAuthority(),
+    );
+  }
+  if (fixture) {
+    app.decorate(
+      'armIsolatedNativeTool',
+      (input: Omit<FixtureToolArm, 'broker'>) => {
+        if (
+          !ownedWrite ||
+          closing ||
+          fixture.arm ||
+          input.scope.projectId !== policy!.projectId ||
+          !input.requestId ||
+          input.requestId.length > 128
+        )
+          throw new Error('Isolated tool probe cannot be armed');
+        ownedWrite.assertWireLease(
+          input.scope,
+          input.grant.generation,
+          input.grant.contextVersion,
+        );
+        fixture.arm = { ...structuredClone(input), broker: ownedWrite };
+      },
     );
   }
   app.addHook('onReady', async () => {
@@ -265,6 +300,7 @@ export function buildApp(options: {
       () => ownedWrite,
       checked,
       isolatedWrite ? trackWork : undefined,
+      fixture,
     );
   });
   app.setErrorHandler((error: FastifyError, _request, reply) => {

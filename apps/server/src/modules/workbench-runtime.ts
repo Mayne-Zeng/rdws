@@ -79,6 +79,7 @@ export function createWorkbenchRuntime(
   writeHandoff: () => OwnedWriteHandoff | undefined = () => undefined,
   writeTransaction?: CheckedWriteTransaction,
   trackWork = <T>(work: () => Promise<T>) => work(),
+  fixture?: import('./native-fixture-tool-job.ts').FixtureToolAssembly,
 ) {
   const instanceRoot =
     process.env.RDWS_MODE === 'test'
@@ -196,6 +197,7 @@ export function createWorkbenchRuntime(
     nativeProfiles,
     modelEgress,
     mainPolicy,
+    fixture,
   );
 
   const revokedEpoch = new Map<string, number>();

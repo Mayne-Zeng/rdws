@@ -30,6 +30,7 @@ export function installFixtureToolProbe(ctx, currentStep, liveRun, service) {
   const agents = new WeakMap();
   const calls = new WeakMap();
   const permits = new WeakMap();
+  let wireCall;
   const definition = Object.freeze({
     name,
     description: 'Return the fixed result of the isolated permission probe',
@@ -42,6 +43,8 @@ export function installFixtureToolProbe(ctx, currentStep, liveRun, service) {
       const permit = currentPermit(exec);
       if (!permit) throw new Error('Fixture tool permit expired');
       permits.delete(exec);
+      if (permit.jobId && offered?.fixtureToolWire === true)
+        wireCall = { event: permit.call, session: exec.agent.session };
       if (permit.jobId) return executeJob(permit, exec.signal);
       return fixtureResult;
     },
@@ -108,6 +111,7 @@ export function installFixtureToolProbe(ctx, currentStep, liveRun, service) {
             actual === agent &&
             offered !== undefined &&
             claim?.run === offered &&
+            !wireCall &&
             liveRun(offered)
           );
         },
@@ -128,6 +132,30 @@ export function installFixtureToolProbe(ctx, currentStep, liveRun, service) {
         claims.delete(agent);
       if (event.type === 'tool/call' && event.data.name === name)
         calls.set(session, event);
+      if (
+        event.type === 'tool/result' &&
+        wireCall?.session === session &&
+        !wireCall.result &&
+        event.data.turn === wireCall.event.data.turn &&
+        event.data.step === wireCall.event.data.step &&
+        event.sourceEventSeqs?.length === 1 &&
+        event.sourceEventSeqs[0] === wireCall.event.seq &&
+        event.data.message.toolCallId === wireCall.event.data.callId &&
+        event.data.message.isError !== true
+      ) {
+        const content = event.data.message.content;
+        if (
+          Array.isArray(content) &&
+          content.length === 1 &&
+          content[0]?.type === 'text' &&
+          content[0].text === 'RDWS fixture worktree state: ok'
+        )
+          wireCall.result = {
+            callId: event.data.message.toolCallId,
+            callSeq: wireCall.event.seq,
+            resultSeq: event.seq,
+          };
+      }
     },
     { global: true },
   );
@@ -203,6 +231,16 @@ export function installFixtureToolProbe(ctx, currentStep, liveRun, service) {
   );
 
   return {
+    history(session, runs, turn, step) {
+      if (
+        wireCall?.session === session &&
+        runs.length === 1 &&
+        runs[0] === offered &&
+        wireCall.event.data.turn === turn &&
+        wireCall.event.data.step + 1 === step
+      )
+        return wireCall.result;
+    },
     offer(run) {
       if (
         (offered && offered !== run) ||

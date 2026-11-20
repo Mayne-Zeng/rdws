@@ -1533,6 +1533,22 @@
   <p>活动 Host 主动关闭与实际继承 IPC 异常断开分别取证。异常断开先触发物理停止，再在原 Broker 持久结算处阻塞，独立 PostgreSQL 读回旧 owner 和执行占位。夹具联合关停在放开持久结算并排空任务后交还 owner，复审确认失败侧保持归还门槛。测试合计七组隔离情形，生产配线与编队验收仍随 T07 推进。</p>
   <p>最新定点 <code>pnpm test tests/integration/shared-write-authority.test.ts -t 'formal Native Host drives'</code> 通过 1 项。邻域 <code>pnpm test tests/integration/{shared-write-authority,native-tool-authority-boundary,write-handoff,local-execution,context-sync}.test.ts</code> 通过 5 文件、46 项。最终整仓 <code>caffeinate -i pnpm test</code> 返回 0，54 文件、321 项通过、1 项条件跳过。类型、lint、当前 Git 文件的 Prettier 检查、构建及基线通过。本地提交 <code>feat: connect native tool controls to the write broker</code> 记录本切片。下一阶段双面裁决将真实登录的同 BFF Workbench Prompt、精确工具正文和实际回环 TLS 首写放入同一隔离联合验收。</p>
 
+  <h4 id="t07-workbench-tool-wire-20261120">11.20.11 T07 同一受管 Workbench 与精确工具出站联测</h4>
+  <p>Change / R3，基线 <code>12f6344</code>。沿 I2-AUTH、I3-WRITE、I3-CONTEXT、§8.14–15 与 §11.20.5–10，从正常 Workbench 登录、本人会话和 Prompt 进入同一 BFF 的正式锁版 mediated Host 与父 Broker。两面技术裁决分别建议优先打通真实入口或先证明工具正文与物理首写。本轮联合验收两者。场景限定于 macOS 受管测试态、显式程序化装配、具名 <code>127.0.0.1</code> TLS 合成供应商、隔离 PostgreSQL、固定合成工作树动作。沿用单个 owner、应用池和关停流程。</p>
+  <ol>
+    <li>明确测试装配才允许受管 Broker 与 mediated Host 同时存在。父端内部武装单个已授写代的项目、需求、原登录、用户、本人会话和请求 ID，普通 Prompt 仍经已有登录、项目身份、原观察登录和本人会话检查。原作用域第一次转发尝试占用单次夹具。响应丢失或转发失败时保持已占用，后续重试沿原请求核对。公开报文、Profile 与普通模型策略仍沿现有边界。作业沿 §11.20.10 跟踪原键、停止与关停。</li>
+    <li>FD4 首步只声明一次固定空参数工具。原调用被消费后，原生续步不再声明该工具。同轮实时 <code>tool/result</code> 到达时同步捕获原调用序号、结果序号与原生调用 ID，由下一步等待的签名 <code>context-read</code> 一次传达。父端短期保留上一已关闭步骤的确切调用及 Broker 已确认成功终态，用来校验同一 Host、Agent、会话和运行中的唯一相邻续步。只接受固定调用和有限结果，不接受额外正文、字段、重复历史及跨会话数据。旧步骤的事实不能签发新执行。建连前校验确切正文和 schema，规范化正文摘要和父端证明绑定实际同一次 FD4 请求。</li>
+    <li>实际 TLS 应用数据首写沿现有授权事务。在正常登录、需求、本人会话校验后复用 <code>writeContext</code> 的当前开发分派校验及同一锁顺序，再锁写代行核对确切账号、登录、会话、owner、冻结版本、状态和期限。调用首写原语前同步复核当前步骤及其签名授权的最短期限、正文摘要对应的证明和同一 Broker 的确切持有项及关闭栅栏。关停先禁入并等待项目及 Broker 确认，才交还原 owner。</li>
+    <li>回环 TLS 供应商实际观察已批准声明、真实关联结果及无工具声明的续步，隔离工作树只写一次，PostgreSQL 回执匹配原调用。另一合格本人会话复用同一请求 ID 不取得夹具，原 Prompt 重放不增加声明和执行。首写反例均保持原登录和步骤有效：应用密文封装后、出站事务锁定前先完成实际释放；另在出站事务已锁住写代行时发起实际释放，验证持久相位暂为 held 且 Broker 关闭栅栏已生效。两次均观察供应商零应用正文、零工具执行。定点补齐错声明、额外字段及历史来源反例，复跑默认文本、Broker 与 FD3 邻域、静态、整仓和基线。回退本批前关闭隔离 Host 和父任务，保留持久结果或未确认占位。真实工具范围、具名外部供应商、编队与产品验收继续按原任务条件。</li>
+  </ol>
+
+  <h5 id="t07-workbench-tool-wire-evidence-20261120">同一 BFF 联测证据</h5>
+  <p>两面方案均 APPROVE。交付复审补齐了签名步骤期限、错误历史来源、实际 FD4 错投影零建连、原生事件序号核对、队列重放和同 BFF 持久结算关停，复审均 APPROVE。首次转发即占用单次夹具的定序已记录。</p>
+  <p>同一 macOS 测试 BFF 以真实登录、本人会话和 Workbench Prompt 进入锁版 Native、父 Broker、隔离 PostgreSQL、真实 T05 工作树和回环 TLS。另一会话复用同一请求 ID 走文本路径。原请求只入箱一次。实际工具调用、结果来源、续步签名和持久回执对应，文件只变更一次。供应商续步未收到新声明，再返回同名调用时 Native 阻止继续执行。</p>
+  <p>TLS 物理首写前分别验证已提交释放、释放因出站写代行锁尚未提交和原步骤证明过期，进程内持有状态和持久状态分别核对。三种情况下供应商零应用数据，工具和文件写入均为零。实际 Host 签名携带错调用序号被父端拒绝，真实 FD4 续步的错正文投影也在新 TCP 连接前拒绝。BFF 在作业结算事务内关停时保留原 owner、运行占位和预留回执，放行提交后按原键核对物理停止与持久终态，再交还 owner。</p>
+  <p><code>caffeinate -i pnpm test tests/integration/bff-main-model-egress.test.ts tests/integration/native-egress-mode.test.ts</code> 返回 0，8 项通过、1 项按平台条件跳过。本节证据覆盖固定测试工具及具名回环供应商。编队的需求会话目录可复用当前授权查询及固定切点只读回放，产品写权操作和正式工具仍按 T07 验收。</p>
+  <p><code>caffeinate -i pnpm test</code> 返回 0，54 文件、323 项通过、1 项按平台条件跳过。<code>pnpm test:e2e --shard=1/2</code> 和 <code>pnpm test:e2e --shard=2/2</code> 各 24 项通过。类型、lint、当前 Git 文件 Prettier 检查、构建与基线校验通过。软件和文档随 <code>feat: verify workbench tool egress with write authority</code> 本地提交。</p>
+
   <h3 id="t11-maintenance-acceptance-20261119">11.21 T11 已确认的导入与人员维护</h3>
   <p>2026-11-19 用户确认需求批量导入采用同页的上传、预览、修正与整批提交。上传后动态显示解析和校验进度，下方逐条呈现需求明细、状态与可定位的问题。用户可在同页修正并重新校验。预览和校验阶段不写业务数据。全部通过后由用户显式整批提交入库，提交结果继续在同页逐条呈现。</p>
   <p>参与者和开发负责人维护按当前项目角色授权。移除参与者或更换负责人时，相关未完成子任务须显式交给当前具备资格的接手人，并保留原分派记录。验收覆盖无资格接手、已有分派记录保留，以及原有阶段与任务按钮权限。</p>

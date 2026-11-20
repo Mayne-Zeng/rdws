@@ -961,6 +961,20 @@ export function createOwnedWriteHandoff(
   }
 
   return {
+    assertWireLease(scope: Scope, generation: string, contextVersion: number) {
+      const tracked = holdings.get(scope.requirementId);
+      if (
+        !tracked?.confirmed ||
+        tracked.grant.generation !== generation ||
+        tracked.grant.contextVersion !== contextVersion ||
+        tracked.scope.projectId !== scope.projectId ||
+        tracked.scope.sessionId !== scope.sessionId ||
+        tracked.scope.who.userId !== scope.who.userId ||
+        tracked.scope.who.authSessionId !== scope.who.authSessionId
+      )
+        businessError(409, '当前会话没有可用的写入资格');
+      allowed(tracked.grant.expiresAt, scope);
+    },
     acquire: (scope: Scope, commandId: string) =>
       admit(() => acquire(structuredClone(scope), commandId)),
     execute: (

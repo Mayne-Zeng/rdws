@@ -210,7 +210,15 @@ export class NativeWebHost {
     release: readonly ReleasedCapability[] = capabilityRelease,
     readonly modelEgress: NativeModelEgress = 'direct',
     modelTransport?: NativeModelTransport,
+    readonly imageIntake = false,
   ) {
+    if (
+      imageIntake &&
+      (modelEgress !== 'mediated' || !modelTransport?.attachmentManifests)
+    )
+      throw new Error(
+        'Native image intake requires the isolated attachment carrier',
+      );
     if (modelEgress === 'mediated') {
       resolveNativeModelEgress('paused');
       if (!modelTransport)
@@ -452,6 +460,7 @@ export class NativeWebHost {
                 keyFile,
                 audience: this.audience,
                 demandRoot: this.demandRoot,
+                imageIntake: this.imageIntake,
                 presetRuntimeHome: root,
                 projectId: this.projectId,
                 releasedCapabilities: this.releasedCapabilities,

@@ -1219,6 +1219,22 @@
 
   <p>独立交付 A/B 复审 APPROVE，核对原生快照空段边界、真实 Native 同形用户目录文本、错误承诺和锁内变更的失败证据。最终邻域 <code>pnpm test</code> 通过 8 文件、69 项。macOS arm64、Node 24.20.0 下，<code>pnpm check</code> 退出 0，整仓通过 53 文件、313 项，1 项非 macOS 条件用例跳过。类型、lint、格式、构建、<code>pnpm validate:baseline</code> 及 <code>git diff --check</code> 均通过。</p>
 
+  <h4 id="t13-native-image-intake-plan-20261120">11.16.46 T13 新选图片的原登录准入</h4>
+  <p>Change / R3，非批量，基线 <code>d5f13bf</code>。在已验证的隔离回环附件装配中补齐一次主动图片从实际 Native 字节上传到标准提示请求。锁版通用 uploadFileBinary 的 Shared Fetch 精确路由要求 owner，SDK 暂存仅按 Session 查找，不能承担 RDWS 主体和原请求授权。使用 RDWS 仅受信 Host 可调用的精确内部路径和原生 <code>fileUploads.uploadImageStream</code>。独立程序化开关只接受已验证的成对附件回环装配。普通浏览器文字准入、direct/paused 及以前的临时验证照旧。产品开放前的历史图片、前端选择、持久未知状态和正式环境继续验收。</p>
+  <ol>
+    <li>BFF 程序化准备对象生成一个私有 UUID 原请求，冻结原用户、登录、项目、需求、本人会话、工作区和本次文字/图片。不向普通客户暴露暂存回执或短票据。一个对象至多发布一次提交，次次调用真实 ContextRuns 业务读取复核原身份，随后只等待同一完成或同一失败。暂存前后、发 Prompt 前及回给调用方前再检查原登录及会话。两份票据截止均取原登录 PostgreSQL 有效期、同一准备截止和短租约的最早值。真实 DB 撤权未通知 Native 时，BFF 后续读取拒绝推进，外发仍按既有 PG 首写锁定序。BFF 读与 Native 入箱之间只具备已观测的取消/撤权、期限检查与外发首写定序。</li>
+    <li>显式开启时注册精确 POST <code>/_rdws/image.stage</code>。Native 在读前核对精确路径/方法、IPv4 回环 Origin、Host 代和服务操作、原请求及本人会话的签名范围、MIME、无压缩。第一处 await 前同步保留会话/请求槽，Host 最多 64 个未退休、已退休待过期或未知槽。按锁版图片容量有界收二进制，完整字节承诺通过并核对实际工作区/CWD。最后在进入 <code>uploadImageStream</code> 之前与回执返回前都重查取消、票据截止和已观测撤权。确认回执取真实规范 ID、长度和 MIME。匹配的实际用户消息成功退休后，槽的简化墓碑至少留至原票据截止。可能存储或入箱的未知槽保持不可复用，直到 Host 结束。存储已经开始时取消仍可留有本机内容寻址对象。</li>
+    <li>唯一 <code>image-prompt</code> 短委派只有单会话的普通 POST <code>session/prompt</code>、对应原请求及规范参数哈希。保持已有文本规则并只增加一个本请求真实文件回执。普通浏览器、裸图、其它动作和 mux 无此权限。保持现有实际预激活工作区和预设检查，发出前用 Prompt 票据 nonce 和原 authSession 注册 <code>runs.admit</code> 及 Native run。预激活完成后，同步复验取消/撤权/期限及同用户、原登录、需求、会话和请求的槽，单向消费并转给锁版原生流程。真实 <code>spliced</code> 身份及规范图像证明和原生 RPC 的 accepted 两者共同确认返回。后续 <code>claimed</code> 继续核对相同图像证明才可签名外发，专用模式中的其它入口不能为图片发清单。相同已匹配 <code>user/message</code> 表示上游回执退休，和原入箱受理独立。回执丢失保持原对象未知，保守封住原运行及后续外发。原生可能已入箱，已有授权传输也可能已经首写。只核对原日志，无自动重绑或另起请求。供应商 Files 回执是独立下游机制。</li>
+    <li>重用真实签名 Native、受管隔离 PG 和 HTTPS 夹具。正例去掉人为注图，从真实字节暂存 ACK、规范 ID、原入箱和领取持续核对到 FD 4、真实 PG 和回环 HTTPS，普通授权对照。验收同对象并发与重复、同槽/同票据重复及退休后原票重放、错登录或错请求、一般浏览器无法调用。确定性暂存后 DB 撤权使该对象不再下发 Prompt。原生入箱后丢 ACK 的原请求只读观察并核对不重复，已有外发依据实际先后顺序。分别计 Native 真暂存、原入箱、锁内首写及供应商实到。聚焦、类型、lint、格式、构建、整仓和基线通过后交付。收尾停稳 Host 和载体，再关闭回环及隔离数据库。</li>
+  </ol>
+
+  <p>独立方案 A/B 复审 APPROVE。修订明确原登录最早截止、精确隔离装配、一次槽和短墓碑、原入箱与 RPC 双证据及真实失败验收。独立交付复审最终 APPROVE，复审补齐了完整正文后的连接取消、严格分块 UTF-8、冷需求 preset、错范围对照原运行和丢 Prompt ACK 时实际已就绪的外发清单。</p>
+  <p id="t13-native-image-intake-evidence-20261120">锁定 Native 0.2.2-rc.3 在独立回环附件装配调用真实 <code>uploadImageStream</code>。真实冷重启从持久需求 preset 恢复，暂存前先确保预设已加载。正确原登录在受管隔离 PostgreSQL 生效，二进制暂存的实际正规 ID 匹配签名原入箱、实际领取和 FD 4 图像证明，两个真实首写提交、两份 HTTPS 实收与模型回复均通过。未启用人为注图。发布同一个准备对象并发和复核只执行一次实际提示。并发同票据两次只有一次实际暂存，原用户消息退休后仍拒原票重放。有效其它图片字节、错原登录、错请求和普通浏览器拒绝，错误登录及请求原生 run 在场。</p>
+  <p>同签名的 Unicode 文本实际跨两个请求块仍精确入箱。Prompt 读完后暂停真实预激活查询，断开并恢复时仍无入箱。暂存成功后撤权拒绝下发 Prompt。另一次先证实原入箱及可用 FD 4 证据到达，再丢失 Prompt ACK，在放行测试中的首写闸门前撤销原运行，无新增供应商应用请求。同准备对象不重办，原入箱保留。该证据覆盖所测定序，无法证明已先获准的传输能撤回。</p>
+  <p id="t13-history-image-rule-20261120">T13-A2 已获用户确认。同一本人会话默认只发送文字。用户可以一键「沿用上一张图」，输入框显示可移除的缩略图，选择仅随本条消息生效。实际发送时重新核对当前登录、本人会话及适用的模型外发权限。产品接线与验收待办，冷启回执和派生继承按独立判据推进。</p>
+
+  <p>最终邻域 <code>pnpm test</code> 通过 8 文件、73 项。macOS arm64、Node 24.20.0 下，<code>pnpm check</code> 退出 0，整仓通过 53 文件、317 项，1 项非 macOS 条件用例跳过，类型、lint、格式和构建通过。<code>pnpm validate:baseline</code> 和 <code>git diff --check</code> 通过。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>
@@ -1307,6 +1323,8 @@
   <p><code>caffeinate -i pnpm test tests/integration/session-capability-preset.test.ts tests/integration/native-preset-composition.test.ts tests/integration/session-lifecycle.test.ts tests/integration/web-permissions.test.ts tests/integration/project-native-paths.test.ts tests/integration/requirement-template.test.ts</code> 通过（6 文件、40 项，最后一次文件异常处理修订前）。最后修订后的 <code>caffeinate -i pnpm test tests/integration/session-capability-preset.test.ts</code> 通过（2 项），验证同 ID 并发刷盘以及 FIFO 拒绝后健康定义可读。</p>
   <p>真实本机 DSH 与隔离 PostgreSQL 验证受审模块、Native 技能目录和每 Agent 可见的离线 MCP 定义。未绑定需求和其他版本未取得该技能或离线定义。合成回环模型验证已完成轮次后原生选版拒绝、绑定改变后的源版本继承，以及头记录与有效投影不同时的派生。验证同键恢复、装载中换绑、停用和登录过期、无发布或摘要错配、外部模块依赖拒绝、维护暂停与过往历史。夹具未建立 MCP 连接或执行工具。运营目录未登记实际制品，相关真实连接与 T07 工具准入未验收。无数据库迁移或生产依赖。</p>
   <p><code>caffeinate -i pnpm check</code> 返回 0（26 文件、166 项，类型、lint、格式与构建通过）。构建仍有主包体积提示。<code>caffeinate -i pnpm test:e2e</code> 返回 0（32 项，59.9 秒）。<code>pnpm validate:baseline</code> 返回 0（29 任务、62 个追溯点、16 视图）。本地交付修订以 <code>feat: apply immutable capability presets to new sessions</code> 为准。</p>
+
+  <p id="t12-background-editor-rule-20261120">T12 首版需求背景编辑权限已获用户确认。仅项目管理员和本需求的有效需求经理可以编辑。开发负责人的编辑权限取决于是否兼具其中任一有效身份，按对应身份授权。功能实现与验收待办。</p>
 
   <h4 id="t12-session-template-status-plan-20261120">11.17.12 T12 会话实际模板版本</h4>
   <p>Change / R2，基线 <code>f8dfd45</code>。依据 T12 的模板引用和生效状态验收，复用 T14 <a href="#t14-demand-binding-delivery-20261119">绑定配置</a>与<a href="#t14-preset-delivery-evidence-20261119">精确版本装载和冷恢复</a>已验证子能力。需求一旦更换绑定，当前配置与历史会话实际采用的版本可以不同。先交付上下文页的会话模板读回。需求背景维护及 T14 运营制品和用户侧验收维持清单状态。</p>

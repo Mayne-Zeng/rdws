@@ -351,6 +351,27 @@ export class ContextRuns {
     }
     return retired;
   }
+  async authorizeImageIntake(
+    who: Actor,
+    projectId: string,
+    requirementId: string,
+    sessionId: string,
+  ) {
+    if (
+      this.attachmentPolicy?.projectId !== projectId ||
+      !this.lockModelAuthority ||
+      this.closing(who.authSessionId, who.userId, requirementId)
+    )
+      return invalidModel();
+    const { validBefore } = await this.read(who, requirementId, sessionId);
+    if (
+      !Number.isFinite(validBefore) ||
+      validBefore <= Date.now() ||
+      this.closing(who.authSessionId, who.userId, requirementId)
+    )
+      return invalidModel();
+    return validBefore;
+  }
   private current(batch: readonly Run[]) {
     const now = Date.now();
     return batch.every(

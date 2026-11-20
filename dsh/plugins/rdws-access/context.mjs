@@ -3,6 +3,7 @@ import { appendFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { signGrant, bodyHash } from '../../bridge/access.ts';
 import { cancelTitleOrigins, rememberTitleOrigin } from './title-binding.mjs';
+import { intakeImageMatches } from './image-intake.mjs';
 
 const imageId = /^sha256:[a-f0-9]{64}$/;
 const maxImageOccurrences = 64;
@@ -101,6 +102,9 @@ export function installContext(ctx, config, key, route, requestContext) {
     completedTitleTurns = new WeakMap(),
     modelSteps = new Map();
   const imageOrigins = config.attachmentManifests ? new WeakMap() : undefined;
+  const intakeImages = config.imageIntake ? new WeakMap() : undefined;
+  const matchesIntake = (run, message) =>
+    !intakeImages || intakeImageMatches(message, intakeImages.get(run));
   let modelSequence = 0;
   const lookup = (r) => r.sessionId + ':' + r.requestId + ':' + r.peerNonce;
   const inboxInputs = (agent) => [
@@ -179,7 +183,11 @@ export function installContext(ctx, config, key, route, requestContext) {
             run.expiresAt > Date.now() &&
             !imageOrigins.has(run)
           )
-            imageOrigins.set(run, { origin: imageOrigin(message) });
+            imageOrigins.set(run, {
+              origin: matchesIntake(run, message)
+                ? imageOrigin(message)
+                : undefined,
+            });
         }
       },
       { global: true },
@@ -336,7 +344,8 @@ export function installContext(ctx, config, key, route, requestContext) {
         const attachment = imageOrigins?.get(run);
         if (
           attachment &&
-          matchingOrigin(attachment.origin, imageOrigin(message))
+          matchingOrigin(attachment.origin, imageOrigin(message)) &&
+          matchesIntake(run, message)
         )
           attachment.turn = turn;
       }
@@ -811,6 +820,26 @@ export function installContext(ctx, config, key, route, requestContext) {
           authorized.delete(id);
     },
     modelBindingFor,
+    bindIntake(cap, sessionId, image) {
+      const run = authorized.get(
+        lookup({
+          sessionId,
+          requestId: cap.requestId,
+          peerNonce: cap.nonce,
+        }),
+      );
+      if (
+        !intakeImages ||
+        !run ||
+        run.authSessionId !== cap.authSessionId ||
+        run.requirementId !== cap.requirementId ||
+        run.expiresAt <= Date.now() ||
+        run.seen ||
+        intakeImages.has(run)
+      )
+        throw new Error('Native image intake unavailable');
+      intakeImages.set(run, image);
+    },
     attachmentCallFor:
       imageOrigins &&
       ((options, call) => {

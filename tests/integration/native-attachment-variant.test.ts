@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
+import { existsSync } from 'node:fs';
 import {
   mkdir,
   mkdtemp,
@@ -12,12 +13,13 @@ import {
 import { createServer, type Server } from 'node:https';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as wait } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { acquireAuthority, connectDatabase, releaseAuthority } from '@rdws/db';
-import { isRecord } from '@rdws/dsh/access';
+import { imagePromptHash, isRecord } from '@rdws/dsh/access';
 import { sessionRpc } from '@rdws/dsh/sessions';
 import { NativeWebHost } from '@rdws/dsh/web';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import {
   createLoopbackAttachmentEgress,
   type AttachmentManifest,
@@ -25,6 +27,7 @@ import {
 import { createBusiness } from '../../apps/server/src/modules/business.ts';
 import { createProjectContextReader } from '../../apps/server/src/modules/native-projects.ts';
 import { ContextRuns } from '../../apps/server/src/modules/runtime-context.ts';
+import { prepareNativeImagePrompt } from '../../apps/server/src/modules/native-image-intake.ts';
 import {
   readDeepSeekFilesEvidence,
   readDeepSeekMessagesEvidence,
@@ -34,6 +37,10 @@ import { modelTlsCertificate } from '../helpers/model-tls.ts';
 
 const fixtureCredential = 'synthetic-variant-only';
 const receiptId = 'synthetic-native-variant';
+const uploadImage = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGPgidpCU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULAHy7aD0Nf3XZAAAAAElFTkSuQmCC',
+  'base64',
+);
 const authoredPath = '/fixture-user/explicit-attachment-context';
 const runtimeNote =
   'Synthetic retained runtime fact 🧩 with literal </SYSTEM-REMINDER >.';
@@ -234,6 +241,10 @@ test
     'native offload mixed',
     'native offload all',
     'native text replay',
+    'native uploaded',
+    'native upload revoked',
+    'native upload lost ACK',
+    'native upload cancelled',
   ] as const)(
   'Native variant evidence follows the original claimed input with %s',
   async (transport) => {
@@ -241,12 +252,28 @@ test
     const nativeManifest = transport.startsWith('native ');
     const nativeInline = transport === 'native inline';
     const textReplay = transport === 'native text replay';
+    const uploadIntake = transport.startsWith('native upload');
+    const stageRevoked = transport === 'native upload revoked';
+    const lostPromptAck = transport === 'native upload lost ACK';
+    const promptCancelled = transport === 'native upload cancelled';
+    let resumeCarrier: (() => void) | undefined;
+    const carrierGate = lostPromptAck
+      ? new Promise<void>((resolve) => {
+          resumeCarrier = resolve;
+        })
+      : undefined;
     const loseAck = transport === 'native lost ACK';
     const revokeBeforeCarrier = transport === 'native revoked';
     const offload =
       transport === 'native offload mixed' ||
       transport === 'native offload all';
-    const denied = loseAck || revokeBeforeCarrier || offload;
+    const denied =
+      loseAck ||
+      revokeBeforeCarrier ||
+      offload ||
+      stageRevoked ||
+      lostPromptAck ||
+      promptCancelled;
     let retryFirstMessage = transport === 'native receipt';
     const root = await mkdtemp(
       join(await realpath(tmpdir()), 'rdws-attachment-variant-'),
@@ -254,6 +281,14 @@ test
     const config = join(root, 'config');
     const profile = join(config, 'profiles', 'rdws');
     const evidencePath = join(root, 'synthetic-evidence.jsonl');
+    const activationGate = promptCancelled
+      ? {
+          arm: join(root, 'synthetic-activation-arm'),
+          ready: join(root, 'synthetic-activation-ready'),
+          release: join(root, 'synthetic-activation-release'),
+          resumed: join(root, 'synthetic-activation-resumed'),
+        }
+      : undefined;
     const project = 'attachment-variant';
     const attachmentObjects = join(
       root,
@@ -267,7 +302,9 @@ test
     const provider = 'deepseek-official';
     const model = 'fixture-vision';
     const accepted =
-      'Synthetic image admitted with original run at ' + authoredPath;
+      (uploadIntake
+        ? 'Synthetic uploaded image 🧪 at '
+        : 'Synthetic image admitted with original run at ') + authoredPath;
     const late = 'Synthetic original text with later variation';
     const file = 'Synthetic typed file rejection';
     const attempts: Attempt[] = [];
@@ -540,6 +577,7 @@ test
                   contentType: request.headers.get('content-type'),
                 };
                 nativeAttempts.push(attempt);
+                if (carrierGate) await carrierGate;
                 const [body, observation] = request.body.tee();
                 const [response] = await Promise.all([
                   attemptScope.run(attempt, () =>
@@ -702,6 +740,7 @@ test
               return syntheticMessages(model);
             },
           },
+          uploadIntake,
         );
         startedHost = host;
         const runs = new ContextRuns(
@@ -802,7 +841,7 @@ test
             const result = await runs.handle(
               input,
               token,
-              denied && prepare ? undefined : reply,
+              (loseAck || revokeBeforeCarrier) && prepare ? undefined : reply,
             );
             if (prepare && revokeBeforeCarrier) {
               const image = Array.isArray(input.images) && input.images[0];
@@ -893,6 +932,8 @@ test
                   late,
                   evidencePath,
                   repeatImages: nativeManifest,
+                  observeOnly: uploadIntake,
+                  activationGate,
                   runtimeNote: nativeManifest ? runtimeNote : undefined,
                   file,
                 },
@@ -933,16 +974,42 @@ test
           userId: randomUUID(),
           authSessionId: randomUUID(),
         };
+        const coldPreset =
+          transport === 'native uploaded'
+            ? await host.preparePreset(requirementId, {
+                templateId: randomUUID(),
+                revision: 1,
+                capabilities: [],
+              })
+            : undefined;
+        const choice = coldPreset ? { agentPreset: coldPreset.id } : {};
         const { sessionId } =
           reopened ??
           ((await sessionRpc(
             host,
-            { ...identity, purpose: 'create' },
+            { ...identity, ...choice, purpose: 'create' },
             'session/create',
             {
               workspaceId: workspace.workspaceId,
+              ...choice,
             },
           )) as { sessionId: string });
+        if (coldPreset) {
+          const oldGeneration = host.contextGeneration;
+          await host.close();
+          ({ host, runs } = makeHost());
+          expect(host.contextGeneration).not.toBe(oldGeneration);
+          expect(
+            await host.workspace(
+              requirementId,
+              'Synthetic attachment verification',
+              true,
+            ),
+          ).toEqual(workspace);
+          expect(
+            await host.control('session.preset', { requirementId, sessionId }),
+          ).toMatchObject({ agentPreset: coldPreset.id });
+        }
         if (database && !reopened) {
           const { pool } = database;
           const { userId, authSessionId } = identity;
@@ -1010,10 +1077,12 @@ test
           nonce,
           cwd: identity.cwd,
         });
-        await host.control('run', {
-          ...runs.admit(identity, requirementId, sessionId, requestId, nonce),
-          authSessionId: identity.authSessionId,
-        });
+        if (!uploadIntake) {
+          await host.control('run', {
+            ...runs.admit(identity, requirementId, sessionId, requestId, nonce),
+            authSessionId: identity.authSessionId,
+          });
+        }
         const prompt = {
           sessionId,
           requestId,
@@ -1046,6 +1115,403 @@ test
             }),
           });
           expect(rejected.status).toBe(503);
+        }
+        if (uploadIntake) {
+          const command = prepareNativeImagePrompt(
+            host,
+            runs,
+            { ...identity, sessionId },
+            { text, mediaType: 'image/png', bytes: uploadImage },
+          );
+          const source = originals.get(sessionId)!;
+          source.requestId = command.requestId;
+          const actualFetch = host.fetch.bind(host);
+          const control = vi.spyOn(host, 'control');
+          let staging: Parameters<NativeWebHost['fetch']> | undefined;
+          let stagedImage: string | undefined;
+          let stageCalls = 0;
+          let imagePromptCalls = 0;
+          const fetch = vi
+            .spyOn(host, 'fetch')
+            .mockImplementation(async (...args) => {
+              const [path, token] = args;
+              if (path === '/_rdws/image.stage') {
+                stageCalls++;
+                staging = args;
+                let response: Response;
+                if (denied) response = await actualFetch(...args);
+                else {
+                  const pair = await Promise.all([
+                    actualFetch(...args),
+                    actualFetch(...args),
+                  ]);
+                  expect(pair.map(({ status }) => status).sort()).toEqual([
+                    200, 409,
+                  ]);
+                  response = pair.find(({ ok }) => ok)!;
+                  await Promise.all(
+                    pair
+                      .filter(({ ok }) => !ok)
+                      .map((item) => item.body?.cancel()),
+                  );
+                }
+                expect(response.status).toBe(200);
+                const receipt = (await response.clone().json()) as {
+                  receiptId: string;
+                  attachmentId: string;
+                };
+                stagedImage = receipt.attachmentId;
+                if (stageRevoked) {
+                  const removed = await database!.pool.query(
+                    'delete from auth_session where id=$1',
+                    [identity.authSessionId],
+                  );
+                  expect(removed.rowCount).toBe(1);
+                } else if (!denied) {
+                  const signed =
+                    typeof token === 'string' ? host.claims(token) : undefined;
+                  if (!signed?.bodyHash)
+                    throw new Error('Missing signed byte commitment');
+                  const differentBytes = Buffer.from(
+                    'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGMQKlpFU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULANkmuD10cOORAAAAAElFTkSuQmCC',
+                    'base64',
+                  );
+                  const wrongBytes = host.ticket(
+                    {
+                      ...browser,
+                      purpose: 'service',
+                      operation: 'image.stage',
+                      requestId: randomUUID(),
+                      bodyHash: signed.bodyHash,
+                    },
+                    signed.expiresAt,
+                  );
+                  const refused = await actualFetch(
+                    '/_rdws/image.stage',
+                    wrongBytes,
+                    {
+                      method: 'POST',
+                      headers: { 'content-type': 'image/png' },
+                      body: Uint8Array.from(differentBytes),
+                    },
+                  );
+                  expect(refused.ok).toBe(false);
+                  await refused.body?.cancel();
+                  const otherLogin = randomUUID();
+                  await database!.pool.query(
+                    "insert into auth_session(id,token,user_id,expires_at) values($1,$2,$3,now()+interval '5 minutes')",
+                    [otherLogin, randomUUID(), identity.userId],
+                  );
+                  const read = await runs.authorizeImageIntake(
+                    { ...identity, authSessionId: otherLogin },
+                    project,
+                    requirementId,
+                    sessionId,
+                  );
+                  for (const [authSessionId, requestId] of [
+                    [otherLogin, command.requestId],
+                    [identity.authSessionId, randomUUID()],
+                  ] as const) {
+                    const wrong = {
+                      sessionId,
+                      requestId,
+                      mode: 'queue',
+                      content: [
+                        { type: 'text', text },
+                        { type: 'file', receiptId: receipt.receiptId },
+                      ],
+                    };
+                    const invalid = host.ticket(
+                      {
+                        ...browser,
+                        purpose: 'image-prompt',
+                        authSessionId,
+                        requestId,
+                        bodyHash: imagePromptHash(wrong),
+                      },
+                      read,
+                    );
+                    const candidate = runs.admit(
+                      { ...identity, authSessionId },
+                      requirementId,
+                      sessionId,
+                      requestId,
+                      host.claims(invalid)!.nonce,
+                    );
+                    expect(
+                      await host.control('run', {
+                        ...candidate,
+                        authSessionId,
+                      }),
+                    ).toMatchObject({ authorized: true });
+                    try {
+                      await expect(
+                        sessionRpc(host, invalid, 'session/prompt', wrong),
+                      ).rejects.toThrow();
+                    } finally {
+                      runs.discard(candidate.runId);
+                      await host.control('run.cancel', {
+                        runId: candidate.runId,
+                      });
+                    }
+                  }
+                }
+                return response;
+              }
+              const claims =
+                typeof token === 'string' ? host.claims(token) : undefined;
+              const imagePrompt =
+                path === '/api/session/prompt' &&
+                claims?.purpose === 'image-prompt' &&
+                claims.authSessionId === identity.authSessionId &&
+                claims.requestId === command.requestId;
+              if (imagePrompt) imagePromptCalls++;
+              if (imagePrompt && activationGate) {
+                await writeFile(activationGate.arm, '');
+                const disconnected = new AbortController();
+                const pending = actualFetch(path, token, {
+                  ...args[2],
+                  signal: disconnected.signal,
+                });
+                void pending.catch(() => {});
+                try {
+                  await expect
+                    .poll(() => existsSync(activationGate.ready))
+                    .toBe(true);
+                  disconnected.abort();
+                  await expect(pending).rejects.toThrow();
+                } finally {
+                  disconnected.abort();
+                  await writeFile(activationGate.release, '');
+                }
+                await expect
+                  .poll(() => existsSync(activationGate.resumed))
+                  .toBe(true);
+                await wait(250);
+                expect(
+                  (await currentEvents()).flatMap(({ type, data }) =>
+                    type === 'agent/inbox/spliced' &&
+                    Array.isArray(data.inserted)
+                      ? data.inserted
+                      : [],
+                  ),
+                ).toEqual([]);
+                return pending;
+              }
+              if (imagePrompt && !denied) {
+                const input = args[2];
+                const encoded = Buffer.from(String(input?.body));
+                const offset = encoded.indexOf(Buffer.from('🧪')) + 1;
+                expect(offset).toBeGreaterThan(1);
+                return actualFetch(path, token, {
+                  ...input,
+                  body: new ReadableStream<Uint8Array>({
+                    async start(controller) {
+                      controller.enqueue(encoded.subarray(0, offset));
+                      await wait(20);
+                      controller.enqueue(encoded.subarray(offset));
+                      controller.close();
+                    },
+                  }),
+                });
+              }
+              const response = await actualFetch(...args);
+              if (imagePrompt && lostPromptAck) {
+                const result = await response.json();
+                expect(result).toMatchObject({
+                  result: { ok: true, value: { accepted: true } },
+                });
+                await expect
+                  .poll(() => nativeAttempts[0]?.manifest, { timeout: 5000 })
+                  .toBeDefined();
+                throw new Error('Synthetic lost image prompt acknowledgement');
+              }
+              return response;
+            });
+
+          try {
+            const forbidden = await actualFetch('/_rdws/image.stage', ticket, {
+              method: 'POST',
+              headers: { 'content-type': 'image/png' },
+              body: Uint8Array.from(uploadImage),
+            });
+            expect(forbidden.status).toBe(403);
+            await forbidden.body?.cancel();
+            const submissions = await Promise.allSettled([
+              command.submit(),
+              command.submit(),
+            ]);
+            expect(submissions.map(({ status }) => status)).toEqual(
+              denied ? ['rejected', 'rejected'] : ['fulfilled', 'fulfilled'],
+            );
+            const originalRun = control.mock.calls.find(
+              ([operation, input]) =>
+                operation === 'run' &&
+                input.authSessionId === identity.authSessionId &&
+                input.requestId === command.requestId,
+            );
+            if (!stageRevoked) {
+              expect(originalRun?.[1]).toMatchObject({
+                requestId: command.requestId,
+                authSessionId: identity.authSessionId,
+                sessionId,
+              });
+              source.nonce = String(originalRun?.[1].peerNonce);
+            }
+            expect(stageCalls).toBe(1);
+            expect(imagePromptCalls).toBe(stageRevoked ? 0 : 1);
+            expect(stagedImage).toMatch(/^sha256:[a-f0-9]{64}$/);
+            if (!denied) {
+              for (const result of submissions)
+                expect(result).toMatchObject({
+                  status: 'fulfilled',
+                  value: {
+                    requestId: command.requestId,
+                    attachmentId: stagedImage,
+                  },
+                });
+            }
+            resumeCarrier?.();
+            const subsequent = await Promise.allSettled([command.submit()]);
+            expect(subsequent[0]!.status).toBe(
+              denied ? 'rejected' : 'fulfilled',
+            );
+            expect(stageCalls).toBe(1);
+            expect(imagePromptCalls).toBe(stageRevoked ? 0 : 1);
+            if (!stageRevoked && !promptCancelled) {
+              await expect
+                .poll(
+                  async () =>
+                    (await currentEvents()).some(
+                      ({ type }) => type === 'turn/end',
+                    ),
+                  { timeout: 15000 },
+                )
+                .toBe(true);
+            }
+            const events = await currentEvents();
+            const inserted = events
+              .filter(({ type }) => type === 'agent/inbox/spliced')
+              .flatMap(({ data }) =>
+                Array.isArray(data.inserted) ? data.inserted : [],
+              );
+            if (stageRevoked || promptCancelled) {
+              expect(inserted).toEqual([]);
+              expect(nativeAttempts).toEqual([]);
+            } else {
+              expect(inserted).toHaveLength(1);
+              expect(inserted[0]).toMatchObject({
+                source: expect.objectContaining({
+                  rpcId: command.requestId,
+                  principal: {
+                    kind: 'rdws',
+                    userId: identity.userId,
+                    nonce: source.nonce,
+                  },
+                }),
+                content: [
+                  { type: 'text', text },
+                  {
+                    type: 'image',
+                    attachment: expect.objectContaining({
+                      attachmentId: stagedImage,
+                    }),
+                  },
+                ],
+              });
+            }
+            if (denied) {
+              expect(httpEntries).toEqual([]);
+              expect(lockReads).toEqual([]);
+              expect(authorityEntries).toBe(0);
+              expect(replies).toBe(0);
+              if (lostPromptAck)
+                expect(
+                  control.mock.calls.some(
+                    ([operation]) => operation === 'run.cancel',
+                  ),
+                ).toBe(true);
+            } else {
+              expect(
+                events.find(({ type }) => type === 'turn/end')?.data.reason,
+              ).toMatchObject({ kind: 'completed' });
+              expect(httpEntries).toEqual(['/v1/files', '/v1/messages']);
+              expect(authorityEntries).toBe(2);
+              expect(
+                lockReads.map(({ authSessionId, outcome }) => ({
+                  authSessionId,
+                  outcome,
+                })),
+              ).toEqual(
+                Array.from({ length: 2 }, () => ({
+                  authSessionId: identity.authSessionId,
+                  outcome: 'submitted',
+                })),
+              );
+              const witness = JSON.parse(
+                (await readFile(evidencePath, 'utf8')).trim(),
+              ) as Witness;
+              expect(witness).toMatchObject({
+                attachmentId: stagedImage,
+                inserted: {
+                  requestId: command.requestId,
+                  userId: identity.userId,
+                  nonce: source.nonce,
+                  images: [stagedImage],
+                },
+                claimed: {
+                  requestId: command.requestId,
+                  userId: identity.userId,
+                  nonce: source.nonce,
+                  images: [stagedImage],
+                },
+              });
+              expect(
+                nativeAttempts.map(({ manifest }) => manifest?.images),
+              ).toEqual([[witness.variant.image], [witness.variant.image]]);
+              expect(uploadedImages).toEqual([witness.variant.image]);
+              expect(receivedImages).toEqual([
+                [
+                  expect.objectContaining({
+                    kind: 'file',
+                    fileIdSha256: sha(receiptId + '-1'),
+                  }),
+                ],
+              ]);
+              expect(receivedTextBoundaries).toEqual([true]);
+              expect(replies).toBe(1);
+              expect(
+                events
+                  .filter(({ type }) => type === 'user/message')
+                  .some(
+                    ({ data }) =>
+                      isRecord(data.source) &&
+                      data.source.rpcId === command.requestId,
+                  ),
+              ).toBe(true);
+              const recordedStage = staging!;
+              if (typeof recordedStage[1] !== 'string')
+                throw new Error('Expected a signed fixture upload');
+              expect(host.claims(recordedStage[1])).toBeDefined();
+              const replay = await actualFetch(...recordedStage);
+              expect(replay.status).toBe(409);
+              await replay.body?.cancel();
+              expect(httpEntries).toEqual(['/v1/files', '/v1/messages']);
+            }
+          } finally {
+            resumeCarrier?.();
+            fetch.mockRestore();
+            control.mockRestore();
+          }
+          return {
+            pair: [],
+            identity,
+            sessionId,
+            previousEvents,
+            offloadCount: 0,
+            typedFile: false,
+            snapshots: [],
+          };
         }
         expect(
           await sessionRpc(host, ticket, 'session/prompt', prompt),
@@ -1307,6 +1773,7 @@ test
         return;
       }
       const warm = await send(accepted, true);
+      if (uploadIntake) return;
       if (nativeManifest) {
         const origin = {
           userId: warm.identity.userId,

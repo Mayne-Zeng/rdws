@@ -303,40 +303,50 @@ export function createBusiness(db: Database) {
       lead: developer && item.leadId === who.userId,
     };
   }
-  async function reserve(
-    tx: Pick<Transaction, 'select' | 'insert'>,
+  function receiptKey(
     who: Actor,
     scope: string,
     operation: string,
     commandId: string,
     input: unknown,
   ) {
-    const value = {
+    return {
       actorId: who.userId,
       scope,
       operation,
       commandId,
       digest: digestOf(input),
     };
-    const inserted = await tx
-      .insert(schema.commandReceipt)
-      .values(value)
-      .onConflictDoNothing()
-      .returning();
-    if (inserted.length) return { value };
+  }
+  async function readReceipt(tx: Reads, value: ReturnType<typeof receiptKey>) {
     const [old] = await tx
       .select()
       .from(schema.commandReceipt)
       .where(
         and(
           eq(schema.commandReceipt.actorId, value.actorId),
-          eq(schema.commandReceipt.scope, scope),
-          eq(schema.commandReceipt.operation, operation),
-          eq(schema.commandReceipt.commandId, commandId),
+          eq(schema.commandReceipt.scope, value.scope),
+          eq(schema.commandReceipt.operation, value.operation),
+          eq(schema.commandReceipt.commandId, value.commandId),
         ),
       );
-    if (!old || old.digest !== value.digest)
+    if (old && old.digest !== value.digest)
       businessError(409, '操作标识已用于不同内容，请重新发起');
+    return old;
+  }
+  async function reserve(
+    tx: Pick<Transaction, 'select' | 'insert'>,
+    ...input: Parameters<typeof receiptKey>
+  ) {
+    const value = receiptKey(...input);
+    const inserted = await tx
+      .insert(schema.commandReceipt)
+      .values(value)
+      .onConflictDoNothing()
+      .returning();
+    if (inserted.length) return { value };
+    const old = await readReceipt(tx, value);
+    if (!old) businessError(409, '操作标识已用于不同内容，请重新发起');
     return { value, result: old.result };
   }
   async function finish(
@@ -2568,7 +2578,7 @@ export function createBusiness(db: Database) {
     readWithDeadline,
     withModelAuthority,
     writeContext,
-    writeReceipts: { reserve, finish },
+    writeReceipts: { reserve, finish, receiptKey, readReceipt },
     sessionTransaction,
     sessionTemplate,
     approvedTemplateReferences,

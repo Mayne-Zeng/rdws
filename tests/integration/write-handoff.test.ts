@@ -39,7 +39,7 @@ function controlledCommits() {
   let next:
     | {
         lose: boolean;
-        rollBackSettlement?: true;
+        rollback?: 'settlement' | 'any';
         entered: boolean;
         wait: Promise<void>;
         release: () => void;
@@ -54,6 +54,16 @@ function controlledCommits() {
         release: () => void;
       }
     | undefined;
+  let pausedSession: ReturnType<typeof pauseQuery> | undefined;
+  let pausedReceipt:
+    (ReturnType<typeof pauseQuery> & { commandId: string }) | undefined;
+  function pauseQuery() {
+    let release!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { entered: false, wait, release };
+  }
   const original = Pool.prototype.connect;
   const spy = vi.spyOn(Pool.prototype, 'connect').mockImplementation(function (
     this: Pool,
@@ -74,8 +84,26 @@ function controlledCommits() {
           : typeof input === 'string'
             ? []
             : input.values;
-        if (sql?.includes("transaction_timeout='2400ms'"))
-          brokerTransaction = true;
+        const hold =
+          sql?.startsWith('select "id" from "native_session"') && pausedSession
+            ? pausedSession
+            : sql?.startsWith('update "command_receipt"') &&
+                pausedReceipt &&
+                values?.includes(pausedReceipt.commandId)
+              ? pausedReceipt
+              : undefined;
+        if (hold) {
+          if (hold === pausedSession) pausedSession = undefined;
+          else pausedReceipt = undefined;
+          return Reflect.apply(query, client, parameters).then(
+            async (result: unknown) => {
+              hold.entered = true;
+              await hold.wait;
+              return result;
+            },
+          );
+        }
+        if (sql?.includes("synchronous_commit='on'")) brokerTransaction = true;
         if (
           sql?.startsWith('update "command_receipt"') &&
           values?.some(
@@ -123,14 +151,14 @@ function controlledCommits() {
           sql === 'commit' &&
           brokerTransaction &&
           next &&
-          (!next.rollBackSettlement || completingExecution)
+          (next.rollback !== 'settlement' || completingExecution)
         ) {
           const gate = next;
           next = undefined;
           return Reflect.apply(
             query,
             client,
-            gate.rollBackSettlement ? ['rollback'] : parameters,
+            gate.rollback ? ['rollback'] : parameters,
           ).then(async (result: unknown) => {
             gate.entered = true;
             if (gate.lose) throw new Error('Synthetic commit response lost');
@@ -144,16 +172,16 @@ function controlledCommits() {
     });
   } as typeof original);
   return {
-    arm(lose = true, rollBackSettlement?: true) {
+    arm(lose = true, rollback?: 'settlement' | 'any') {
       if (next) throw new Error('A commit gate is already armed');
       let release!: () => void;
       const wait = new Promise<void>((resolve) => {
         release = resolve;
       });
-      if (rollBackSettlement) release();
+      if (rollback) release();
       return (next = {
         lose,
-        rollBackSettlement,
+        rollback,
         entered: false,
         wait,
         release,
@@ -173,6 +201,12 @@ function controlledCommits() {
         release = resolve;
       });
       return (settling = { afterCommit, entered: false, wait, release });
+    },
+    holdSession() {
+      return (pausedSession = pauseQuery());
+    },
+    holdReceipt(commandId: string) {
+      return (pausedReceipt = { ...pauseQuery(), commandId });
     },
     restore: () => spy.mockRestore(),
   };
@@ -411,6 +445,81 @@ test.skipIf(process.platform !== 'darwin')(
       expect((await currentRows()).rows).toEqual([
         { generation, phase: 'held', run_id: null },
       ]);
+      const originalAcquire = {
+        type: 'acquire' as const,
+        commandId: candidateIds[winningIndex]!,
+      };
+      expect(await active.checkCommand(writer, originalAcquire)).toEqual({
+        state: 'recorded',
+        generation,
+      });
+      await expect(
+        active.checkCommand(alternate, originalAcquire),
+      ).rejects.toMatchObject({ statusCode: 409 });
+      await expect(
+        active.checkCommand(
+          { ...next, sessionId: writer.sessionId },
+          originalAcquire,
+        ),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      const siblingScope = {
+        ...lead,
+        who: {
+          ...lead.who,
+          authSessionId: alternateLogins.get(lead.who.userId)!,
+        },
+        requirementId: differentRequirement,
+        sessionId: differentSession,
+      };
+      const firstSibling = await active.acquire(siblingScope, randomUUID());
+      const siblingRelease = {
+        type: 'release' as const,
+        commandId: randomUUID(),
+        generation: firstSibling.generation,
+      };
+      const releaseRollback = commits.arm(false, 'any');
+      await expect(
+        active.release(
+          siblingScope,
+          siblingRelease.generation,
+          siblingRelease.commandId,
+        ),
+      ).rejects.toThrow('transaction rolled back');
+      expect(releaseRollback.entered).toBe(true);
+      expect(await active.checkCommand(siblingScope, siblingRelease)).toEqual({
+        state: 'unrecorded',
+      });
+      active.assertWireLease(
+        siblingScope,
+        firstSibling.generation,
+        firstSibling.contextVersion,
+      );
+      expect(
+        await active.release(
+          siblingScope,
+          siblingRelease.generation,
+          siblingRelease.commandId,
+        ),
+      ).toBe('released');
+      const rolledBackAcquire = commits.arm(true, 'any');
+      const siblingAcquire = {
+        type: 'acquire' as const,
+        commandId: randomUUID(),
+      };
+      await expect(
+        active.acquire(siblingScope, siblingAcquire.commandId),
+      ).rejects.toThrow('commit could not be confirmed');
+      expect(rolledBackAcquire.entered).toBe(true);
+      expect(await active.checkCommand(siblingScope, siblingAcquire)).toEqual({
+        state: 'unrecorded',
+      });
+      await expect(
+        active.acquire(siblingScope, randomUUID()),
+      ).rejects.toMatchObject({ statusCode: 409 });
+      const activeSibling = await active.acquire(
+        siblingScope,
+        siblingAcquire.commandId,
+      );
 
       const cancelledWrite = {
         generation,
@@ -611,11 +720,27 @@ test.skipIf(process.platform !== 'darwin')(
       await expect(active.acquire(next, randomUUID())).rejects.toMatchObject({
         statusCode: 409,
       });
-      await expect(
-        active.release(next, generation, randomUUID()),
-      ).rejects.toMatchObject({ statusCode: 409 });
+      const slowAuthorization = commits.holdSession();
+      const refused = active.release(next, generation, randomUUID());
+      void refused.catch(() => {});
+      try {
+        await expect.poll(() => slowAuthorization.entered).toBe(true);
+        active.assertWireLease(
+          writer,
+          generation,
+          winning.value.contextVersion,
+        );
+      } finally {
+        slowAuthorization.release();
+      }
+      await expect(refused).rejects.toMatchObject({ statusCode: 409 });
 
       const releaseId = randomUUID();
+      const originalRelease = {
+        type: 'release' as const,
+        commandId: releaseId,
+        generation,
+      };
       const missingRelease = commits.arm();
       const stopSettlement = commits.holdSettlement();
       const release = active.release(writer, generation, releaseId);
@@ -623,6 +748,26 @@ test.skipIf(process.platform !== 'darwin')(
       try {
         await expect.poll(() => stopSettlement.entered).toBe(true);
         expect(await readStatus()).toEqual({ state: 'stopping' });
+        expect(await active.checkCommand(writer, originalRelease)).toEqual({
+          state: 'recorded',
+          generation,
+        });
+        expect(
+          await active.execute(siblingScope, {
+            generation: activeSibling.generation,
+            commandId: randomUUID(),
+            repositoryId: 'app',
+            request: {
+              tool: 'file',
+              operation: 'write',
+              path: 'scope-status.txt',
+              text: 'sibling write',
+            },
+          }),
+        ).toMatchObject({
+          status: 'finished',
+          result: { status: 'ok', stop: 'confirmed' },
+        });
       } finally {
         stopSettlement.release();
       }
@@ -655,6 +800,23 @@ test.skipIf(process.platform !== 'darwin')(
       expect(missingAcquisition.entered).toBe(true);
       const second = await active.acquire(next, secondId);
       expect(second.generation).not.toBe(generation);
+      const oldReplay = active.release(writer, generation, releaseId);
+      void oldReplay.catch(() => {});
+      active.assertWireLease(next, second.generation, second.contextVersion);
+      expect(await oldReplay).toBe('released');
+      await expect(
+        active.checkCommand(writer, {
+          ...originalRelease,
+          generation: second.generation,
+        }),
+      ).rejects.toMatchObject({ statusCode: 409 });
+      expect(
+        await active.release(
+          siblingScope,
+          activeSibling.generation,
+          randomUUID(),
+        ),
+      ).toBe('released');
       expect(await active.execute(writer, input)).toEqual(firstReceipt);
       await expect(
         active.execute(writer, {
@@ -725,7 +887,7 @@ test.skipIf(process.platform !== 'darwin')(
           script: 'printf once >> settlement.txt',
         },
       };
-      const rolledBackSettlement = commits.arm(false, true);
+      const rolledBackSettlement = commits.arm(false, 'settlement');
       await expect(active.execute(next, settlementRequest)).rejects.toThrow(
         'transaction rolled back',
       );
@@ -922,7 +1084,7 @@ test.skipIf(process.platform !== 'darwin')(
         lateCommit.release();
       }
 
-      let secondRunStarted = false;
+      let secondRunOutput = '';
       const secondRun = active.execute(
         writer,
         {
@@ -931,15 +1093,27 @@ test.skipIf(process.platform !== 'darwin')(
           commandId: randomUUID(),
           request: {
             tool: 'shell',
-            script: 'printf ready; while :; do :; done',
+            script: 'printf "fixture-pid:%s\\n" "$$"; while :; do :; done',
           },
         },
-        () => {
-          secondRunStarted = true;
+        ({ stream, chunk }) => {
+          if (stream === 'stdout') secondRunOutput += chunk.toString();
         },
       );
       void secondRun.catch(() => {});
-      await expect.poll(() => secondRunStarted).toBe(true);
+      const secondPid = await isolatedShellPid(() => secondRunOutput);
+      const [activeRow] = (await currentRows()).rows;
+      expect(await active.release(writer, generation, releaseId)).toBe(
+        'released',
+      );
+      expect(process.kill(-secondPid, 0)).toBe(true);
+      expect((await currentRows()).rows).toEqual([activeRow]);
+      expect(
+        await active.readStatus(writer.who, projectId, requirementId, () => {}),
+      ).toMatchObject({
+        state: 'held',
+        holder: { generation: latest.generation },
+      });
       const missingRevocation = commits.arm();
       const revocationId = randomUUID();
       let revocationReads = 0;
@@ -1054,6 +1228,36 @@ test.skipIf(process.platform !== 'darwin')(
       } finally {
         expiryStop.release();
       }
+      await expect.poll(() => readStatus(short)).toEqual({ state: 'idle' });
+
+      const untilCutoff = await short.acquire(next, randomUUID());
+      const deadlineCommand = {
+        type: 'release' as const,
+        generation: untilCutoff.generation,
+        commandId: randomUUID(),
+      };
+      const receiptWrite = commits.holdReceipt(deadlineCommand.commandId);
+      const overdueRelease = short.release(
+        next,
+        deadlineCommand.generation,
+        deadlineCommand.commandId,
+      );
+      void overdueRelease.catch(() => {});
+      try {
+        await expect.poll(() => receiptWrite.entered).toBe(true);
+        await new Promise((resolve) =>
+          setTimeout(
+            resolve,
+            Math.max(0, untilCutoff.expiresAt - Date.now() + 5),
+          ),
+        );
+      } finally {
+        receiptWrite.release();
+      }
+      await expect(overdueRelease).rejects.toMatchObject({ statusCode: 409 });
+      expect(await short.checkCommand(next, deadlineCommand)).toEqual({
+        state: 'unrecorded',
+      });
       await expect.poll(() => readStatus(short)).toEqual({ state: 'idle' });
 
       const retained = await short.acquire(next, randomUUID());

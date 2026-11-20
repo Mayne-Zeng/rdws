@@ -62,10 +62,20 @@ type Running = {
 type Holding = {
   scope: Scope;
   grant: Grant;
+  commandId: string;
   timer: NodeJS.Timeout;
   confirmed: boolean;
+  unknownCommit?: true;
 };
-type PendingRelease = { scope: Scope; generation: string; commandId: string };
+type ReleaseRequest = { scope: Scope; generation: string; commandId: string };
+type ReleaseState = 'released' | 'draining';
+type PendingRelease = ReleaseRequest & {
+  uncertain: boolean;
+  work?: Promise<ReleaseState>;
+};
+type WriteCommand =
+  | { type: 'acquire'; commandId: string }
+  | { type: 'release'; commandId: string; generation: string };
 type AuthorityResolution = 'committed' | 'rolled-back' | 'unknown';
 type AuthorityConfirmation = (tx: Queries) => Promise<AuthorityResolution>;
 
@@ -73,6 +83,7 @@ const leases = schema.requirementWriteLease;
 const leaseDuration = 30 * 60 * 1000;
 
 class UnknownWriteCommit extends Error {}
+class SupersededRelease extends Error {}
 
 function checkLocalExecution(leaseMs: number) {
   if (
@@ -161,12 +172,12 @@ export function createOwnedWriteHandoff(
     throw new Error('Write handoff requires a managed database owner');
 
   const business = createBusiness(db);
-  const { reserve, finish } = business.writeReceipts;
+  const { reserve, finish, receiptKey, readReceipt } = business.writeReceipts;
   const holdings = new Map<string, Holding>();
   const executions = new Map<string, Running>();
   const settlements = new Map<string, Settlement>();
   const fences = new Set<symbol>();
-  const pendingReleases = new Map<symbol, PendingRelease>();
+  const releaseFences = new Map<string, PendingRelease>();
   const pendingCalls = new Set<string>();
   type AuthorityChange = {
     phase: 'changing' | 'unknown' | 'committed';
@@ -248,8 +259,12 @@ export function createOwnedWriteHandoff(
 
   function allowed(deadline: number, scope: Scope) {
     requireLiveLogin(scope);
-    if (stopping || fences.size || !(Date.now() < deadline))
+    if (stopping || fenced(scope.requirementId) || !(Date.now() < deadline))
       businessError(409, '写入授权正在变更或已到期');
+  }
+
+  function fenced(requirementId: string) {
+    return fences.size > 0 || releaseFences.has(requirementId);
   }
 
   async function lockedLease(tx: Queries, requirementId: string) {
@@ -274,6 +289,19 @@ export function createOwnedWriteHandoff(
       row.ownerId === scope.who.userId &&
       row.authSessionId === scope.who.authSessionId
     );
+  }
+
+  function confirmedHolding(scope: Scope, generation: string) {
+    const tracked = holdings.get(scope.requirementId);
+    if (
+      tracked?.confirmed &&
+      tracked.grant.generation === generation &&
+      tracked.scope.projectId === scope.projectId &&
+      tracked.scope.sessionId === scope.sessionId &&
+      tracked.scope.who.userId === scope.who.userId &&
+      tracked.scope.who.authSessionId === scope.who.authSessionId
+    )
+      return tracked;
   }
 
   function forget(requirementId: string, generation: string) {
@@ -397,7 +425,7 @@ export function createOwnedWriteHandoff(
         execution.controller.abort();
   }
 
-  function propose(scope: Scope, grant: Grant) {
+  function propose(scope: Scope, grant: Grant, commandId: string) {
     const previous = holdings.get(scope.requirementId);
     if (previous) clearTimeout(previous.timer);
     const timer = scheduleExpiry(
@@ -409,6 +437,7 @@ export function createOwnedWriteHandoff(
     holdings.set(scope.requirementId, {
       scope,
       grant,
+      commandId,
       timer,
       confirmed: false,
     });
@@ -437,10 +466,6 @@ export function createOwnedWriteHandoff(
   }
 
   async function acquire(scope: Scope, commandId: string) {
-    await recoverReleases();
-    const expiring = holdings.get(scope.requirementId)?.grant;
-    if (expiring && expiring.expiresAt <= Date.now())
-      await drain(scope.requirementId, expiring.generation);
     let proposed: Grant | undefined;
     const issued = await transaction(async (tx, deadline) => {
       const snapshot = await context(tx, scope);
@@ -469,12 +494,14 @@ export function createOwnedWriteHandoff(
         return { grant, snapshot };
       }
       const tracked = holdings.get(scope.requirementId);
+      const retryingRolledBackAcquire =
+        tracked?.unknownCommit &&
+        !tracked.confirmed &&
+        tracked.commandId === commandId &&
+        digestOf(tracked.scope) === digestOf(scope);
       if (
-        old &&
-        old.phase !== 'released' &&
-        (old.runId ||
-          (tracked?.grant.generation === old.generation &&
-            old.expiresAt.getTime() > Date.now()))
+        (tracked && !retryingRolledBackAcquire) ||
+        (old && (old.phase !== 'released' || old.runId))
       )
         businessError(409, '已有写会话或进程尚待停稳');
       const expiresAt = Math.min(snapshot.validBefore, Date.now() + leaseMs);
@@ -504,11 +531,14 @@ export function createOwnedWriteHandoff(
       await finish(tx, receipt.value, { ...grant, ownerGeneration: authority });
       allowed(Math.min(deadline, expiresAt), scope);
       proposed = grant;
-      propose(scope, grant);
+      propose(scope, grant, commandId);
       return { grant, snapshot };
     }).catch((error: unknown) => {
-      if (proposed && !(error instanceof UnknownWriteCommit))
-        forget(scope.requirementId, proposed.generation);
+      const tracked = holdings.get(scope.requirementId);
+      if (proposed && tracked?.grant.generation === proposed.generation) {
+        if (error instanceof UnknownWriteCommit) tracked.unknownCommit = true;
+        else forget(scope.requirementId, proposed.generation);
+      }
       throw error;
     });
     const { generation, expiresAt, contextVersion } = issued.grant;
@@ -526,19 +556,118 @@ export function createOwnedWriteHandoff(
     };
   }
 
-  async function recordRelease(
-    { scope, generation, commandId }: PendingRelease,
-    recovering: boolean,
+  function commandKey(scope: Scope, command: WriteCommand) {
+    return receiptKey(
+      scope.who,
+      'requirement:' + scope.requirementId,
+      'write.' + command.type,
+      command.commandId,
+      command.type === 'acquire'
+        ? scope
+        : { scope, generation: command.generation },
+    );
+  }
+
+  async function recordedGeneration(
+    tx: Queries,
+    scope: Scope,
+    command: WriteCommand,
   ) {
-    await transaction(async (tx) => {
+    const row = await readReceipt(tx, commandKey(scope, command));
+    if (!row) return;
+    const result = row.result as { generation?: unknown } | null;
+    if (
+      typeof result?.generation !== 'string' ||
+      (command.type === 'release' && result.generation !== command.generation)
+    )
+      businessError(409, '原写权回执无法核实');
+    return result.generation;
+  }
+
+  function readTransaction<T>(work: Parameters<typeof db.transaction<T>>[0]) {
+    return db.transaction(
+      async (tx) => {
+        await tx.execute(sql`set local transaction_timeout='2400ms'`);
+        await tx.execute(sql`set local statement_timeout='950ms'`);
+        return work(tx);
+      },
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
+  }
+
+  async function checkCommand(scope: Scope, command: WriteCommand) {
+    requireLiveLogin(scope);
+    const { generation, validBefore } = await readTransaction(async (tx) => {
+      const reader = await business.authorizeRequirement(
+        scope.who,
+        scope.requirementId,
+        scope.projectId,
+        'reader',
+        tx,
+        scope.sessionId,
+      );
+      const [owned] = await tx
+        .select({ id: schema.nativeSession.id })
+        .from(schema.nativeSession)
+        .where(
+          and(
+            eq(schema.nativeSession.id, scope.sessionId),
+            eq(schema.nativeSession.ownerId, scope.who.userId),
+          ),
+        );
+      if (!owned) businessError(403, '只能核对本人会话的写权操作');
+      return {
+        generation: await recordedGeneration(tx, scope, command),
+        validBefore: reader.expiresAt.getTime(),
+      };
+    });
+    requireLiveLogin(scope);
+    if (validBefore <= Date.now()) businessError(401, '登录已失效，请重新登录');
+    return generation
+      ? { state: 'recorded' as const, generation }
+      : { state: 'unrecorded' as const };
+  }
+
+  async function recordRelease(request: PendingRelease, recovering: boolean) {
+    const { scope, generation, commandId } = request;
+    const command = { type: 'release', generation, commandId } as const;
+    return transaction(async (tx, deadline) => {
+      let validBefore = Infinity;
       if (recovering) {
         await tx
           .select({ id: schema.requirement.id })
           .from(schema.requirement)
-          .where(eq(schema.requirement.id, scope.requirementId))
+          .where(
+            and(
+              eq(schema.requirement.id, scope.requirementId),
+              eq(schema.requirement.projectId, scope.projectId),
+            ),
+          )
           .for('update');
-      } else await context(tx, scope);
+      } else validBefore = (await context(tx, scope)).validBefore;
       const old = await lockedLease(tx, scope.requirementId);
+      if (await recordedGeneration(tx, scope, command)) {
+        if (!sameHolder(old, scope, generation) || old.phase === 'released')
+          return 'released' as const;
+        if (old.phase === 'draining') return recovering ? 'drain' : 'draining';
+        businessError(409, '原释放状态尚待确认');
+      }
+      if (!sameHolder(old, scope, generation) || old.phase === 'released')
+        throw new SupersededRelease();
+      const expiresAt = old.expiresAt.getTime();
+      const assertCurrent = () => {
+        if (recovering) return;
+        requireLiveLogin(scope);
+        if (
+          stopping ||
+          fences.size ||
+          releaseFences.get(scope.requirementId) !== request ||
+          confirmedHolding(scope, generation)?.grant.expiresAt !== expiresAt ||
+          Math.min(validBefore, expiresAt, deadline) <= Date.now()
+        )
+          businessError(409, '原写入资格已失效');
+      };
+      assertCurrent();
       const receipt = await reserve(
         tx,
         scope.who,
@@ -547,58 +676,115 @@ export function createOwnedWriteHandoff(
         commandId,
         { scope, generation },
       );
-      if ('result' in receipt) return;
-      const holder = sameHolder(old, scope, generation);
-      if (!holder && !recovering)
-        businessError(409, '仅当前持有会话可以释放写入');
-      if (holder)
-        await tx
-          .update(leases)
-          .set({
-            phase: old.runId ? 'draining' : 'released',
-            updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(leases.requirementId, scope.requirementId),
-              eq(leases.generation, generation),
-            ),
-          );
+      await tx
+        .update(leases)
+        .set({
+          phase: old.runId ? 'draining' : 'released',
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(leases.requirementId, scope.requirementId),
+            eq(leases.generation, generation),
+          ),
+        );
       await finish(tx, receipt.value, { generation });
+      assertCurrent();
+      return old.runId ? ('drain' as const) : ('released' as const);
     });
   }
 
-  async function recoverReleases() {
-    for (const [token, release] of pendingReleases) {
-      try {
-        await recordRelease(release, true);
-        await drain(release.scope.requirementId, release.generation);
-        fences.delete(token);
-        pendingReleases.delete(token);
-      } catch {
-        // Keep the exact operation fenced until its durable release can be read back.
+  function clearRelease(request: PendingRelease) {
+    if (releaseFences.get(request.scope.requirementId) === request)
+      releaseFences.delete(request.scope.requirementId);
+  }
+
+  async function finishRelease(
+    request: PendingRelease,
+    recovering: boolean,
+  ): Promise<ReleaseState> {
+    const { scope, generation } = request;
+    try {
+      const recorded = await recordRelease(request, recovering);
+      const state =
+        recorded === 'drain'
+          ? await drain(scope.requirementId, generation)
+          : recorded;
+      if (recorded === 'released') forget(scope.requirementId, generation);
+      clearRelease(request);
+      return state;
+    } catch (error) {
+      if (error instanceof SupersededRelease) {
+        clearRelease(request);
+        businessError(409, '原写代已失效，未能确认释放回执');
       }
+      if (error instanceof UnknownWriteCommit) {
+        request.uncertain = true;
+        abortExecution(scope.requirementId, generation);
+        if (!recovering) await finishRelease(request, true).catch(() => {});
+      } else if (!recovering) clearRelease(request);
+      throw error;
     }
   }
 
+  function runRelease(request: PendingRelease) {
+    return (request.work ??= finishRelease(request, request.uncertain).finally(
+      () => {
+        request.work = undefined;
+      },
+    ));
+  }
+
   async function release(scope: Scope, generation: string, commandId: string) {
-    const token = Symbol();
-    const request = { scope, generation, commandId };
-    fences.add(token);
-    try {
-      await recordRelease(request, false);
-      const state = await drain(scope.requirementId, generation);
-      fences.delete(token);
-      await recoverReleases();
-      return state;
-    } catch (error) {
-      if (error instanceof UnknownWriteCommit) {
-        pendingReleases.set(token, request);
-        abortExecution(scope.requirementId, generation);
-        await recoverReleases();
-      } else fences.delete(token);
-      throw error;
+    requireLiveLogin(scope);
+    const command = { type: 'release', generation, commandId } as const;
+    const { receipt, lease, validBefore } = await readTransaction(
+      async (tx) => {
+        const { validBefore } = await business.writeContext(
+          tx,
+          scope.who,
+          scope.projectId,
+          scope.requirementId,
+          scope.sessionId,
+          false,
+        );
+        const receipt = await recordedGeneration(tx, scope, command);
+        const [lease] = await tx
+          .select()
+          .from(leases)
+          .where(eq(leases.requirementId, scope.requirementId));
+        return { receipt, lease, validBefore };
+      },
+    );
+    requireLiveLogin(scope);
+    if (validBefore <= Date.now()) businessError(401, '登录已失效，请重新登录');
+    const live =
+      sameHolder(lease, scope, generation) && lease.phase !== 'released';
+    const existing = releaseFences.get(scope.requirementId);
+    if (
+      existing?.generation === generation &&
+      existing.commandId === commandId &&
+      digestOf(existing.scope) === digestOf(scope)
+    ) {
+      if (existing.work) return existing.work;
+      if (existing.uncertain) return runRelease(existing);
     }
+    if (receipt) {
+      if (!live) return 'released' as const;
+      if (lease.phase === 'draining') return 'draining' as const;
+      businessError(409, '原释放状态尚待确认');
+    }
+    const tracked = confirmedHolding(scope, generation);
+    if (
+      !live ||
+      !tracked ||
+      tracked.grant.expiresAt !== lease.expiresAt.getTime()
+    )
+      businessError(409, '仅当前持有会话可以释放写入');
+    allowed(Math.min(validBefore, lease.expiresAt.getTime()), scope);
+    const request = { scope, generation, commandId, uncertain: false };
+    releaseFences.set(scope.requirementId, request);
+    return runRelease(request);
   }
 
   async function execute(
@@ -608,7 +794,6 @@ export function createOwnedWriteHandoff(
     callSignal?: AbortSignal,
     beforeCallStart?: BeforeCallStart,
   ) {
-    await recoverReleases();
     const saved = [...settlements.values()].find(
       ({ receipt }) =>
         receipt.actorId === scope.who.userId &&
@@ -907,13 +1092,14 @@ export function createOwnedWriteHandoff(
     try {
       for (const execution of executions.values()) execution.controller.abort();
       await Promise.allSettled(operations);
-      await recoverReleases();
+      await Promise.allSettled([...releaseFences.values()].map(runRelease));
       const states = await Promise.allSettled(
         [...holdings.values()].map(({ scope, grant }) =>
           drain(scope.requirementId, grant.generation),
         ),
       );
       if (
+        releaseFences.size > 0 ||
         states.some(
           (state) => state.status === 'rejected' || state.value !== 'released',
         )
@@ -968,47 +1154,41 @@ export function createOwnedWriteHandoff(
     assertReader: () => void,
   ): Promise<RequirementWriteAuthority> {
     const deadline = Date.now() + 1800;
-    const { reader, lease, holder } = await db.transaction(
-      async (tx) => {
-        await tx.execute(sql`set local transaction_timeout='2400ms'`);
-        await tx.execute(sql`set local statement_timeout='950ms'`);
-        const reader = await business.authorizeRequirement(
-          who,
-          requirementId,
-          projectId,
-          'reader',
-          tx,
+    const { reader, lease, holder } = await readTransaction(async (tx) => {
+      const reader = await business.authorizeRequirement(
+        who,
+        requirementId,
+        projectId,
+        'reader',
+        tx,
+      );
+      const [lease] = await tx
+        .select()
+        .from(leases)
+        .where(
+          and(
+            eq(leases.projectId, projectId),
+            eq(leases.requirementId, requirementId),
+          ),
         );
-        const [lease] = await tx
-          .select()
-          .from(leases)
-          .where(
-            and(
-              eq(leases.projectId, projectId),
-              eq(leases.requirementId, requirementId),
-            ),
+      let holder: Awaited<ReturnType<typeof business.writeContext>> | undefined;
+      if (lease?.phase === 'held') {
+        try {
+          holder = await business.writeContext(
+            tx,
+            { userId: lease.ownerId, authSessionId: lease.authSessionId },
+            projectId,
+            requirementId,
+            lease.nativeSessionId,
+            false,
           );
-        let holder:
-          Awaited<ReturnType<typeof business.writeContext>> | undefined;
-        if (lease?.phase === 'held') {
-          try {
-            holder = await business.writeContext(
-              tx,
-              { userId: lease.ownerId, authSessionId: lease.authSessionId },
-              projectId,
-              requirementId,
-              lease.nativeSessionId,
-              false,
-            );
-          } catch (error) {
-            const status = (error as { statusCode?: number }).statusCode;
-            if (status !== 401 && status !== 403 && status !== 404) throw error;
-          }
+        } catch (error) {
+          const status = (error as { statusCode?: number }).statusCode;
+          if (status !== 401 && status !== 403 && status !== 404) throw error;
         }
-        return { reader, lease, holder };
-      },
-      { isolationLevel: 'repeatable read', accessMode: 'read only' },
-    );
+      }
+      return { reader, lease, holder };
+    });
     assertReader();
     const now = Date.now();
     if (reader.expiresAt.getTime() <= now)
@@ -1018,7 +1198,7 @@ export function createOwnedWriteHandoff(
     const tracked = holdings.get(requirementId);
     if (
       !stopping &&
-      !fences.size &&
+      !fenced(requirementId) &&
       !tracked &&
       (!lease || (lease.phase === 'released' && !lease.runId))
     )
@@ -1050,7 +1230,7 @@ export function createOwnedWriteHandoff(
     if (
       lease.phase !== 'held' ||
       stopping ||
-      fences.size ||
+      fenced(requirementId) ||
       loginClosed(lease.authSessionId) ||
       !holder ||
       holder.requirement.contextVersion !== lease.contextVersion ||
@@ -1077,17 +1257,13 @@ export function createOwnedWriteHandoff(
 
   return {
     readStatus,
+    checkCommand: (scope: Scope, command: WriteCommand) =>
+      admit(() =>
+        checkCommand(structuredClone(scope), structuredClone(command)),
+      ),
     assertWireLease(scope: Scope, generation: string, contextVersion: number) {
-      const tracked = holdings.get(scope.requirementId);
-      if (
-        !tracked?.confirmed ||
-        tracked.grant.generation !== generation ||
-        tracked.grant.contextVersion !== contextVersion ||
-        tracked.scope.projectId !== scope.projectId ||
-        tracked.scope.sessionId !== scope.sessionId ||
-        tracked.scope.who.userId !== scope.who.userId ||
-        tracked.scope.who.authSessionId !== scope.who.authSessionId
-      )
+      const tracked = confirmedHolding(scope, generation);
+      if (!tracked || tracked.grant.contextVersion !== contextVersion)
         businessError(409, '当前会话没有可用的写入资格');
       allowed(tracked.grant.expiresAt, scope);
     },

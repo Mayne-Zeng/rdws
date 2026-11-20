@@ -1596,13 +1596,23 @@ test.skipIf(process.platform !== 'darwin')(
                   generation: grant.generation,
                   run_id: null,
                 });
-                expect(() =>
-                  broker.assertWireLease(
-                    scope,
-                    grant.generation,
-                    grant.contextVersion,
-                  ),
-                ).toThrow('写入授权正在变更或已到期');
+                await expect
+                  .poll(
+                    () => {
+                      try {
+                        broker.assertWireLease(
+                          scope,
+                          grant.generation,
+                          grant.contextVersion,
+                        );
+                        return '';
+                      } catch (error) {
+                        return (error as Error).message;
+                      }
+                    },
+                    { timeout: 500, interval: 10 },
+                  )
+                  .toBe('写入授权正在变更或已到期');
               }
               gate.latch.release();
               await release;

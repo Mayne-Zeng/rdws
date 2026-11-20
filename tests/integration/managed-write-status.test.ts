@@ -136,16 +136,8 @@ test.skipIf(process.platform !== 'darwin')(
         [expired.id],
       );
       await lab.owner.query(
-        "insert into requirement_write_lease(requirement_id,project_id,owner_id,auth_session_id,native_session_id,generation,phase,expires_at,context_version,run_id) values($1,$2,$3,$4,$5,$6,'draining',now()-interval '1 minute',1,$7)",
-        [
-          stranded,
-          project,
-          developer,
-          owner.id,
-          strandedSession,
-          randomUUID(),
-          randomUUID(),
-        ],
+        "insert into requirement_write_lease(requirement_id,project_id,owner_id,auth_session_id,native_session_id,generation,phase,expires_at,context_version) values($1,$2,$3,$4,$5,$6,'held',now()-interval '1 minute',1)",
+        [stranded, project, developer, owner.id, strandedSession, randomUUID()],
       );
       await lab.owner.query(
         'update rdws_authority.owner set managed=true,ticket_digest=$1 where singleton',
@@ -210,6 +202,18 @@ test.skipIf(process.platform !== 'darwin')(
       expect(idle.json()).toEqual({ state: 'idle' });
       expect((await check(owner, stranded)).json()).toEqual({
         state: 'unconfirmed',
+      });
+      const coldCommand = { type: 'acquire' as const, commandId: randomUUID() };
+      const coldScope = {
+        ...scope,
+        requirementId: stranded,
+        sessionId: strandedSession,
+      };
+      await expect(
+        broker.acquire(coldScope, coldCommand.commandId),
+      ).rejects.toMatchObject({ statusCode: 409 });
+      expect(await broker.checkCommand(coldScope, coldCommand)).toEqual({
+        state: 'unrecorded',
       });
       expect((await check(owner, demand, null)).statusCode).toBe(401);
       expect((await check(owner, demand, separate.id)).statusCode).toBe(401);

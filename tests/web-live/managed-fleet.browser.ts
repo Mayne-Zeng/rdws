@@ -1,12 +1,12 @@
-import { expect, test, type Route } from '@playwright/test';
+import { expect, test, type Page, type Route } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { createServer as createHttpsServer } from 'node:https';
 import { once } from 'node:events';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { getCACertificates, setDefaultCACertificates } from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { hashPassword } from 'better-auth/crypto';
@@ -22,6 +22,7 @@ import {
 import { authorityDatabase } from '../helpers/authority-database.ts';
 import { fixtureGit, httpsGitFixture } from '../helpers/https-git.ts';
 import { journal } from '../helpers/native-journal.ts';
+import { nativeReady } from '../helpers/native-ready.ts';
 import { modelTlsCertificate } from '../helpers/model-tls.ts';
 
 function releaseCommitGate() {
@@ -91,15 +92,25 @@ async function fingerprint(root: string) {
   return digest.digest('hex');
 }
 
-test('real fleet logins hand over and a fork must earn a new grant', async ({
+test('fleet handoff, fork and recovered sessions earn scoped write grants', async ({
   browser,
 }, testInfo) => {
   process.env.RDWS_MODE = 'test';
   process.env.RDWS_NATIVE_MODEL_EGRESS = 'mediated';
-  const lab = await authorityDatabase();
+  const dockerContext = execFileSync(
+    'docker',
+    ['context', 'inspect', '--format', '{{(index .Endpoints "docker").Host}}'],
+    { encoding: 'utf8' },
+  ).trim();
+  const lab = await authorityDatabase(
+    process.env.DOCKER_CONTEXT
+      ? dockerContext
+      : process.env.DOCKER_HOST || dockerContext,
+  );
   const originalCAs = getCACertificates('default');
   let supplier: ReturnType<typeof createHttpsServer> | undefined;
   let source: Awaited<ReturnType<typeof httpsGitFixture>> | undefined;
+  let gitPrepared = false;
   let app: ReturnType<typeof buildApp> | undefined;
   let web: { close(): Promise<void> } | undefined;
   let mirrors: RepositoryMirrors | undefined;
@@ -107,6 +118,10 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
   let releaseGate: ReturnType<typeof releaseCommitGate> | undefined;
   let closingGate: ReturnType<typeof releaseCommitGate> | undefined;
   let closing: Promise<unknown> | undefined;
+  let closingWeb: Promise<unknown> | undefined;
+  let nativePid: number | undefined;
+  let databaseFixture: string | undefined;
+  const executionGroups = new Set<number>();
   const projectId = 'poc';
   const demand = randomUUID();
   const owner = randomUUID();
@@ -119,11 +134,30 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
   const model = 'browser-fleet-fixture';
   const callId = 'rdws-browser-fleet-tool';
   const reply = 'Native handoff fixture finished';
+  const text = 'Synthetic browser prompt after the writer handoff';
+  const warmText = 'Synthetic text before restarting the original session';
+  const warmReply = 'Native text-only baseline finished';
+  const recoveredText =
+    'Synthetic browser prompt in the recovered original session';
+  const recoveredCallId = 'rdws-browser-fleet-recovery-tool';
+  const recoveredReply = 'Native recovery fixture finished';
+  let supplierRequests = 0;
+  let warmRequests = 0;
   const received: {
     model?: string;
     tools?: unknown[];
     messages: { role: string; tool_call_id?: string; content?: unknown }[];
   }[] = [];
+  function userText(body: (typeof received)[number]) {
+    return body.messages
+      .filter(({ role }) => role === 'user')
+      .flatMap(({ content }) =>
+        Array.isArray(content)
+          ? content.map((value: { text?: unknown }) => value.text)
+          : [content],
+      )
+      .filter((value): value is string => typeof value === 'string');
+  }
   const control = NativeFixtureToolJob.prototype.control;
   const controls: {
     operation: string;
@@ -168,8 +202,39 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
         ['requirement:' + demand],
       )
     ).rows[0]?.n;
+  const databaseOwner = async () =>
+    (
+      await lab.owner.query(
+        'select generation from rdws_authority.owner where singleton',
+      )
+    ).rows[0]?.generation;
+  async function verifyStopped(root?: string) {
+    for (const pid of executionGroups)
+      expect(() => process.kill(-pid, 0)).toThrow(/ESRCH/);
+    if (nativePid) expect(() => process.kill(nativePid!, 0)).toThrow(/ESRCH/);
+    if (root)
+      for (const suffix of ['lock', 'ready.json'])
+        await expect(
+          lstat(
+            join(
+              root,
+              'runtime',
+              'instances',
+              `project-${projectId}.${suffix}`,
+            ),
+          ),
+        ).rejects.toMatchObject({ code: 'ENOENT' });
+    const lease = await originalStatus();
+    if (lease) expect(lease).toMatchObject({ phase: 'released', run_id: null });
+    expect(await databaseOwner()).toBeNull();
+  }
 
   try {
+    databaseFixture = (
+      await lab.owner.query<{ name: string }>(
+        "select current_setting('rdws.fixture_instance') as name",
+      )
+    ).rows[0]?.name;
     source = await httpsGitFixture(projectId);
     const root = source.root;
     mirrors = new RepositoryMirrors(root);
@@ -191,6 +256,7 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
     }));
     await trees.prepare(projectId, demand, plan);
     const checkout = await trees.executionScope(projectId, demand, plan, 'app');
+    gitPrepared = true;
     const sample = join(checkout.tree, 'sample.txt');
     const sources = join(root, 'projects', projectId, 'sources');
     const sourcesBefore = await fingerprint(sources);
@@ -199,6 +265,7 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
     supplier = createHttpsServer(
       { ...keys, minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3' },
       async (request, response) => {
+        supplierRequests++;
         try {
           if (
             request.method !== 'POST' ||
@@ -212,21 +279,47 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
           const body = JSON.parse(
             Buffer.concat(chunks).toString(),
           ) as (typeof received)[number];
-          received.push(body);
-          const invoke = received.length === 1 && body.tools?.length === 1;
+          const index = received.length;
+          const parts = userText(body);
+          const warm =
+            parts.includes(warmText) && !parts.includes(recoveredText);
+          if (warm) warmRequests++;
+          else received.push(body);
+          const recovery = index >= 2;
+          const invoke = !warm && (index === 0 || index === 2);
+          const invocationId = recovery ? recoveredCallId : callId;
+          if (
+            (warm
+              ? index !== 2 || warmRequests !== 1
+              : index > 3 ||
+                !parts.includes(recovery ? recoveredText : text)) ||
+            (body.tools?.length ?? 0) !== (invoke ? 1 : 0) ||
+            (!warm &&
+              !invoke &&
+              !body.messages.some(
+                ({ role, tool_call_id }) =>
+                  role === 'tool' && tool_call_id === invocationId,
+              ))
+          ) {
+            response.writeHead(400).end();
+            return;
+          }
           const delta = invoke
             ? {
                 role: 'assistant',
                 tool_calls: [
                   {
                     index: 0,
-                    id: callId,
+                    id: invocationId,
                     type: 'function',
                     function: { name: 'rdws_authority_probe', arguments: '{}' },
                   },
                 ],
               }
-            : { role: 'assistant', content: reply };
+            : {
+                role: 'assistant',
+                content: warm ? warmReply : recovery ? recoveredReply : reply,
+              };
           const frame = {
             id: 'fleet-handoff-synthetic',
             object: 'chat.completion.chunk',
@@ -345,11 +438,10 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
     const port = (portProbe.address() as { port: number }).port;
     await new Promise<void>((resolve) => portProbe.close(() => resolve()));
     const origin = 'http://127.0.0.1:' + port;
-    app = buildApp({
+    const appConfig: Parameters<typeof buildApp>[0] = {
       databaseUrl: lab.databaseUrl,
       secret: lab.childEnv.BETTER_AUTH_SECRET!,
       origin,
-      authorityTicket: ticket,
       repositoryHome: root,
       nativeRuntimeRoot: root,
       mainModelPolicy: {
@@ -365,7 +457,8 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
         fleetCommands: true,
         fixtureTool: true,
       },
-    });
+    };
+    app = buildApp({ ...appConfig, authorityTicket: ticket });
     const api = await app.listen({ port: 0, host: '127.0.0.1' });
     const resolve = createRequire(
       new URL('../../apps/console/package.json', import.meta.url),
@@ -374,20 +467,24 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
     const consoleRoot = fileURLToPath(
       new URL('../../apps/console', import.meta.url),
     );
-    const frontend = await createVite({
-      root: consoleRoot,
-      configFile: join(consoleRoot, 'vite.config.ts'),
-      cacheDir: join(root, 'vite-cache'),
-      logLevel: 'silent',
-      server: {
-        host: '127.0.0.1',
-        port,
-        strictPort: true,
-        proxy: { '/api': { target: api, ws: true } },
-      },
-    });
-    web = frontend;
-    await frontend.listen();
+    async function startWeb(target: string) {
+      const frontend = await createVite({
+        root: consoleRoot,
+        configFile: join(consoleRoot, 'vite.config.ts'),
+        cacheDir: join(root, 'vite-cache'),
+        logLevel: 'silent',
+        server: {
+          host: '127.0.0.1',
+          port,
+          strictPort: true,
+          proxy: { '/api': { target, ws: true } },
+        },
+      });
+      web = frontend;
+      await frontend.listen();
+      return frontend;
+    }
+    const originalWeb = await startWeb(api);
     const broker = app.getDecorator<() => OwnedWriteHandoff>(
       'isolatedWriteHandoff',
     )();
@@ -420,7 +517,7 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
     const fleetUrl = '/?project=poc&view=fleet&requirement=' + demand;
     const chatUrl = '/?project=poc&view=chat&requirement=' + demand;
 
-    async function login(username: string) {
+    async function signIn(username: string) {
       const ctx = await browser.newContext({ baseURL: origin });
       const logged = await ctx.request.post('/api/auth/sign-in/username', {
         headers: { origin },
@@ -430,6 +527,10 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
       const { session, user } = await (
         await ctx.request.get('/api/auth/get-session')
       ).json();
+      return { ctx, loginId: session.id as string, userId: user.id as string };
+    }
+    async function login(username: string) {
+      const { ctx, loginId, userId } = await signIn(username);
       const page = await ctx.newPage();
       page.setDefaultTimeout(15000);
       await page.goto(chatUrl);
@@ -451,7 +552,7 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
             [sessionId],
           )
         ).rows,
-      ).toEqual([{ requirement_id: demand, owner_id: user.id }]);
+      ).toEqual([{ requirement_id: demand, owner_id: userId }]);
       await expect(
         page.getByRole('button', { name: /^会话 \d+ · 本人$/ }),
       ).toHaveAttribute('aria-current', 'true');
@@ -462,7 +563,7 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
       await expect(
         page.getByRole('heading', { name: '编队', exact: true }),
       ).toBeVisible();
-      return { ctx, page, loginId: session.id as string, sessionId };
+      return { ctx, page, loginId, sessionId };
     }
     const a = await login('fleet_a');
     const b = await login('fleet_b');
@@ -655,6 +756,7 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
     const running = startLoop(aScope, lostAcquire!.generation);
     await expect.poll(running.pid).toBeGreaterThan(1);
     const pid = running.pid();
+    executionGroups.add(pid);
     expect(process.kill(-pid, 0)).toBe(true);
 
     const version = await a.ctx.request.post(
@@ -669,6 +771,7 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
       },
     );
     expect(version.status()).toBe(200);
+    const { taskId: otherTask } = (await version.json()) as { taskId: string };
     await a.page.reload();
     await expect(status(a)).toHaveText('写权状态待确认');
     const releaseButton = a.page.getByRole('button', { name: '释放写锁' });
@@ -752,7 +855,22 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
       sessionId: bSession,
     };
     const promptPath = `/api/dsh/${demand}/native/api/session/prompt`;
-    const text = 'Synthetic browser prompt after the writer handoff';
+    async function submitPrompt(page: Page, message: string) {
+      await page.getByLabel('消息', { exact: true }).fill(message);
+      const [submitted] = await Promise.all([
+        page.waitForResponse(
+          (response) =>
+            response.request().method() === 'POST' &&
+            new URL(response.url()).pathname === promptPath,
+        ),
+        page.getByRole('button', { name: '发送消息', exact: true }).click(),
+      ]);
+      expect(submitted.status()).toBe(200);
+      expect((await submitted.json()).result).toMatchObject({
+        ok: true,
+        value: { accepted: true },
+      });
+    }
     let requestId: string | undefined;
     await b.page.route(
       '**' + promptPath,
@@ -1031,7 +1149,7 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
       native_session_id: bSession,
       run_id: null,
     });
-    async function reassign(assigneeId: string) {
+    async function reassign(assigneeId: string, taskId: string = handoffTask) {
       const response = await a.ctx.request.post(
         `/api/requirements/${demand}/commands`,
         {
@@ -1039,7 +1157,7 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
           data: {
             type: 'task.update',
             commandId: randomUUID(),
-            taskId: handoffTask,
+            taskId,
             patch: { assigneeId },
           },
         },
@@ -1047,7 +1165,7 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
       expect(response.status()).toBe(200);
       const result = await response.json();
       expect(result).toMatchObject({
-        taskId: handoffTask,
+        taskId,
         changed: true,
         contextVersion: expect.any(Number),
       });
@@ -1088,6 +1206,99 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
         )
       ).rows,
     ).toEqual([{ context_version: refreshed }]);
+    await b.page.getByRole('tab', { name: '对话', exact: true }).click();
+    const [createdForRecovery] = await Promise.all([
+      b.page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname ===
+            `/api/requirements/${demand}/sessions`,
+      ),
+      b.page.getByRole('button', { name: '新建会话', exact: true }).click(),
+    ]);
+    expect(createdForRecovery.status()).toBe(200);
+    const { sessionId: recoverySession } =
+      (await createdForRecovery.json()) as { sessionId: string };
+    expect(recoverySession).toEqual(expect.any(String));
+    expect([bSession, forkSession]).not.toContain(recoverySession);
+    const ownOriginals = b.page
+      .getByRole('navigation', { name: '需求会话列表' })
+      .getByRole('button', { name: /^会话 \d+ · 本人$/ });
+    await expect(ownOriginals).toHaveCount(2);
+    const warmSession = ownOriginals.last();
+    await expect(warmSession).toHaveAttribute('aria-current', 'true');
+    const recoveredSessionLabel = (await warmSession.innerText()).trim();
+    await submitPrompt(b.page, warmText);
+    await expect(b.page.getByTestId('transcript')).toContainText(warmReply);
+    await expect
+      .poll(async () =>
+        (await journal(root, recoverySession)).events.some(
+          ({ type, data }) =>
+            type === 'turn/end' && data.reason.kind === 'completed',
+        ),
+      )
+      .toBe(true);
+    expect(warmRequests).toBe(1);
+    expect(supplierRequests).toBe(3);
+
+    await b.page.getByRole('tab', { name: '编队', exact: true }).click();
+    await applicant.selectOption(recoverySession);
+    const [warmAcquired] = await Promise.all([
+      b.page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === commandPath(recoverySession),
+      ),
+      b.page.getByRole('button', { name: '设为写会话' }).click(),
+    ]);
+    expect(warmAcquired.status()).toBe(200);
+    const warmGrant = await warmAcquired.json();
+    expect(warmGrant).toMatchObject({
+      state: 'acquired',
+      generation: expect.any(String),
+      commandId: expect.any(String),
+    });
+    expect(await originalStatus()).toMatchObject({
+      generation: warmGrant.generation,
+      phase: 'held',
+      native_session_id: recoverySession,
+      auth_session_id: b.loginId,
+      context_version: refreshed,
+    });
+    const warmAction = randomUUID();
+    const warmProofPath = 'before-resume.txt';
+    const warmProofText = 'Isolated write before session recovery';
+    expect(
+      await broker.execute(
+        { ...bScope, sessionId: recoverySession },
+        {
+          commandId: warmAction,
+          generation: warmGrant.generation,
+          repositoryId: 'app',
+          request: {
+            tool: 'file',
+            operation: 'write',
+            path: warmProofPath,
+            text: warmProofText,
+          },
+        },
+      ),
+    ).toMatchObject({
+      status: 'finished',
+      result: { status: 'ok', stop: 'confirmed' },
+    });
+    expect(await readFile(join(checkout.tree, warmProofPath), 'utf8')).toBe(
+      warmProofText,
+    );
+    await b.page.getByRole('button', { name: '释放写锁' }).click();
+    await expect.poll(originalStatus).toMatchObject({
+      generation: warmGrant.generation,
+      phase: 'released',
+      native_session_id: recoverySession,
+      run_id: null,
+    });
+    await expect(message(b)).toHaveText('原写代已释放。');
+
     await b.page.reload();
     await expect(applicant).toBeVisible();
     await applicant.selectOption(forkSession);
@@ -1169,6 +1380,7 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
     );
     const finalLoop = startLoop(forkScope, forkGeneration);
     await expect.poll(finalLoop.pid).toBeGreaterThan(1);
+    executionGroups.add(finalLoop.pid());
     closingGate = releaseCommitGate();
     await b.page.getByRole('button', { name: '释放写锁' }).click();
     await expect.poll(closingGate.entered).toBe(true);
@@ -1177,35 +1389,51 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
       phase: 'draining',
       run_id: expect.any(String),
     });
+    const oldNative = await nativeReady(root, projectId);
+    expect(oldNative.pid).toBeGreaterThan(1);
+    nativePid = oldNative.pid;
+    expect(process.kill(oldNative.pid, 0)).toBe(true);
+    await Promise.all([a.page.goto('about:blank'), b.page.goto('about:blank')]);
+    const stopOriginalWeb = Promise.resolve(originalWeb.close());
+    closingWeb = stopOriginalWeb;
+    void stopOriginalWeb.catch(() => {});
+    await expect.poll(() => originalWeb.httpServer?.listening).toBe(false);
+    expect(process.kill(-finalLoop.pid(), 0)).toBe(true);
+    expect(await originalStatus()).toMatchObject({
+      phase: 'draining',
+      run_id: expect.any(String),
+    });
     closing = app.close();
     void closing.catch(() => {});
-    const databaseOwner = async () =>
-      (
-        await lab.owner.query(
-          'select generation from rdws_authority.owner where singleton',
-        )
-      ).rows[0]?.generation;
-    expect(await databaseOwner()).toEqual(expect.any(String));
+    const originalOwner = await databaseOwner();
+    expect(originalOwner).toEqual(expect.any(String));
     closingGate.release();
     await closing;
+    await stopOriginalWeb;
     expect(await finalLoop.execution).toMatchObject({
       status: 'finished',
       result: { stop: 'confirmed' },
     });
-    expect(() => process.kill(-finalLoop.pid(), 0)).toThrow(/ESRCH/);
+    await verifyStopped(root);
     expect(await originalStatus()).toMatchObject({
       generation: forkGeneration,
       phase: 'released',
       native_session_id: forkSession,
       run_id: null,
     });
-    expect(await databaseOwner()).toBeNull();
+    nativePid = undefined;
+    executionGroups.clear();
+    closing = undefined;
+    closingWeb = undefined;
+    app = undefined;
+    web = undefined;
     expect(received).toHaveLength(2);
     expect(await fingerprint(sources)).toBe(sourcesBefore);
     expect(await readFile(sample, 'utf8')).toBe(
       'baseline|workbench-tool|fork-write',
     );
-    const { events } = await journal(root, bSession);
+    const saved = await journal(root, bSession);
+    const { events } = saved;
     const inserted = events
       .filter((event) => event.type === 'agent/inbox/spliced')
       .flatMap((event) => event.data.inserted ?? [])
@@ -1230,25 +1458,26 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
         }),
       }),
     ]);
-    const evidence = (
-      await readFile(join(root, 'runtime', 'context-evidence.jsonl'), 'utf8')
-    )
-      .trim()
-      .split('\n')
-      .map(
-        (line) =>
-          JSON.parse(line) as {
-            sessionId: string;
-            phase: string;
-            contextVersion: number;
-            contentHash: string;
-            turn: number;
-            step: number;
-          },
-      )
-      .filter(
-        ({ sessionId, phase }) => sessionId === bSession && phase === 'request',
-      );
+    const readEvidence = async (selectedSession = bSession) =>
+      (await readFile(join(root, 'runtime', 'context-evidence.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              sessionId: string;
+              phase: string;
+              contextVersion: number;
+              contentHash: string;
+              turn: number;
+              step: number;
+            },
+        )
+        .filter(
+          ({ sessionId, phase }) =>
+            sessionId === selectedSession && phase === 'request',
+        );
+    const evidence = await readEvidence();
     expect(
       evidence.map(({ turn, step, contextVersion }) => ({
         turn,
@@ -1260,34 +1489,552 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
       { turn: 1, step: 2, contextVersion: next.context_version },
     ]);
     for (const [index, proof] of evidence.entries()) {
-      const parts = received[index]!.messages.filter(
-        ({ role }) => role === 'user',
-      ).flatMap(({ content }) =>
-        Array.isArray(content)
-          ? content.map((part: { text?: unknown }) => part.text)
-          : [content],
-      );
       expect(
-        parts.some(
+        userText(received[index]!).some(
           (part) =>
-            typeof part === 'string' &&
             createHash('sha256').update(part).digest('hex') ===
-              proof.contentHash,
+            proof.contentHash,
         ),
       ).toBe(true);
     }
     expect(events.find((event) => event.type === 'turn/end')).toMatchObject({
       data: { reason: { kind: 'completed' } },
     });
+
+    const writeReceipts = async () =>
+      (
+        await lab.owner.query(
+          "select actor_id, operation, command_id, result from command_receipt where scope=$1 and operation in ('write.acquire','write.release','write.execute') order by operation,command_id",
+          ['requirement:' + demand],
+        )
+      ).rows;
+    const releasedLease = await originalStatus();
+    const originalReceipts = await writeReceipts();
+    const originalCommand = originalReceipts.find(
+      ({ actor_id, operation, result }) =>
+        actor_id === successor &&
+        operation === 'write.acquire' &&
+        result?.generation === warmGrant.generation,
+    );
+    expect(originalCommand?.command_id).toBe(warmGrant.commandId);
+    expect(originalReceipts).toContainEqual(
+      expect.objectContaining({
+        actor_id: successor,
+        operation: 'write.execute',
+        command_id: warmAction,
+        result: expect.objectContaining({
+          status: 'finished',
+          result: expect.objectContaining({ status: 'ok', stop: 'confirmed' }),
+        }),
+      }),
+    );
+    const warmSaved = await journal(root, recoverySession);
+    expect(warmSaved.header.id).toBe(recoverySession);
+    expect(
+      warmSaved.events.some(
+        ({ type }) => type === 'tool/call' || type === 'tool/result',
+      ),
+    ).toBe(false);
+    const warmEvidence = await readEvidence(recoverySession);
+    expect(warmEvidence).toEqual([
+      expect.objectContaining({ contextVersion: refreshed, turn: 1, step: 1 }),
+    ]);
+    const restartTicket = randomBytes(32).toString('hex');
+    expect(
+      (
+        await lab.owner.query(
+          'update rdws_authority.owner set ticket_digest=$1 where singleton and managed and generation is null and proof_digest is null and ticket_digest is null',
+          [createHash('sha256').update(restartTicket).digest('hex')],
+        )
+      ).rowCount,
+    ).toBe(1);
+    const recoveredApp = buildApp({
+      ...appConfig,
+      authorityTicket: restartTicket,
+    });
+    app = recoveredApp;
+    const recoveredApi = await recoveredApp.listen({
+      host: '127.0.0.1',
+      port: 0,
+    });
+    expect(recoveredApi).not.toBe(api);
+    const recoveredWeb = await startWeb(recoveredApi);
+    expect(await databaseOwner()).toEqual(expect.any(String));
+    expect(await databaseOwner()).not.toBe(originalOwner);
+    expect(
+      (
+        await lab.owner.query(
+          'select ticket_digest is null as spent from rdws_authority.owner where singleton',
+        )
+      ).rows,
+    ).toEqual([{ spent: true }]);
+
+    const revoked = await browser.newContext({ baseURL: origin });
+    try {
+      await revoked.addCookies(await b.ctx.cookies(origin));
+      const beforeLogout = await revoked.request.get(statusPath, {
+        headers: { 'x-rdws-edit-session': b.loginId },
+      });
+      expect(beforeLogout.status()).toBe(200);
+      expect(await beforeLogout.json()).toMatchObject({
+        state: 'idle',
+        canAcquire: true,
+      });
+      const loggedOut = await b.ctx.request.post('/api/auth/sign-out', {
+        headers: { origin },
+        data: {},
+      });
+      expect(loggedOut.status()).toBe(200);
+      expect(
+        (
+          await lab.owner.query('select id from auth_session where id=$1', [
+            b.loginId,
+          ])
+        ).rowCount,
+      ).toBe(0);
+      const deniedOldLogin = await revoked.request.post(
+        commandPath(recoverySession),
+        {
+          headers: { origin, 'x-rdws-edit-session': b.loginId },
+          data: { type: 'acquire', commandId: randomUUID() },
+        },
+      );
+      expect(deniedOldLogin.status()).toBe(401);
+      expect(await deniedOldLogin.json()).toEqual({ error: '请先登录' });
+    } finally {
+      await revoked.close();
+    }
+    const identity = await signIn('fleet_b');
+    expect(identity.userId).toBe(successor);
+    expect(identity.loginId).not.toBe(b.loginId);
+    const resumedPage = await identity.ctx.newPage();
+    resumedPage.setDefaultTimeout(15000);
+    const resumed = {
+      ...identity,
+      page: resumedPage,
+      sessionId: recoverySession,
+    };
+    const originalSession = resumedPage
+      .getByRole('navigation', { name: '需求会话列表' })
+      .getByRole('button', { name: recoveredSessionLabel, exact: true });
+    await resumedPage.goto(chatUrl);
+    await originalSession.click();
+    const transcript = resumedPage.getByTestId('transcript');
+    await expect(transcript).toContainText(warmText);
+    await expect(transcript).toContainText(warmReply);
+    const replacementNative = await nativeReady(root, projectId);
+    expect(replacementNative.pid).toBeGreaterThan(1);
+    nativePid = replacementNative.pid;
+    expect(replacementNative.generation).not.toBe(oldNative.generation);
+    expect(replacementNative.pid).not.toBe(oldNative.pid);
+    expect(process.kill(replacementNative.pid, 0)).toBe(true);
+    expect(
+      (
+        await lab.owner.query(
+          'select requirement_id, owner_id, source_session_id from native_session where id=$1',
+          [recoverySession],
+        )
+      ).rows,
+    ).toEqual([
+      { requirement_id: demand, owner_id: successor, source_session_id: null },
+    ]);
+    const resumedHistory = await journal(root, recoverySession);
+    expect(resumedHistory.header.id).toBe(warmSaved.header.id);
+    expect(resumedHistory.events.slice(0, warmSaved.events.length)).toEqual(
+      warmSaved.events,
+    );
+    expect(received).toHaveLength(2);
+    expect(supplierRequests).toBe(3);
+    const recoveryHeaders = { origin, 'x-rdws-edit-session': identity.loginId };
+    const replayedAcquire = await identity.ctx.request.post(
+      commandPath(recoverySession),
+      {
+        headers: recoveryHeaders,
+        data: { type: 'acquire', commandId: originalCommand!.command_id },
+      },
+    );
+    expect(replayedAcquire.status()).toBe(409);
+    expect(await originalStatus()).toEqual(releasedLease);
+    expect(await writeReceipts()).toEqual(originalReceipts);
+
+    const revokedAssignment = await reassign(owner);
+    await resumedPage.reload();
+    await originalSession.click();
+    await expect(transcript).toContainText(warmText);
+    await expect(transcript).toContainText(warmReply);
+    expect(supplierRequests).toBe(3);
+    await resumedPage.getByRole('tab', { name: '编队', exact: true }).click();
+    await expect(status(resumed)).toHaveText('暂无写会话');
+    await expect(
+      resumedPage.getByRole('button', { name: '设为写会话' }),
+    ).toHaveCount(0);
+    const deniedAssignment = await identity.ctx.request.post(
+      commandPath(recoverySession),
+      {
+        headers: recoveryHeaders,
+        data: { type: 'acquire', commandId: randomUUID() },
+      },
+    );
+    expect(deniedAssignment.status()).toBe(403);
+    expect(await deniedAssignment.json()).toEqual({
+      error: '当前开发分派没有写入资格',
+    });
+    expect(await originalStatus()).toEqual(releasedLease);
+    expect(await writeReceipts()).toEqual(originalReceipts);
+    await resumedPage.locator('.workspace-main').screenshot({
+      path: testInfo.outputPath('resume-no-assignment.png'),
+      animations: 'disabled',
+    });
+    const stageChange = await a.ctx.request.post(
+      `/api/requirements/${demand}/commands`,
+      {
+        headers: { origin },
+        data: {
+          type: 'requirement.stage',
+          stage: 'testing',
+          commandId: randomUUID(),
+        },
+      },
+    );
+    expect(stageChange.status()).toBe(200);
+    const stageReceipt = await stageChange.json();
+    expect(stageReceipt).toMatchObject({
+      changed: true,
+      contextVersion: expect.any(Number),
+    });
+    expect(stageReceipt.contextVersion).toBeGreaterThan(revokedAssignment);
+    const recoveredVersion = await reassign(successor, otherTask);
+    expect(recoveredVersion).toBeGreaterThan(stageReceipt.contextVersion);
+    expect(recoveredVersion).toBeGreaterThan(refreshed);
+    expect(
+      (
+        await lab.owner.query(
+          'select context_version,stage from requirement where id=$1',
+          [demand],
+        )
+      ).rows,
+    ).toEqual([{ context_version: recoveredVersion, stage: 'testing' }]);
+    expect(
+      (
+        await lab.owner.query(
+          'select id,assignee_id from task where id=any($1::text[])',
+          [[handoffTask, otherTask]],
+        )
+      ).rows,
+    ).toEqual(
+      expect.arrayContaining([
+        { id: handoffTask, assignee_id: owner },
+        { id: otherTask, assignee_id: successor },
+      ]),
+    );
+    await resumedPage.reload();
+    const recoveredApplicant = resumedPage.getByRole('combobox', {
+      name: '申请写权的会话',
+    });
+    await recoveredApplicant.selectOption(recoverySession);
+    await expect(recoveredApplicant).toHaveValue(recoverySession);
+    await expect(status(resumed)).toHaveText('暂无写会话');
+    const [assigned] = await Promise.all([
+      resumedPage.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === commandPath(recoverySession),
+      ),
+      resumedPage.getByRole('button', { name: '设为写会话' }).click(),
+    ]);
+    expect(assigned.status()).toBe(200);
+    expect(assigned.request().headers()['x-rdws-edit-session']).toBe(
+      identity.loginId,
+    );
+    const newGrant = await assigned.json();
+    expect(newGrant.state).toBe('acquired');
+    expect(newGrant.generation).not.toBe(warmGrant.generation);
+    expect(newGrant.generation).not.toBe(forkGeneration);
+    await expect(message(resumed)).toHaveText(
+      '申请已确认，请查看当前写权状态。',
+    );
+    const current = await originalStatus();
+    expect(current).toMatchObject({
+      generation: newGrant.generation,
+      phase: 'held',
+      auth_session_id: identity.loginId,
+      native_session_id: recoverySession,
+      owner_id: successor,
+      context_version: recoveredVersion,
+      run_id: null,
+    });
+    const armRecovered = recoveredApp.getDecorator<
+      (input: Omit<FixtureToolArm, 'broker'>) => void
+    >('armIsolatedNativeTool');
+    const recoveredScope = {
+      ...bScope,
+      sessionId: recoverySession,
+      who: { userId: successor, authSessionId: identity.loginId },
+    };
+    let recoveredRequest: string | undefined;
+    await resumedPage.route(
+      '**' + promptPath,
+      async (route) => {
+        const { sessionId, requestId, content } = route.request().postDataJSON()
+          .payload.args.request;
+        expect(sessionId).toBe(recoverySession);
+        expect(requestId).toEqual(expect.any(String));
+        expect(content).toEqual([{ type: 'text', text: recoveredText }]);
+        recoveredRequest = requestId;
+        expect(() =>
+          armRecovered({
+            scope: recoveredScope,
+            requestId,
+            grant: {
+              generation: current.generation,
+              contextVersion: refreshed,
+            },
+          }),
+        ).toThrow('当前会话没有可用的写入资格');
+        armRecovered({
+          scope: recoveredScope,
+          requestId,
+          grant: {
+            generation: current.generation,
+            contextVersion: recoveredVersion,
+          },
+        });
+        await route.continue();
+      },
+      { times: 1 },
+    );
+    await resumedPage.getByRole('tab', { name: '对话', exact: true }).click();
+    await originalSession.click();
+    await expect(transcript).toContainText(warmReply);
+    const promptBox = resumedPage.getByLabel('消息', { exact: true });
+    await submitPrompt(resumedPage, recoveredText);
+    await expect(transcript).toContainText(recoveredReply);
+    expect(received).toHaveLength(4);
+    expect(supplierRequests).toBe(5);
+    expect(userText(received[2]!)).toContain(warmText);
+    expect(
+      received[2]!.messages.some(
+        ({ role, content }) =>
+          role === 'assistant' &&
+          (content === warmReply ||
+            (Array.isArray(content) &&
+              content.some((part) => part.text === warmReply))),
+      ),
+    ).toBe(true);
+    expect(received[2]?.tools).toEqual([
+      expect.objectContaining({
+        type: 'function',
+        function: expect.objectContaining({ name: 'rdws_authority_probe' }),
+      }),
+    ]);
+    expect(received[3]?.tools ?? []).toEqual([]);
+    expect(
+      received[3]?.messages.filter(
+        ({ role, tool_call_id }) =>
+          role === 'tool' && tool_call_id === recoveredCallId,
+      ),
+    ).toEqual([
+      {
+        role: 'tool',
+        tool_call_id: recoveredCallId,
+        content: 'RDWS fixture worktree state: ok',
+      },
+    ]);
+    const recoveredBegins = controls.filter(
+      ({ operation, requestId }) =>
+        operation === 'begin' && requestId === recoveredRequest,
+    );
+    expect(recoveredBegins).toEqual([
+      expect.objectContaining({
+        sessionId: recoverySession,
+        requestId: recoveredRequest,
+        callId: recoveredCallId,
+        callSeq: expect.any(Number),
+      }),
+    ]);
+    const newBegin = recoveredBegins[0]!;
+    expect(controls).toContainEqual(
+      expect.objectContaining({
+        operation: 'status',
+        commandId: newBegin.commandId,
+        requestId: recoveredRequest,
+        callId: recoveredCallId,
+        state: 'ok',
+      }),
+    );
+    expect(newBegin.commandId).not.toBe(begun.commandId);
+    const newReceipts = (await writeReceipts()).filter(
+      ({ command_id }) => command_id === newBegin.commandId,
+    );
+    expect(newReceipts).toEqual([
+      expect.objectContaining({
+        actor_id: successor,
+        operation: 'write.execute',
+        result: expect.objectContaining({
+          status: 'finished',
+          result: expect.objectContaining({
+            status: 'ok',
+            stop: 'confirmed',
+            marker: 'released',
+          }),
+        }),
+      }),
+    ]);
+    const finalText = 'baseline|workbench-tool|fork-write|workbench-tool';
+    expect(await readFile(sample, 'utf8')).toBe(finalText);
+    for (const [width, colorScheme] of [
+      [1440, 'dark'],
+      [390, 'light'],
+    ] as const) {
+      await resumedPage.setViewportSize({ width, height: 900 });
+      await resumedPage.emulateMedia({ colorScheme });
+      await expect(resumedPage.locator('html')).toHaveAttribute(
+        'theme-mode',
+        colorScheme,
+      );
+      await promptBox.focus();
+      await expect(promptBox).toBeFocused();
+      await transcript
+        .getByText(recoveredReply, { exact: true })
+        .scrollIntoViewIfNeeded();
+      expect(
+        await resumedPage.evaluate(() => document.documentElement.scrollWidth),
+      ).toBeLessThanOrEqual(width);
+      await resumedPage.locator('.workspace-main').screenshot({
+        path: testInfo.outputPath(`resume-${colorScheme}-${width}.png`),
+        animations: 'disabled',
+      });
+    }
+    await expect
+      .poll(async () =>
+        (await journal(root, recoverySession)).events
+          .slice(warmSaved.events.length)
+          .some(
+            ({ type, data }) =>
+              type === 'turn/end' &&
+              data.turn === 2 &&
+              data.reason.kind === 'completed',
+          ),
+      )
+      .toBe(true);
+    const finalJournal = await journal(root, recoverySession);
+    expect(finalJournal.events.slice(0, warmSaved.events.length)).toEqual(
+      warmSaved.events,
+    );
+    const appended = finalJournal.events.slice(warmSaved.events.length);
+    const resumedTurns = appended.filter(({ type }) => type === 'turn/end');
+    expect(resumedTurns).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          turn: 2,
+          reason: { kind: 'completed' },
+        }),
+      }),
+    ]);
+    const newInbox = appended
+      .filter(({ type }) => type === 'agent/inbox/spliced')
+      .flatMap(({ data }) => data.inserted ?? [])
+      .filter(({ source }) => source?.rpcId === recoveredRequest);
+    expect(newInbox).toEqual([
+      expect.objectContaining({
+        source: expect.objectContaining({
+          principal: expect.objectContaining({ userId: successor }),
+        }),
+      }),
+    ]);
+    const resumedCall = appended.find(
+      ({ type, seq }) => type === 'tool/call' && seq === newBegin.callSeq,
+    );
+    expect(resumedCall).toMatchObject({
+      data: { callId: recoveredCallId, turn: 2, step: 1 },
+    });
+    expect(appended.filter(({ type }) => type === 'tool/result')).toEqual([
+      expect.objectContaining({
+        sourceEventSeqs: [newBegin.callSeq],
+        data: expect.objectContaining({
+          message: expect.objectContaining({ toolCallId: recoveredCallId }),
+        }),
+      }),
+    ]);
+    const newEvidence = (await readEvidence(recoverySession)).slice(
+      warmEvidence.length,
+    );
+    expect(
+      newEvidence.map(({ contextVersion, turn, step }) => ({
+        contextVersion,
+        turn,
+        step,
+      })),
+    ).toEqual([
+      { contextVersion: recoveredVersion, turn: 2, step: 1 },
+      { contextVersion: recoveredVersion, turn: 2, step: 2 },
+    ]);
+    for (const [index, item] of newEvidence.entries()) {
+      const note = userText(received[index + 2]!).find(
+        (part) =>
+          createHash('sha256').update(part).digest('hex') === item.contentHash,
+      );
+      expect(note).toEqual(expect.any(String));
+      const snapshot = JSON.parse(note!.slice(note!.indexOf('\n') + 1));
+      expect(snapshot).toMatchObject({
+        requirementId: demand,
+        contextVersion: recoveredVersion,
+        stage: 'testing',
+        tasks: expect.arrayContaining([
+          expect.objectContaining({ id: handoffTask, assigneeId: owner }),
+          expect.objectContaining({ id: otherTask, assigneeId: successor }),
+        ]),
+      });
+    }
+
+    await resumedPage.getByRole('tab', { name: '编队', exact: true }).click();
+    await resumedPage.getByRole('button', { name: '释放写锁' }).click();
+    await expect(message(resumed)).toHaveText('原写代已释放。');
+    expect(await originalStatus()).toMatchObject({
+      phase: 'released',
+      generation: current.generation,
+      run_id: null,
+    });
+    await resumedPage.goto('about:blank');
+    const stopRecoveredWeb = Promise.resolve(recoveredWeb.close());
+    closingWeb = stopRecoveredWeb;
+    void stopRecoveredWeb.catch(() => {});
+    await expect.poll(() => recoveredWeb.httpServer?.listening).toBe(false);
+    closing = recoveredApp.close();
+    void closing.catch(() => {});
+    await stopRecoveredWeb;
+    await closing;
+    await verifyStopped(root);
+    closing = undefined;
+    closingWeb = undefined;
+    app = undefined;
+    web = undefined;
+    nativePid = undefined;
+    expect(await fingerprint(sources)).toBe(sourcesBefore);
+    expect(await readFile(sample, 'utf8')).toBe(finalText);
+    expect(await readFile(join(checkout.tree, warmProofPath), 'utf8')).toBe(
+      warmProofText,
+    );
+    expect(
+      (await journal(root, bSession)).events.slice(0, events.length),
+    ).toEqual(events);
+    expect(received).toHaveLength(4);
+    expect(supplierRequests).toBe(5);
   } finally {
     releaseGate?.release();
     closingGate?.release();
+    let runtimeStopped = false;
     try {
+      await Promise.allSettled(
+        browser.contexts().map((context) => context.close()),
+      );
       try {
-        await web?.close();
+        await (closingWeb ?? web?.close());
       } finally {
         await (closing ?? app?.close());
       }
+      await verifyStopped(source?.root);
+      runtimeStopped = true;
     } finally {
       NativeFixtureToolJob.prototype.control = control;
       setDefaultCACertificates(originalCAs);
@@ -1309,9 +2056,16 @@ test('real fleet logins hand over and a fork must earn a new grant', async ({
         });
       } finally {
         try {
-          await source?.close();
+          if ((!gitPrepared && source) || !runtimeStopped)
+            console.warn(
+              `Retaining unconfirmed fixtures: ${databaseFixture ?? basename(lab.root)} / ${source ? basename(source.root) : 'no Git fixture'}.`,
+            );
+          await source?.close({
+            preserveRoot: !runtimeStopped || !gitPrepared,
+          });
         } finally {
-          await lab.close();
+          if (runtimeStopped) await lab.close();
+          else await Promise.allSettled([lab.owner.end(), lab.admin.end()]);
         }
       }
     }

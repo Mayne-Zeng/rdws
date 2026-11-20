@@ -250,6 +250,7 @@
   - 已复审方案：[保存本人会话选模并在发送时生效](02-directory-and-engineering-design.html#t13-saved-session-model-plan-20261120)。第三轮 A/B 均通过，明确持久原票据、只读原键查证、当步新增和同轮累计原登录，以及试点派生和回退。共享 PG 池已完成独立复审与同库验证。
   - 已本地交付隔离子项：[本人会话选模](02-directory-and-engineering-design.html#t13-session-model-pilot-evidence-20261120)。真实 BFF 保存与读回、0014 升级至 0015、锁版 Native 按原提示词选择修订发送至两个回环模型。已验证原键失答、实际退避、撤权和关停。定点两项、整仓 343 项（1 项既有条件跳过）、Chromium 51 项、双面复审及静态校验通过。固定切点派生仍需持久首写证据。
   - 已本地交付隔离子项：[模型实际首写的持久证据](02-directory-and-engineering-design.html#t13-first-write-receipt-evidence-20261120)。0015 升级至 0016，真实 Native、TLS 与 PostgreSQL 核对原步骤坐标、首写及失答。双面复审、54 项邻域、整仓 343 项（1 项既有条件跳过）、Chromium 51 项、静态和基线通过。固定切点派生继续按原判据接入。
+  - 已本地交付隔离子项：[零写与事务确认](02-directory-and-engineering-design.html#t13-first-write-zero-write-plan-20261120)。确认零写允许新尝试，原授权失答继续占用。真实撤权与活动相邻会话错配均零写，已首写失答实收 16,384 字节密文及零完整请求。双面独立复审、终稿定点及 34 项邻域、整仓 343 项（1 项既有条件跳过）、Chromium 51 项、静态和基线通过。固定切点派生仍待验证。
   - 已整合工程子项：[附件清单与图片准入分支](02-directory-and-engineering-design.html#t13-local-branch-consolidation-20261120)。附件来源证明、SDK 图片说明投影、工作目录投影及新选图片原登录准入已合入 `main`。双面复审、88 项邻域及静态检查通过。正式图片入口、历史复用、选模和具名部署仍待继续验收。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）

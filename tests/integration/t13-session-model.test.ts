@@ -3,7 +3,11 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:https';
-import { Socket } from 'node:net';
+import {
+  createConnection,
+  createServer as createTcpServer,
+  Socket,
+} from 'node:net';
 import { join } from 'node:path';
 import { getCACertificates, setDefaultCACertificates } from 'node:tls';
 import { buildApp } from '@rdws/server';
@@ -39,6 +43,15 @@ test.skipIf(process.platform !== 'darwin')(
     const trust = getCACertificates('default');
     let app: ReturnType<typeof buildApp> | undefined;
     let supplier: ReturnType<typeof createServer> | undefined;
+    let tap: ReturnType<typeof createTcpServer> | undefined;
+    const tapSockets = new Set<Socket>();
+    const wireConnections: {
+      established: boolean;
+      clientFinished: boolean;
+      closed: boolean;
+      bytes: number;
+    }[] = [];
+    const bySupplierPeer = new Map<number, (typeof wireConnections)[number]>();
     let supplierRequests = 0;
     const receivedModels: string[] = [];
     const receivedMessages: string[] = [];
@@ -66,6 +79,15 @@ test.skipIf(process.platform !== 'darwin')(
     const password = randomBytes(24).toString('hex');
     const origin = lab.childEnv.RDWS_ORIGIN;
     const nativePosts: string[] = [];
+    const proofs: {
+      sessionId: string;
+      hostGeneration: string;
+      bindingId: string;
+      callId: string;
+      stepSeq: number;
+      noteSeq: number;
+      noteId: string;
+    }[] = [];
     const observations: {
       requestId: string;
       accepted: unknown;
@@ -81,14 +103,16 @@ test.skipIf(process.platform !== 'darwin')(
       | {
           requestId: string;
           phase: 'prepare' | 'authorize' | 'settle';
-          outcome: 'commit' | 'rollback' | 'hold';
+          outcome: 'commit' | 'rollback' | 'hold' | 'confirm';
           attemptId?: string;
           completion?: string;
           checked?: boolean;
           gate?: Promise<void>;
+          forceZero?: boolean;
         }
       | undefined;
     let releaseSettlement: (() => void) | undefined;
+    let releasePreparation: (() => void) | undefined;
     let releaseHeldTls: (() => void) | undefined;
     let heldFreeze:
       | {
@@ -100,6 +124,19 @@ test.skipIf(process.platform !== 'darwin')(
       | undefined;
 
     try {
+      const service = ContextRuns.prototype.handle;
+      vi.spyOn(ContextRuns.prototype, 'handle').mockImplementation(
+        async function (this: ContextRuns, ...args) {
+          const proof = args[0] as Partial<(typeof proofs)[number]>;
+          const result = await service.apply(this, args);
+          if (
+            typeof proof?.callId === 'string' &&
+            typeof proof.noteSeq === 'number'
+          )
+            proofs.push(proof as (typeof proofs)[number]);
+          return result;
+        },
+      );
       const nativeFetch = NativeWebHost.prototype.fetch;
       vi.spyOn(NativeWebHost.prototype, 'fetch').mockImplementation(
         async function (this: NativeWebHost, path, grant, init) {
@@ -174,7 +211,7 @@ test.skipIf(process.platform !== 'darwin')(
                 sql.startsWith('insert into "session_model_first_write"') &&
                 values?.[3] === fault.requestId
               ) {
-                fault.attemptId = String(values[11]);
+                fault.attemptId ??= String(values[11]);
                 phase = 'prepare';
               } else if (
                 sql.startsWith('select ') &&
@@ -192,13 +229,18 @@ test.skipIf(process.platform !== 'darwin')(
                 )
                   fault.checked = true;
               }
-              if (sql === 'commit' && phase === fault.phase) {
+              if (
+                sql === 'commit' &&
+                phase === fault.phase &&
+                !fault.completion
+              ) {
                 client.query = query;
                 const statement =
                   fault.outcome === 'rollback' ? 'rollback' : 'commit';
                 return Reflect.apply(query, client, [statement]).then(
                   async (value: { command: string }) => {
                     fault.completion = value.command;
+                    if (fault.outcome === 'confirm') return value;
                     if (fault.outcome === 'hold') {
                       await fault.gate;
                       return value;
@@ -351,9 +393,66 @@ test.skipIf(process.platform !== 'darwin')(
           }
         },
       );
+      supplier.on('secureConnection', (socket) => {
+        const observed = bySupplierPeer.get(socket.remotePort!);
+        if (observed) observed.established = true;
+      });
       supplier.listen(0, '127.0.0.1');
       await once(supplier, 'listening');
-      const destination = `https://127.0.0.1:${(supplier.address() as { port: number }).port}/v1/chat/completions`;
+      const supplierPort = (supplier.address() as { port: number }).port;
+      tap = createTcpServer((incoming) => {
+        const observed = {
+          established: false,
+          clientFinished: false,
+          closed: false,
+          bytes: 0,
+        };
+        wireConnections.push(observed);
+        let handshake: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+        const upstream = createConnection(supplierPort, '127.0.0.1');
+        for (const socket of [incoming, upstream]) {
+          tapSockets.add(socket);
+          socket.on('error', () => socket.destroy());
+          socket.once('close', () => tapSockets.delete(socket));
+        }
+        upstream.once('connect', () => {
+          const port = upstream.localPort!;
+          bySupplierPeer.set(port, observed);
+          upstream.once('close', () => bySupplierPeer.delete(port));
+        });
+        incoming.on('data', (bytes: Buffer) => {
+          if (observed.clientFinished) {
+            observed.bytes += bytes.length;
+          } else {
+            handshake = Buffer.concat([handshake, bytes]);
+            while (handshake.length >= 5) {
+              const end = 5 + handshake.readUInt16BE(3);
+              if (handshake.length < end) break;
+              observed.clientFinished = handshake[0] === 23;
+              handshake = handshake.subarray(end);
+              if (observed.clientFinished) {
+                observed.bytes += handshake.length;
+                handshake = Buffer.alloc(0);
+                break;
+              }
+            }
+          }
+          if (!upstream.destroyed) upstream.write(bytes);
+        });
+        upstream.on('data', (bytes: Buffer) => {
+          if (!incoming.destroyed) incoming.write(bytes);
+        });
+        upstream.once('end', () => incoming.end());
+        incoming.once('end', () => {
+          upstream.end();
+          incoming.end();
+        });
+        incoming.once('close', () => {
+          observed.closed = true;
+        });
+      }).listen(0, '127.0.0.1');
+      await once(tap, 'listening');
+      const destination = `https://127.0.0.1:${(tap.address() as { port: number }).port}/v1/chat/completions`;
       const configuration = join(root, 'config', 'projects', projectId, 'dsh');
       const profile = join(configuration, 'profiles', 'rdws');
       await mkdir(profile, { recursive: true, mode: 0o700 });
@@ -743,6 +842,17 @@ test.skipIf(process.platform !== 'darwin')(
       });
       expect(retriedWrite.attempt_id).not.toBe(originalWrite.attempt_id);
       const firstJournal = await journal(root, sessionId);
+      const firstProof = proofs.find(
+        ({ callId }) => callId === originalWrite.call_id,
+      );
+      expect(firstProof).toMatchObject({
+        sessionId,
+        hostGeneration: originalWrite.host_generation,
+        bindingId: originalWrite.binding_id,
+        stepSeq: Number(originalWrite.step_seq),
+        noteSeq: Number(originalWrite.note_seq),
+        noteId: expect.any(String),
+      });
       expect(
         firstJournal.events.find(
           ({ seq }) => seq === Number(originalWrite.step_seq),
@@ -754,7 +864,10 @@ test.skipIf(process.platform !== 'darwin')(
         ),
       ).toMatchObject({
         type: 'user/message',
-        data: { source: { kind: 'rdws-context', turn: 1, step: 1 } },
+        data: {
+          id: firstProof!.noteId,
+          source: { kind: 'rdws-context', turn: 1, step: 1 },
+        },
       });
       const repeatedPrompt = await prompt(firstPrompt, firstText);
       expect(repeatedPrompt.status, await repeatedPrompt.clone().text()).toBe(
@@ -1395,52 +1508,130 @@ test.skipIf(process.platform !== 'darwin')(
         expect(await databaseOwner()).toBe(generation);
       }
 
-      const receiptState = async (key: string) =>
+      const receipts = async (key: string, session = legacySession) =>
         (
-          await lab.owner.query(
-            'select state from session_model_first_write where native_session_id=$1 and selection_request_id=$2',
-            [legacySession, key],
+          await lab.owner.query<{
+            state: string;
+            attempt_id: string;
+            call_id: string;
+            host_generation: string;
+          }>(
+            'select state,attempt_id,call_id,host_generation from session_model_first_write where native_session_id=$1 and selection_request_id=$2 order by attempt_id',
+            [session, key],
           )
-        ).rows.map(({ state }) => state);
+        ).rows;
+      const receiptState = async (key: string) =>
+        (await receipts(key)).map(({ state }) => state).sort();
+      const observeConnections = async (
+        start: number,
+        count: number,
+        label: string,
+      ) => {
+        await expect.poll(() => wireConnections.length - start).toBe(count);
+        const connections = wireConnections.slice(start);
+        await expect
+          .poll(
+            () =>
+              connections
+                .filter(
+                  ({ established, clientFinished, closed }) =>
+                    !established || !clientFinished || !closed,
+                )
+                .map(
+                  ({ established, clientFinished, closed, bytes }) =>
+                    `${established}/${clientFinished}/${closed}/${bytes}`,
+                ),
+            { message: label },
+          )
+          .toEqual([]);
+        return connections.map(({ bytes }) => bytes);
+      };
       const actualWire = ContextRuns.prototype.authorizeModelWireAttempt;
       const realWrites: string[] = [];
+      let checkedOriginalAttempt = false;
+      let substituteCall: { targetSession: string; callId: string } | undefined;
+      let releaseAdjacent: (() => void) | undefined;
+      const reachedAttempts: {
+        attemptId: string;
+        bindingId?: string;
+        callId: string;
+        sessionId?: string;
+      }[] = [];
       const witness = vi
         .spyOn(ContextRuns.prototype, 'authorizeModelWireAttempt')
-        .mockImplementation(function (
+        .mockImplementation(async function (
           this: ContextRuns,
           request,
           write,
           fixture,
         ) {
-          return actualWire.call(
+          const fault = firstWriteFault;
+          reachedAttempts.push({
+            attemptId: request.attemptId,
+            bindingId: request.call.bindingId,
+            callId: request.call.id,
+            sessionId: request.call.sessionId,
+          });
+          const commit = await actualWire.call(
             this,
-            request,
+            substituteCall &&
+              request.call.sessionId === substituteCall.targetSession
+              ? {
+                  ...request,
+                  call: { ...request.call, id: substituteCall.callId },
+                }
+              : request,
             (deadline) => {
-              const result = write(deadline);
+              const forceZero =
+                fault?.forceZero && fault.attemptId === request.attemptId;
+              const result = write(forceZero ? 0 : deadline);
               realWrites.push(result);
               return result;
             },
             fixture,
           );
+          if (
+            fault?.forceZero &&
+            fault.outcome === 'confirm' &&
+            fault.attemptId === request.attemptId
+          ) {
+            const replayWrite = vi.fn(() => 'not-sent' as const);
+            await expect(
+              actualWire.call(this, request, replayWrite, fixture),
+            ).rejects.toThrow();
+            expect(replayWrite).not.toHaveBeenCalled();
+            checkedOriginalAttempt = true;
+          }
+          return commit;
         });
       try {
-        for (const [phase, outcome, expectedState] of [
-          ['prepare', 'commit', 'prepared'],
-          ['authorize', 'commit', 'prepared'],
-          ['settle', 'rollback', 'prepared'],
-          ['settle', 'commit', 'submitted'],
+        for (const [phase, outcome, expectedStates, forceZero] of [
+          ['authorize', 'commit', ['prepared'], true],
+          ['authorize', 'confirm', ['prepared', 'submitted'], true],
+          ['prepare', 'commit', ['prepared']],
+          ['authorize', 'commit', ['prepared']],
+          ['settle', 'rollback', ['prepared']],
+          ['settle', 'commit', ['submitted']],
         ] as const) {
           const key = randomUUID();
+          const phrase =
+            phase === 'authorize' && !forceZero
+              ? 'Synthetic request with a long UTF-8 body ' +
+                '\u754c'.repeat(6000)
+              : 'Synthetic request with a first-write transaction fault';
           const beforeWire = realWrites.length;
+          const beforeAttempts = reachedAttempts.length;
+          const beforeConnections = wireConnections.length;
           const traffic = supplierRequests;
+          const complete = receivedModels.length;
           const turns = (await journal(root, legacySession)).events.filter(
             ({ type }) => type === 'turn/end',
           ).length;
-          firstWriteFault = { requestId: key, phase, outcome };
+          firstWriteFault = { requestId: key, phase, outcome, forceZero };
           const planted = firstWriteFault;
           const response = await prompt(
             key,
-            'Synthetic request with a lost first-write transaction acknowledgement',
+            phrase,
             pilotAgain.wire,
             'queue',
             legacySession,
@@ -1460,20 +1651,80 @@ test.skipIf(process.platform !== 'darwin')(
                 ).length,
             )
             .toBe(turns + 1);
-          expect(await receiptState(key), `${phase} ${outcome}`).toEqual([
-            expectedState,
-          ]);
+          const attempts = reachedAttempts.slice(beforeAttempts);
+          if (forceZero) {
+            expect(attempts).toHaveLength(2);
+            expect(attempts[0]?.attemptId).toBe(planted.attemptId);
+            expect(attempts[1]?.bindingId).toBe(attempts[0]?.bindingId);
+            expect(attempts[1]?.callId).not.toBeUndefined();
+            expect(attempts[1]?.attemptId).not.toBe(planted.attemptId);
+          }
+          if (outcome === 'confirm')
+            await expect.poll(() => receiptState(key)).toEqual(expectedStates);
+          else
+            expect(
+              await receiptState(key),
+              `${phase} ${outcome} zero=${!!forceZero}`,
+            ).toEqual(expectedStates);
           expect(realWrites.slice(beforeWire)).toEqual(
-            phase === 'prepare' ? [] : ['submitted'],
+            outcome === 'confirm'
+              ? ['not-sent', 'submitted']
+              : forceZero
+                ? ['not-sent']
+                : phase === 'prepare'
+                  ? []
+                  : ['submitted'],
           );
+          const captured = await observeConnections(
+            beforeConnections,
+            attempts.length,
+            `${phase} ${outcome} zero=${!!forceZero}`,
+          );
+          if (outcome === 'confirm') {
+            expect(checkedOriginalAttempt).toBe(true);
+            expect(captured).toEqual([0, expect.any(Number)]);
+            expect(captured[1]).toBeGreaterThan(0);
+            expect(receivedModels).toHaveLength(complete + 1);
+            expect(await receipts(key)).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  state: 'prepared',
+                  attempt_id: attempts[0]?.attemptId,
+                  call_id: attempts[0]?.callId,
+                }),
+                expect.objectContaining({
+                  state: 'submitted',
+                  attempt_id: attempts[1]?.attemptId,
+                  call_id: attempts[1]?.callId,
+                }),
+              ]),
+            );
+          } else if (forceZero || phase === 'prepare') {
+            expect(captured.length).toBeGreaterThan(0);
+            expect(captured.every((bytes) => bytes === 0)).toBe(true);
+            expect(receivedModels).toHaveLength(complete);
+            expect(await receipts(key)).toEqual([
+              expect.objectContaining({
+                state: 'prepared',
+                attempt_id: attempts[0]?.attemptId,
+                call_id: attempts[0]?.callId,
+              }),
+            ]);
+          } else if (phase === 'authorize') {
+            expect(captured[0]).toBe(16_384);
+            expect(captured.slice(1).every((bytes) => bytes === 0)).toBe(true);
+            expect(receivedModels).toHaveLength(complete);
+          }
           if (phase !== 'authorize')
             expect(supplierRequests).toBe(
               traffic + (phase === 'prepare' ? 0 : 1),
             );
           const trafficBeforeReplay = supplierRequests;
+          const connectionsBeforeReplay = wireConnections.length;
+          const receiptsBeforeReplay = await receipts(key);
           const replay = await prompt(
             key,
-            'Synthetic request with a lost first-write transaction acknowledgement',
+            phrase,
             pilotAgain.wire,
             'queue',
             legacySession,
@@ -1481,11 +1732,220 @@ test.skipIf(process.platform !== 'darwin')(
           expect(replay.status).toBe(200);
           await replay.text();
           expect(supplierRequests).toBe(trafficBeforeReplay);
+          expect(wireConnections).toHaveLength(connectionsBeforeReplay);
           expect(nativePosts.filter((id) => id === key)).toHaveLength(1);
-          expect(await receiptState(key)).toEqual([expectedState]);
+          expect(await receipts(key)).toEqual(receiptsBeforeReplay);
           firstWriteFault = undefined;
         }
+
+        const adjacent = await fetch(
+          `${address}/api/requirements/${requirementId}/sessions`,
+          {
+            method: 'POST',
+            headers: pilotAgain.authenticated,
+            body: JSON.stringify({ commandId: randomUUID() }),
+          },
+        );
+        expect(adjacent.status).toBe(200);
+        const { sessionId: adjacentSession } = (await adjacent.json()) as {
+          sessionId: string;
+        };
+        pilotAgain.wire['x-rdws-client-generation'] = randomUUID();
+        const turnsFor = async (session: string) =>
+          (await journal(root, session)).events.filter(
+            ({ type }) => type === 'turn/end',
+          );
+        const sendFixturePrompt = async (
+          key: string,
+          phrase: string,
+          session: string,
+          wire = pilotAgain.wire,
+        ) => {
+          const response = await prompt(key, phrase, wire, 'queue', session);
+          expect(response.status, await response.clone().text()).toBe(200);
+          expect((await response.json()).result).toMatchObject({
+            ok: true,
+            value: { accepted: true },
+          });
+        };
+        const adjacentKey = randomUUID();
+        const priorAdjacentWire = wireConnections.length;
+        const priorAdjacentComplete = receivedModels.length;
+        nextResponseGate = new Promise<void>((resolve) => {
+          releaseAdjacent = resolve;
+        });
+        await sendFixturePrompt(
+          adjacentKey,
+          'Synthetic prompt with matching adjacent-session proof',
+          adjacentSession,
+        );
+        await expect
+          .poll(() => receivedModels.length)
+          .toBe(priorAdjacentComplete + 1);
+        expect(wireConnections).toHaveLength(priorAdjacentWire + 1);
+        const adjacentConnection = wireConnections[priorAdjacentWire]!;
+        expect(adjacentConnection).toMatchObject({
+          established: true,
+          clientFinished: true,
+          closed: false,
+        });
+        expect(adjacentConnection.bytes).toBeGreaterThan(0);
+        const { generation: currentGeneration } = await nativeReady(root);
+        await expect
+          .poll(() => receipts(adjacentKey, adjacentSession))
+          .toEqual([
+            expect.objectContaining({
+              state: 'submitted',
+              host_generation: currentGeneration,
+            }),
+          ]);
+        const adjacentRows = await receipts(adjacentKey, adjacentSession);
+        const adjacentCall = adjacentRows[0]!.call_id;
+        const adjacentProof = proofs.find(
+          ({ sessionId, callId }) =>
+            sessionId === adjacentSession && callId === adjacentCall,
+        );
+        expect(adjacentProof).toMatchObject({
+          hostGeneration: currentGeneration,
+        });
+
+        const mismatchKey = randomUUID();
+        const priorMismatchWire = wireConnections.length;
+        const priorMismatchComplete = receivedModels.length;
+        const priorMismatchAttempts = reachedAttempts.length;
+        const priorMismatchWrites = realWrites.length;
+        const priorMismatchTurns = (await turnsFor(legacySession)).length;
+        substituteCall = { targetSession: legacySession, callId: adjacentCall };
+        await sendFixturePrompt(
+          mismatchKey,
+          'Synthetic prompt carrying the adjacent session call ID at the wire boundary',
+          legacySession,
+        );
+        await expect
+          .poll(async () => (await turnsFor(legacySession)).length)
+          .toBe(priorMismatchTurns + 1);
+        const targetAttempts = reachedAttempts.slice(priorMismatchAttempts);
+        expect(targetAttempts.length).toBeGreaterThan(0);
+        for (const attempt of targetAttempts) {
+          expect(attempt.sessionId).toBe(legacySession);
+          expect(attempt.callId).not.toBe(adjacentCall);
+          expect(attempt.bindingId).not.toBe(adjacentProof!.bindingId);
+          expect(proofs).toContainEqual(
+            expect.objectContaining({
+              sessionId: legacySession,
+              hostGeneration: currentGeneration,
+              callId: attempt.callId,
+              bindingId: attempt.bindingId,
+            }),
+          );
+        }
+        expect(
+          await observeConnections(
+            priorMismatchWire,
+            targetAttempts.length,
+            'adjacent call mismatch',
+          ),
+        ).toEqual(targetAttempts.map(() => 0));
+        expect(realWrites).toHaveLength(priorMismatchWrites);
+        expect(receivedModels).toHaveLength(priorMismatchComplete);
+        expect(await receipts(mismatchKey)).toEqual([]);
+        expect(await receipts(adjacentKey, adjacentSession)).toEqual(
+          adjacentRows,
+        );
+        substituteCall = undefined;
+        expect(adjacentConnection.closed).toBe(false);
+        expect(await turnsFor(adjacentSession)).toEqual([]);
+        releaseAdjacent!();
+        await expect
+          .poll(
+            async () =>
+              (await turnsFor(adjacentSession)).at(-1)?.data.reason.kind,
+          )
+          .toBe('completed');
+        await expect.poll(() => adjacentConnection.closed).toBe(true);
+
+        const revoked = await login('pilot_owner');
+        const revokedWire = {
+          ...pilotAgain.wire,
+          cookie: revoked.cookie,
+          'x-rdws-native-login': nativeLoginBinding(
+            revoked['x-rdws-edit-session'],
+            projectId,
+            requirementId,
+          ),
+          'x-rdws-client-generation': randomUUID(),
+        };
+        const revokedKey = randomUUID();
+        const beforeRevokedConnections = wireConnections.length;
+        const beforeRevokedComplete = receivedModels.length;
+        const beforeRevokedAttempts = reachedAttempts.length;
+        const beforeRevokedWrites = realWrites.length;
+        const beforeRevokedTurns = (await turnsFor(legacySession)).length;
+        const heldPreparation: NonNullable<typeof firstWriteFault> = {
+          requestId: revokedKey,
+          phase: 'prepare',
+          outcome: 'hold',
+          gate: new Promise<void>((resolve) => {
+            releasePreparation = resolve;
+          }),
+        };
+        firstWriteFault = heldPreparation;
+        await sendFixturePrompt(
+          revokedKey,
+          'Synthetic prompt with its login revoked after preparation committed',
+          legacySession,
+          revokedWire,
+        );
+        await expect.poll(() => heldPreparation.completion).toBe('COMMIT');
+        const preparedBeforeRevoke = await receipts(revokedKey);
+        expect(preparedBeforeRevoke).toEqual([
+          expect.objectContaining({
+            state: 'prepared',
+            attempt_id: heldPreparation.attemptId,
+          }),
+        ]);
+        const signOut = fetch(address + '/api/auth/sign-out', {
+          method: 'POST',
+          headers: {
+            origin,
+            cookie: revoked.cookie,
+            'content-type': 'application/json',
+          },
+          body: '{}',
+        });
+        void signOut.catch(() => {});
+        await expect
+          .poll(
+            async () =>
+              (
+                await lab.owner.query(
+                  'select id from auth_session where id=$1',
+                  [revoked['x-rdws-edit-session']],
+                )
+              ).rowCount,
+          )
+          .toBe(0);
+        releasePreparation!();
+        const revokedResponse = await signOut;
+        expect(revokedResponse.status).toBe(200);
+        await revokedResponse.text();
+        await expect
+          .poll(async () => (await turnsFor(legacySession)).length)
+          .toBe(beforeRevokedTurns + 1);
+        const revokedAttempts = reachedAttempts.slice(beforeRevokedAttempts);
+        expect(revokedAttempts[0]?.attemptId).toBe(heldPreparation.attemptId);
+        expect(
+          await observeConnections(
+            beforeRevokedConnections,
+            revokedAttempts.length,
+            'revoked after preparation',
+          ),
+        ).toEqual(revokedAttempts.map(() => 0));
+        expect(realWrites).toHaveLength(beforeRevokedWrites);
+        expect(receivedModels).toHaveLength(beforeRevokedComplete);
+        expect(await receipts(revokedKey)).toEqual(preparedBeforeRevoke);
       } finally {
+        releaseAdjacent?.();
         witness.mockRestore();
         firstWriteFault = undefined;
       }
@@ -1508,7 +1968,7 @@ test.skipIf(process.platform !== 'darwin')(
       await expect.poll(() => supplierRequests).toBe(beforeTls + 1);
       const ownerWithTls = await databaseOwner();
       expect(ownerWithTls).toEqual(expect.any(String));
-      const supplierPort = Number(new URL(destination).port);
+      const relayPort = Number(new URL(destination).port);
       const socketsWaiting = new Set<Socket>();
       const destroy = Socket.prototype.destroy;
       const deferDestroy = vi
@@ -1516,7 +1976,7 @@ test.skipIf(process.platform !== 'darwin')(
         .mockImplementation(function (this: Socket, error?: Error) {
           if (
             this.remoteAddress === '127.0.0.1' &&
-            this.remotePort === supplierPort &&
+            this.remotePort === relayPort &&
             !this.destroyed
           ) {
             socketsWaiting.add(this);
@@ -1653,6 +2113,7 @@ test.skipIf(process.platform !== 'darwin')(
       releaseHeldTls?.();
       heldFreeze?.release();
       releaseSettlement?.();
+      releasePreparation?.();
       let stopped = false;
       try {
         await app?.close();
@@ -1662,6 +2123,12 @@ test.skipIf(process.platform !== 'darwin')(
         vi.unstubAllEnvs();
         setDefaultCACertificates(trust);
         try {
+          if (tap) {
+            const closed = once(tap, 'close');
+            tap.close();
+            for (const socket of tapSockets) socket.destroy();
+            await closed;
+          }
           if (supplier) {
             const closed = once(supplier, 'close');
             supplier.close();

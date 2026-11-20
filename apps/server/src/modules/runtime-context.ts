@@ -663,13 +663,14 @@ export class ContextRuns {
       return this.authorizeTitleWire(request, write);
     const pilot = this.modelPilot;
     let firstWrite: ModelFirstWrite | undefined;
+    let reservedStep: ModelStep | undefined;
     const commit = await this.withAuthorizedAttempt(
       request,
       (step, validBefore) => {
         const { attemptId } = request;
         step.wireAttempt = attemptId;
         const outcome = write(validBefore);
-        if (outcome === 'not-sent') step.wireAttempt = undefined;
+        if (outcome === 'not-sent' && !pilot) step.wireAttempt = undefined;
         return {
           outcome,
           accept429: () => {
@@ -686,6 +687,7 @@ export class ContextRuns {
           if (!dispatch || !coordinates || request.routeId !== 'main')
             return invalidModel();
           step.wireAttempt = request.attemptId;
+          reservedStep = step;
           firstWrite = {
             ...coordinates,
             projectId: dispatch.projectId,
@@ -706,8 +708,16 @@ export class ContextRuns {
           return pilot.firstWrites.prepare(firstWrite);
         }),
     );
-    if (pilot && firstWrite && commit.outcome === 'submitted')
-      pilot.firstWrites.submitted(firstWrite);
+    if (pilot && firstWrite && reservedStep) {
+      if (commit.outcome === 'submitted')
+        pilot.firstWrites.submitted(firstWrite);
+      else if (
+        commit.outcome === 'not-sent' &&
+        this.modelSteps.get(firstWrite.nativeSessionId) === reservedStep &&
+        reservedStep.wireAttempt === request.attemptId
+      )
+        reservedStep.wireAttempt = undefined;
+    }
     return commit;
   }
   fixtureWire(request: ModelAttempt) {

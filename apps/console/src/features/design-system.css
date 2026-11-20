@@ -47,8 +47,7 @@
 
 .design-colors li,
 .design-values,
-.design-breakpoints,
-.design-examples {
+.design-breakpoints {
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--paper);
@@ -141,13 +140,13 @@
 .design-examples {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
-  background: var(--line);
+  gap: 12px;
 }
 
 .design-examples > div {
   min-width: 0;
   padding: 14px;
+  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--paper);
 }
@@ -160,9 +159,28 @@
   grid-column: 1 / -1;
 }
 
-.design-retry .inline-feedback,
-.design-retry .save-notice {
-  margin-bottom: 0;
+.design-retry-alert {
+  align-items: center;
+}
+
+.design-retry-alert .t-alert__content {
+  min-width: 0;
+}
+
+.design-retry-alert .t-alert__message {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.design-retry-alert .t-alert__description {
+  flex: 1 0 auto;
+  max-inline-size: 100%;
+}
+
+.design-retry-alert .t-alert__operation {
+  margin-inline: auto 0;
 }
 
 @media (max-width: 620px) {

@@ -38,6 +38,36 @@ test('design deep links require login and use live theme and layout without busi
       page.getByRole('heading', { name: state, exact: true }),
     ).toBeVisible();
   await expect(page.getByRole('button', { name: '处理中' })).toBeDisabled();
+  const states = page.getByRole('region', { name: '组件状态' });
+  const statusCard = states.locator('.design-retry');
+  async function verifyPromptLayout(
+    label: '重试示例' | '重置示例',
+    width: number,
+  ) {
+    const alert = statusCard.locator('.t-alert');
+    const action = alert.getByRole('button', { name: label, exact: true });
+    await expect(action).toBeVisible();
+    const [frame, text, button] = await Promise.all([
+      alert.boundingBox(),
+      alert.locator('.t-alert__description').boundingBox(),
+      action.boundingBox(),
+    ]);
+    expect(button!.x).toBeGreaterThanOrEqual(frame!.x);
+    expect(button!.x + button!.width).toBeLessThanOrEqual(
+      frame!.x + frame!.width,
+    );
+    expect(button!.y + button!.height).toBeLessThanOrEqual(
+      frame!.y + frame!.height,
+    );
+    if (width >= 820) {
+      expect(button!.x).toBeGreaterThanOrEqual(text!.x + text!.width);
+      expect(
+        Math.abs(button!.y + button!.height / 2 - text!.y - text!.height / 2),
+      ).toBeLessThan(1);
+    }
+    if (width === 320 && label === '重试示例')
+      expect(button!.y).toBeGreaterThanOrEqual(text!.y + text!.height);
+  }
   await mkdir('.impeccable/review/t20', { recursive: true });
   for (const colorScheme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme });
@@ -73,6 +103,17 @@ test('design deep links require login and use live theme and layout without busi
           .locator('.design-page .workspace-scroll')
           .evaluate((el) => el.scrollWidth <= el.clientWidth),
       ).toBe(true);
+      const grid = states.locator('.design-examples');
+      await expect(grid).toHaveCSS('gap', '12px');
+      const cards = grid.locator(':scope > div');
+      const first = (await cards.nth(0).boundingBox())!;
+      const second = (await cards.nth(1).boundingBox())!;
+      expect(
+        width <= 620
+          ? second.y - first.y - first.height
+          : second.x - first.x - first.width,
+      ).toBeCloseTo(12);
+      await verifyPromptLayout('重试示例', width);
       const retry = page.getByRole('button', { name: '重试示例' });
       expect((await retry.boundingBox())!.height).toBeGreaterThanOrEqual(
         width <= 620 ? 40 : 30,
@@ -90,6 +131,18 @@ test('design deep links require login and use live theme and layout without busi
           animations: 'disabled',
         });
         await heading.scrollIntoViewIfNeeded();
+      }
+      if (width === 1440 || width === 320) {
+        const screenshot = (mode: string) =>
+          states.screenshot({
+            path: `.impeccable/review/t20/states-${mode}-${colorScheme}-${width}.png`,
+            animations: 'disabled',
+          });
+        await screenshot('error');
+        await retry.click();
+        await verifyPromptLayout('重置示例', width);
+        await screenshot('recovered');
+        await page.getByRole('button', { name: '重置示例' }).click();
       }
     }
   }

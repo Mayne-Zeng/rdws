@@ -258,23 +258,24 @@ export function DesignSystemPage({
               </div>
               <div className="design-retry">
                 <h3>失败与重试</h3>
-                <div className="inline-feedback">
-                  {recovered ? (
-                    <p className="save-notice" role="status">
-                      <Icon name="check" />
-                      示例已恢复
-                    </p>
-                  ) : (
-                    <Alert theme="error" message="无法读取需求列表，请重试。" />
-                  )}
-                  <Button
-                    tag="button"
-                    variant="outline"
-                    onClick={() => setRecovered(!recovered)}
-                  >
-                    {recovered ? '重置示例' : '重试示例'}
-                  </Button>
-                </div>
+                <Alert
+                  className="design-retry-alert"
+                  theme={recovered ? 'success' : 'error'}
+                  message={
+                    <span role={recovered ? 'status' : 'alert'}>
+                      {recovered ? '示例已恢复' : '无法读取需求列表，请重试。'}
+                    </span>
+                  }
+                  operation={
+                    <Button
+                      tag="button"
+                      variant="outline"
+                      onClick={() => setRecovered(!recovered)}
+                    >
+                      {recovered ? '重置示例' : '重试示例'}
+                    </Button>
+                  }
+                />
               </div>
             </div>
           </section>

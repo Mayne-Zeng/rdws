@@ -671,6 +671,10 @@
   <p>交付首轮审阅发现 2 项 P2 和 1 项 P3。定点用例先复现小屏入口 36px、折叠侧栏入口缺识别标题和切页焦点未接管。修复后新增入口使用 40px 小屏令牌，折叠态以独立图标和悬停名称区分，键盘进入后标题接管焦点。定点浏览器回归 7 项通过（9.5s）。独立交付复审 APPROVE，三项均关闭。Impeccable 对修改的产品与设计文档扫描主发现 0。</p>
   <p>最终 pnpm check 通过（16 文件／104 项测试、类型、lint、格式和构建），pnpm test:e2e 通过（23 项，36.7s），pnpm validate:baseline 通过（29 任务、62 个原子追溯点、16 个视图）。证据覆盖本地 Web 登录、设计系统与工作台回归。与代码同批本地提交，T20 保留用户侧视觉待验收。</p>
 
+  <h4 id="t20-component-states-evidence-20261120">11.15.2 T20 组件状态视觉复验</h4>
+  <p>用户首轮走查认可整体页面，确认调整组件状态卡片间距和提示条操作布局。独立卡片使用 12px 间距。失败与恢复用同一个 TDesign Alert 布局，操作位于提示条内右侧，宽屏垂直居中，空间不足时在条内换行。示例沿用键盘焦点、本页状态及零业务请求。</p>
+  <p>改前定点浏览器用例以实际 <code>1px</code> 间距退出 1。改后 <code>pnpm test:e2e tests/e2e/design-system.spec.ts</code> 通过 4 项。在明暗两主题、1440／1024／820／390／320px 核对实测卡片间距、提示条包裹操作、宽屏中心对齐、320px 真实换行和键盘重试。两种状态的明暗宽窄截图已查看，存于本地 <code>.impeccable/review/t20</code>。类型、lint、当前 Git 文件 Prettier 检查、构建和基线通过。待用户复验。</p>
+
   <h3 id="t13-native-evidence-20261118">11.16 T13 原生配置与选模接线核查</h3>
   <p>依据 D2、D19、Q8 和 T00-G6，针对锁定的 DSH 0.2.2-rc.3 核对安装源码和现有 RDWS 组装。独立参考源码修订与 <code>dsh/upstream/manifest.json</code> 的 reviewedSourceCommit 一致。当前启动仍要求项目 Profile 中已有 <code>rdws-glm</code> 路由，并在缺失默认模型时从该路由首个模型初始化。现有 BFF 和 Native Policy 对浏览器会话使用同一行动允许表，配置接口和选模仍受阻止。</p>
   <p><code>tests/integration/project-native-paths.test.ts</code> 复用临时项目 Profile 和凭据夹具。启动真实锁定版本的 Native Host，创建独立测试目录及空会话，以合成非 owner 浏览器身份读出实际模型目录和实例默认值。凭据夹具值未出现在目录响应中。该身份的 <code>settings/describe</code>、<code>credentials/describe</code> 与本人会话 <code>session/selectModel</code> 均返回 <code>remote-access/denied</code>，再次读取的默认模型相同。验证在临时目录完成，未调用模型或使用开发实例的供应商配置。<code>pnpm test tests/integration/project-native-paths.test.ts</code> 通过，1 文件／2 项。</p>

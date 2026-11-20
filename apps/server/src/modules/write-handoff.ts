@@ -599,7 +599,12 @@ export function createOwnedWriteHandoff(
     }
   }
 
-  async function execute(scope: Scope, input: Invocation, onOutput?: OnOutput) {
+  async function execute(
+    scope: Scope,
+    input: Invocation,
+    onOutput?: OnOutput,
+    callSignal?: AbortSignal,
+  ) {
     await recoverReleases();
     const saved = [...settlements.values()].find(
       ({ receipt }) =>
@@ -707,6 +712,9 @@ export function createOwnedWriteHandoff(
 
     const { runId, value, plan } = reservation;
     const controller = new AbortController();
+    const signal = callSignal
+      ? AbortSignal.any([controller.signal, callSignal])
+      : controller.signal;
     let started = false;
     let confirmed = false;
     const done = runMacosWorktree(
@@ -720,7 +728,7 @@ export function createOwnedWriteHandoff(
       gitPath,
       input.request,
       {
-        signal: controller.signal,
+        signal,
         onOutput,
         async authorizeStart(start) {
           await transaction(async (tx, deadline, confirmConnection) => {
@@ -738,8 +746,9 @@ export function createOwnedWriteHandoff(
               scope,
             );
             confirmConnection();
-            started = true;
+            signal.throwIfAborted();
             start();
+            started = true;
           });
           confirmed = true;
         },
@@ -927,7 +936,12 @@ export function createOwnedWriteHandoff(
     return track(operation());
   }
 
-  async function submit(scope: Scope, input: Invocation, onOutput?: OnOutput) {
+  async function submit(
+    scope: Scope,
+    input: Invocation,
+    onOutput?: OnOutput,
+    signal?: AbortSignal,
+  ) {
     const key = digestOf([
       scope.requirementId,
       scope.who.userId,
@@ -936,7 +950,7 @@ export function createOwnedWriteHandoff(
     if (pendingCalls.has(key)) businessError(409, '原执行正在处理，请稍后核对');
     pendingCalls.add(key);
     try {
-      return await execute(scope, input, onOutput);
+      return await execute(scope, input, onOutput, signal);
     } finally {
       pendingCalls.delete(key);
     }
@@ -945,9 +959,19 @@ export function createOwnedWriteHandoff(
   return {
     acquire: (scope: Scope, commandId: string) =>
       admit(() => acquire(structuredClone(scope), commandId)),
-    execute: (scope: Scope, input: Invocation, onOutput?: OnOutput) =>
+    execute: (
+      scope: Scope,
+      input: Invocation,
+      onOutput?: OnOutput,
+      signal?: AbortSignal,
+    ) =>
       admit(() =>
-        submit(structuredClone(scope), structuredClone(input), onOutput),
+        submit(
+          structuredClone(scope),
+          structuredClone(input),
+          onOutput,
+          signal,
+        ),
       ),
     release: (scope: Scope, generation: string, commandId: string) =>
       admit(() => release(structuredClone(scope), generation, commandId)),

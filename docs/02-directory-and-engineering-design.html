@@ -1508,6 +1508,17 @@
   <p>正式锁版 Host 的一次合成调用通过，结果关联真实原生序号与调用 ID，随后实际 FD4 请求收到同一结果。启用夹具尚未指定运行时，普通轮次正常完成。同 ID 旁会话、同 Agent 后续排队和混合领取均无错误声明。错正文、原票重放、新票并行重复同一调用及新票携带旧步骤分别被拒。先产生有效许可、经真实 <code>run.cancel</code> 移除子端原运行后回包，根守卫记录已收许可失效。工具体在根守卫通过后越过截止仍拒绝。现有未启用 Host 保持默认根拒绝。改前定点复现无授权入口、中间件重绑调用或改写空参数导致误执行，以及尚未指定运行时普通轮次异常，均在修订后关闭。</p>
   <p>邻域 <code>pnpm test tests/integration/{native-tool-authority-boundary,native-model-attempt-authority,native-egress-confinement,context-sync,shared-write-authority}.test.ts</code> 退出 0，5 文件、33 项。独立新增的无指定运行定点反例由失败转为通过。最终 <code>caffeinate -i pnpm test</code> 退出 0，54 文件、320 项，1 项条件跳过。类型、lint、当前 Git 文件 Prettier 检查、构建及基线通过。交付修订以本地 <code>test: verify a single tool permit in the native host</code> 为准。真实工作树写入、单次物理取消和编队仍按 T07 联合验收。</p>
 
+  <h4 id="t07-broker-call-cancel-20261120">11.20.9 T07 父 Broker 逐调用取消</h4>
+  <p>Change / R3，基线 <code>5d37d57</code>。沿 I2-AUTH、I3-WRITE、用户确认的写代交接规则及 §11.20.5–8，将父端每次受理的工具调用与其独立取消信号关联。双面技术裁决选用内部 <code>execute</code> 的可选信号，沿现有原命令回执、持锁起跑和 T06 停稳，供后续正式 Host 执行通道使用。公开入口、写代释放规则和数据库结构沿现有约束。</p>
+  <ol>
+    <li>父端为已核验的原调用提供独立 <code>AbortSignal</code>。信号与执行参数及持久原键摘要分开，保持现有登录、需求、本人会话、写代及命令 ID 校验。同键并发受理仍由现有单飞保护，拒绝请求的信号无法影响正在受理的原调用。</li>
+    <li>已获准请求沿同一原键完成 PostgreSQL 预留。外部信号与 Broker 的原写代停止信号合并，贯穿实际写入执行。在最终持锁授权后、同步起跑前再检查取消，调用了 T06 起跑回调才计入已启动。已取消且未启动时结算原键为 <code>finished</code>、<code>aborted</code>、<code>not-started</code>。已启动时等待 T06 证明子进程、独立进程组和标记清理，再结算持久终态。当原代仍为 <code>held</code> 时清执行占位并保留写代。并发主动释放、到期、撤权继续沿现有排空定序。停稳或标记不明时保留旧写代与占位。预留或结算失确认时沿现有原键核对。</li>
+    <li>真实隔离 PostgreSQL 用例在预留提交回包及最终持锁读取各设停点，取消后核对零写入及原键回读。实际运行用例核对直属子进程与独立组消失、原写代可续用、另一会话仍被拒。终态旧信号及同键被拒请求的信号不影响当前执行，并用主动释放交错和物理停止失确认分别验证持久释放及保留旧占位。继续验证现有撤权、到期与提交失确认。先跑定点及相邻 Broker、T06，再跑类型、lint、格式、整仓、构建和基线。回退本次内部接线前确认测试进程完成，保留持久回执和未确认占位。</li>
+  </ol>
+  <p id="t07-broker-call-cancel-evidence-20261120">方案及交付双面独立复审 APPROVE。改前定点以实际预留提交为停点，触发取消后仍启动并写入隔离文件，用例退出 1。改后在提交回包前、最终持锁后和传入已取消信号三个时点验证零启动、零写入、原键终态及回读。运行中复核直属子进程和独立进程组消失，原持有者保留写代并继续执行，另一会话仍被拒。终态旧信号和被拒的同键信号触发后，当前调用仍真实存活。</p>
+  <p>在预准备停点先取消单次调用，数据库仍保留 <code>held</code> 和原占位。随后由原持有者主动释放，沿原 <code>draining</code> 定序确认 <code>released</code>。在另一个隔离工作树上有针对性截留真实进程组停止信号，读取到 <code>unknown</code>、旧写代与占位保留，新执行被拒。复审要求异常收尾也复核目标组归属并有界核对组消失，实际夹具通过。现有按代撤权、到期和提交失确认路径随相邻套件回归。</p>
+  <p>最新定点 <code>pnpm test tests/integration/write-handoff.test.ts</code> 返回 0，1 项。邻域 <code>caffeinate -i pnpm test tests/integration/{write-handoff,shared-write-authority,native-tool-authority-boundary,local-execution}.test.ts</code> 返回 0，4 文件、33 项。最终整仓 <code>caffeinate -i pnpm test</code> 返回 0，54 文件、320 项通过、1 项条件跳过。类型、lint、当前 Git 文件的 Prettier 检查、构建和基线均通过。父 Broker 部分在本地提交 <code>feat: cancel individual write broker calls</code>，正式 Native 执行与编队继续按 T07 联合验收。</p>
+
   <h3 id="t11-maintenance-acceptance-20261119">11.21 T11 已确认的导入与人员维护</h3>
   <p>2026-11-19 用户确认需求批量导入采用同页的上传、预览、修正与整批提交。上传后动态显示解析和校验进度，下方逐条呈现需求明细、状态与可定位的问题。用户可在同页修正并重新校验。预览和校验阶段不写业务数据。全部通过后由用户显式整批提交入库，提交结果继续在同页逐条呈现。</p>
   <p>参与者和开发负责人维护按当前项目角色授权。移除参与者或更换负责人时，相关未完成子任务须显式交给当前具备资格的接手人，并保留原分派记录。验收覆盖无资格接手、已有分派记录保留，以及原有阶段与任务按钮权限。</p>

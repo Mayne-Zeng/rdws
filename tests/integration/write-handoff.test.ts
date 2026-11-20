@@ -14,6 +14,27 @@ import { fixtureGit, httpsGitFixture } from '../helpers/https-git.ts';
 
 type FinalReadGate = { pid?: number; wait: Promise<void>; release: () => void };
 
+function expectOwnedShell(pid: number) {
+  expect(pid).toBeGreaterThan(1);
+  const [parent, group] = execFileSync(
+    '/bin/ps',
+    ['-o', 'ppid=', '-o', 'pgid=', '-p', String(pid)],
+    { encoding: 'utf8' },
+  )
+    .trim()
+    .split(/\s+/)
+    .map(Number);
+  expect(parent).toBe(process.pid);
+  expect(group).toBe(pid);
+}
+
+async function isolatedShellPid(stdout: () => string) {
+  await expect.poll(stdout).toMatch(/fixture-pid:[1-9][0-9]*\n/);
+  const pid = Number(/fixture-pid:([1-9][0-9]*)\n/.exec(stdout())![1]);
+  expectOwnedShell(pid);
+  return pid;
+}
+
 function controlledCommits() {
   let next:
     | {
@@ -214,6 +235,10 @@ test.skipIf(process.platform !== 'darwin')(
         'insert into native_session (id,requirement_id,owner_id) values ($1,$2,$3)',
         [differentSession, differentRequirement, lead.who.userId],
       );
+      await lab.owner.query(
+        "insert into requirement_participant values ($1,$2,'developer')",
+        [differentRequirement, lead.who.userId],
+      );
       const taskId = randomUUID();
       await lab.owner.query(
         "insert into task (id,requirement_id,title,assignee_id,created_by,status) values ($1,$2,'Synthetic assignment',$3,$4,'in_progress')",
@@ -246,6 +271,15 @@ test.skipIf(process.platform !== 'darwin')(
       await lab.owner.query(
         'insert into requirement_worktree_plan values ($1,$2)',
         [requirementId, JSON.stringify(plan)],
+      );
+      const siblingPlan = plan.map((entry) => ({
+        ...entry,
+        branch: 'rdws/' + differentRequirement + '/' + entry.repositoryId,
+      }));
+      await trees.prepare(projectId, differentRequirement, siblingPlan);
+      await lab.owner.query(
+        'insert into requirement_worktree_plan values ($1,$2)',
+        [differentRequirement, JSON.stringify(siblingPlan)],
       );
       const scope = await trees.executionScope(
         projectId,
@@ -348,6 +382,181 @@ test.skipIf(process.platform !== 'darwin')(
       expect((await currentRows()).rows).toEqual([
         { generation, phase: 'held', run_id: null },
       ]);
+
+      const cancelledWrite = {
+        generation,
+        commandId: randomUUID(),
+        repositoryId: 'app',
+        request: {
+          tool: 'file' as const,
+          operation: 'write' as const,
+          path: 'sample.txt',
+          text: 'cancelled write must stay absent',
+        },
+      };
+      const reservation = commits.arm(false);
+      const cancelReservation = new AbortController();
+      const duringReservation = active.execute(
+        writer,
+        cancelledWrite,
+        undefined,
+        cancelReservation.signal,
+      );
+      void duringReservation.catch(() => {});
+      try {
+        await expect.poll(() => reservation.entered).toBe(true);
+        const [reserved] = (await currentRows()).rows;
+        expect(reserved).toMatchObject({ generation, phase: 'held' });
+        expect(reserved?.run_id).toBeTruthy();
+        cancelReservation.abort();
+        reservation.release();
+        const terminal = await duringReservation;
+        expect(terminal).toMatchObject({
+          runId: reserved!.run_id,
+          status: 'finished',
+          result: { status: 'aborted', stop: 'not-started', marker: 'none' },
+        });
+        expect(await active.execute(writer, cancelledWrite)).toEqual(terminal);
+        expect(await readFile(path, 'utf8')).toBe('isolated baseline');
+        expect((await currentRows()).rows).toEqual([
+          { generation, phase: 'held', run_id: null },
+        ]);
+      } finally {
+        reservation.release();
+      }
+
+      const alreadyAborted = { ...cancelledWrite, commandId: randomUUID() };
+      const beforeSubmission = await active.execute(
+        writer,
+        alreadyAborted,
+        undefined,
+        AbortSignal.abort(),
+      );
+      expect(beforeSubmission).toMatchObject({
+        status: 'finished',
+        result: { status: 'aborted', stop: 'not-started', marker: 'none' },
+      });
+      expect(await active.execute(writer, alreadyAborted)).toEqual(
+        beforeSubmission,
+      );
+      expect(await readFile(path, 'utf8')).toBe('isolated baseline');
+
+      const verifyScope = trees.executionScope.bind(trees);
+      let startGate: ReturnType<typeof commits.holdFinalRead> | undefined;
+      const prepareStart = vi
+        .spyOn(trees, 'executionScope')
+        .mockImplementationOnce(async (...args) => {
+          const verified = await verifyScope(...args);
+          startGate = commits.holdFinalRead();
+          return verified;
+        });
+      const cancelStart = new AbortController();
+      const startInput = { ...cancelledWrite, commandId: randomUUID() };
+      const startLocked = active.execute(
+        writer,
+        startInput,
+        undefined,
+        cancelStart.signal,
+      );
+      void startLocked.catch(() => {});
+      try {
+        await expect.poll(() => startGate?.pid).toBeGreaterThan(0);
+        cancelStart.abort();
+        startGate!.release();
+        const terminal = await startLocked;
+        expect(terminal).toMatchObject({
+          status: 'finished',
+          result: {
+            status: 'aborted',
+            stop: 'not-started',
+            marker: 'released',
+          },
+        });
+        expect(await active.execute(writer, startInput)).toEqual(terminal);
+        expect(await readFile(path, 'utf8')).toBe('isolated baseline');
+        expect((await currentRows()).rows).toEqual([
+          { generation, phase: 'held', run_id: null },
+        ]);
+      } finally {
+        startGate?.release();
+        prepareStart.mockRestore();
+      }
+
+      const previous = new AbortController();
+      const previousInput = {
+        ...cancelledWrite,
+        commandId: randomUUID(),
+        request: { ...cancelledWrite.request, text: 'isolated baseline' },
+      };
+      const previousReceipt = await active.execute(
+        writer,
+        previousInput,
+        undefined,
+        previous.signal,
+      );
+      expect(previousReceipt).toMatchObject({
+        status: 'finished',
+        result: { status: 'ok', stop: 'confirmed' },
+      });
+      const cancelExecution = new AbortController();
+      const executionInput = {
+        ...cancelledWrite,
+        commandId: randomUUID(),
+        request: {
+          tool: 'shell' as const,
+          script: 'printf "fixture-pid:%s\\n" "$$"; while :; do :; done',
+        },
+      };
+      let stdout = '';
+      const execution = active.execute(
+        writer,
+        executionInput,
+        ({ stream, chunk }) => {
+          if (stream === 'stdout') stdout += chunk.toString();
+        },
+        cancelExecution.signal,
+      );
+      void execution.catch(() => {});
+      try {
+        const pid = await isolatedShellPid(() => stdout);
+        const duplicate = new AbortController();
+        await expect(
+          active.execute(writer, executionInput, undefined, duplicate.signal),
+        ).rejects.toMatchObject({ statusCode: 409 });
+        duplicate.abort();
+        previous.abort();
+        expect(await active.execute(writer, previousInput)).toEqual(
+          previousReceipt,
+        );
+        expect(process.kill(pid, 0)).toBe(true);
+        expect(process.kill(-pid, 0)).toBe(true);
+        await expect(active.acquire(next, randomUUID())).rejects.toMatchObject({
+          statusCode: 409,
+        });
+        const [occupied] = (await currentRows()).rows;
+        expect(occupied).toMatchObject({ generation, phase: 'held' });
+        expect(occupied?.run_id).toBeTruthy();
+        cancelExecution.abort();
+        const terminal = await execution;
+        expect(terminal).toMatchObject({
+          runId: occupied!.run_id,
+          status: 'finished',
+          result: { status: 'aborted', stop: 'confirmed', marker: 'released' },
+        });
+        for (const target of [pid, -pid])
+          expect(() => process.kill(target, 0)).toThrow(
+            expect.objectContaining({ code: 'ESRCH' }),
+          );
+        expect(await active.execute(writer, executionInput)).toEqual(terminal);
+        expect((await currentRows()).rows).toEqual([
+          { generation, phase: 'held', run_id: null },
+        ]);
+        await expect(active.acquire(next, randomUUID())).rejects.toMatchObject({
+          statusCode: 409,
+        });
+      } finally {
+        cancelExecution.abort();
+      }
 
       const input = {
         generation,
@@ -525,14 +734,28 @@ test.skipIf(process.platform !== 'darwin')(
           await preflight;
           return verified;
         });
-      const queued = active.execute(next, {
+      const cancelQueued = new AbortController();
+      const queuedInput = {
         ...file,
         commandId: randomUUID(),
         request: { ...file.request, text: 'queued write must stay absent' },
-      });
+      };
+      const queued = active.execute(
+        next,
+        queuedInput,
+        undefined,
+        cancelQueued.signal,
+      );
       void queued.catch(() => {});
       try {
         await expect.poll(() => preflightChecked).toBe(true);
+        cancelQueued.abort();
+        const [beforeRelease] = (await currentRows()).rows;
+        expect(beforeRelease).toMatchObject({
+          generation: second.generation,
+          phase: 'held',
+        });
+        expect(beforeRelease?.run_id).toBeTruthy();
         const releasing = active.release(next, second.generation, randomUUID());
         void releasing.catch(() => {});
         await expect
@@ -540,10 +763,15 @@ test.skipIf(process.platform !== 'darwin')(
           .toBe('draining');
         finishPreflight();
         expect(await releasing).toBe('released');
-        expect(await queued).toMatchObject({
+        const terminal = await queued;
+        expect(terminal).toMatchObject({
           status: 'finished',
-          result: { stop: 'not-started' },
+          result: { status: 'aborted', stop: 'not-started' },
         });
+        expect(await active.execute(next, queuedInput)).toEqual(terminal);
+        expect((await currentRows()).rows).toEqual([
+          { generation: second.generation, phase: 'released', run_id: null },
+        ]);
         expect(await readFile(path, 'utf8')).toBe('new');
       } finally {
         finishPreflight();
@@ -824,6 +1052,123 @@ test.skipIf(process.platform !== 'darwin')(
       expect(await readFile(join(marker, 'fixture'), 'utf8')).toBe(
         'Synthetic stopped-but-retained marker',
       );
+
+      const sibling = {
+        ...lead,
+        requirementId: differentRequirement,
+        sessionId: differentSession,
+        who: {
+          ...lead.who,
+          authSessionId: alternateLogins.get(lead.who.userId)!,
+        },
+      };
+      const siblingWorktree = await trees.executionScope(
+        projectId,
+        differentRequirement,
+        siblingPlan,
+        'app',
+      );
+      const siblingGrant = await cold.acquire(sibling, randomUUID());
+      const uncertainStopInput = {
+        ...executionInput,
+        generation: siblingGrant.generation,
+        commandId: randomUUID(),
+      };
+      const cancelUnconfirmed = new AbortController();
+      let siblingOutput = '';
+      const uncertainStop = cold.execute(
+        sibling,
+        uncertainStopInput,
+        ({ stream, chunk }) => {
+          if (stream === 'stdout') siblingOutput += chunk.toString();
+        },
+        cancelUnconfirmed.signal,
+      );
+      void uncertainStop.catch(() => {});
+      const pid = await isolatedShellPid(() => siblingOutput);
+      const sendSignal = process.kill.bind(process);
+      const groupStopped = () => {
+        try {
+          sendSignal(-pid, 0);
+          return false;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+          return true;
+        }
+      };
+      let interrupted = false;
+      let cleanupError: unknown;
+      const pauseStop = vi
+        .spyOn(process, 'kill')
+        .mockImplementation((target, signal) => {
+          if (target === -pid && signal === 'SIGKILL') {
+            interrupted = true;
+            return true;
+          }
+          return sendSignal(target, signal);
+        });
+      try {
+        cancelUnconfirmed.abort();
+        const terminal = await uncertainStop;
+        expect(interrupted).toBe(true);
+        expect(sendSignal(-pid, 0)).toBe(true);
+        expect(terminal).toMatchObject({
+          status: 'unknown',
+          result: {
+            status: 'aborted',
+            stop: 'unconfirmed',
+            marker: 'retained',
+          },
+        });
+        expect(
+          (
+            await database.pool.query(
+              'select generation,phase,run_id from requirement_write_lease where requirement_id=$1',
+              [differentRequirement],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            generation: siblingGrant.generation,
+            phase: 'draining',
+            run_id: terminal.runId,
+          },
+        ]);
+        expect(await cold.execute(sibling, uncertainStopInput)).toEqual(
+          terminal,
+        );
+        await expect(
+          cold.execute(sibling, {
+            ...uncertainStopInput,
+            commandId: randomUUID(),
+          }),
+        ).rejects.toMatchObject({ statusCode: 409 });
+        expect(
+          (
+            await lstat(join(siblingWorktree.control, 'isolated-execution'))
+          ).isDirectory(),
+        ).toBe(true);
+      } finally {
+        pauseStop.mockRestore();
+        if (interrupted) {
+          try {
+            if (!groupStopped()) {
+              expectOwnedShell(pid);
+              sendSignal(-pid, 'SIGKILL');
+            }
+          } catch (error) {
+            cleanupError = error;
+          }
+          try {
+            await expect.poll(groupStopped).toBe(true);
+          } catch (error) {
+            cleanupError ??= error;
+          }
+        }
+      }
+      if (cleanupError) throw cleanupError;
+      await expect(cold.close()).rejects.toThrow('confirmed stopped');
+      broker = undefined;
     } finally {
       commits.restore();
       try {

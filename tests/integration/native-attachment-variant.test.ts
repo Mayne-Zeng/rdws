@@ -29,6 +29,7 @@ import { modelTlsCertificate } from '../helpers/model-tls.ts';
 
 const fixtureCredential = 'synthetic-variant-only';
 const receiptId = 'synthetic-native-variant';
+const credentialGeneration = 'native-variant-fixture';
 const sha = (value: Buffer | string) =>
   createHash('sha256').update(value).digest('hex');
 const attributionHeaders = [
@@ -66,7 +67,15 @@ type Attempt = {
   bindingId?: string;
   sessionId: string;
   image?: Image;
-  fileIdSha256?: string;
+  messageImages: NonNullable<
+    ReturnType<typeof readDeepSeekMessagesEvidence>
+  >['images'];
+  manifest?: AttachmentManifest;
+  destination: string;
+  protocolHeaders: Record<string, string | null>;
+  headerNames: string[];
+  call: { provider: string; model: string; purpose?: string };
+  current: boolean;
   wireSha256: string;
   contentType: string | null;
   attribution: string[];
@@ -169,7 +178,11 @@ test
       bindingId: string | undefined;
       outcome?: string;
     })[] = [];
-    const manifests = new Map<string, AttachmentManifest>();
+    const carrierEntries: string[] = [];
+    const historicalInputs = new Map<string, Witness>();
+    let tlsConnections = 0;
+    let tcpConnections = 0;
+    let authorityEntries = 0;
     let server: Server | undefined;
     let startedHost: NativeWebHost | undefined;
     try {
@@ -244,6 +257,8 @@ test
             }
           },
         );
+        server.on('connection', () => tcpConnections++);
+        server.on('secureConnection', () => tlsConnections++);
         server.listen(0, '127.0.0.1');
         await once(server, 'listening');
         base =
@@ -252,171 +267,203 @@ test
           '/v1';
       }
       const routes = { files: base + '/files', messages: base + '/messages' };
-      const host = new NativeWebHost(
-        root,
-        config,
-        project,
-        undefined,
-        'mediated',
-        {
-          routes,
-          async handle(request): Promise<Response> {
-            const wire = Buffer.from(
-              await new Response(request.body).arrayBuffer(),
-            );
-            const type = request.headers.get('content-type');
-            const messages =
-              request.routeId === 'messages'
-                ? readDeepSeekMessagesEvidence(wire, type, model)
-                : undefined;
-            const part =
-              messages?.images.length === 1 ? messages.images[0] : undefined;
-            const image =
-              request.routeId === 'files'
-                ? readDeepSeekFilesEvidence(wire, type)?.image
-                : part?.kind === 'inline'
-                  ? part.image
+      function makeHost() {
+        const manifests = new Map<string, AttachmentManifest>();
+        const host = new NativeWebHost(
+          root,
+          config,
+          project,
+          undefined,
+          'mediated',
+          {
+            routes,
+            async handle(request): Promise<Response> {
+              carrierEntries.push(request.routeId);
+              const wire = Buffer.from(
+                await new Response(request.body).arrayBuffer(),
+              );
+              const type = request.headers.get('content-type');
+              const messages =
+                request.routeId === 'messages'
+                  ? readDeepSeekMessagesEvidence(wire, type, request.call.model)
                   : undefined;
-            const fileIdSha256 =
-              part?.kind === 'file' ? part.fileIdSha256 : undefined;
-            const evidence = (await readFile(evidencePath, 'utf8'))
-              .trim()
-              .split('\n')
-              .map((line) => JSON.parse(line) as Witness);
-            const candidates = evidence.filter(
-              (entry) => entry.sessionId === request.call.sessionId,
-            );
-            const bindingId = request.call.bindingId;
-            if (
-              (!image && !(useTls && fileIdSha256)) ||
-              candidates.length !== 1 ||
-              !bindingId
-            )
-              throw new Error('Missing request variant evidence');
-            const witness = candidates[0]!;
-            const original = originals.get(witness.sessionId);
-            if (!original) throw new Error('Missing signed admission');
-            const hasOriginalImage =
-              [witness.inserted, witness.claimed, witness.requested].every(
+              const part = messages?.images[0];
+              const image =
+                request.routeId === 'files'
+                  ? readDeepSeekFilesEvidence(wire, type)?.image
+                  : part?.kind === 'inline'
+                    ? part.image
+                    : undefined;
+              const original = request.call.sessionId
+                ? originals.get(request.call.sessionId)
+                : undefined;
+              if (!original) throw new Error('Missing signed admission');
+              const evidence = (await readFile(evidencePath, 'utf8'))
+                .trim()
+                .split('\n')
+                .map((line) => JSON.parse(line) as Witness);
+              const candidates = evidence.filter(
                 (entry) =>
-                  entry.userId === original.userId &&
-                  entry.nonce === original.nonce &&
-                  entry.requestId === original.requestId &&
-                  entry.images.includes(witness.attachmentId),
-              ) &&
-              witness.inserted.id === witness.claimed.id &&
-              witness.claimed.id === witness.requested.id;
-            const attempt: Attempt = {
-              route: request.routeId,
-              attemptId: request.attemptId,
-              callId: request.call.id,
-              bindingId,
-              sessionId: witness.sessionId,
-              image,
-              fileIdSha256,
-              wireSha256: sha(wire),
-              contentType: type,
-              attribution: attributionHeaders.filter((name) =>
-                request.headers.has(name),
-              ),
-              fixtureCredentialPresent:
-                request.headers.get('x-api-key') === fixtureCredential &&
-                !request.headers.has('authorization'),
-              witness,
-              hasOriginalImage,
-            };
-            if (egress) {
-              attempts.push(attempt);
-              manifests.set(bindingId, {
-                projectId: project,
-                requirementId: original.requirementId,
-                sessionId: witness.sessionId,
+                  entry.sessionId === request.call.sessionId &&
+                  entry.inserted.requestId === original.requestId,
+              );
+              const bindingId = request.call.bindingId;
+              if (
+                (!image && !(useTls && part?.kind === 'file')) ||
+                candidates.length !== 1 ||
+                !bindingId
+              )
+                throw new Error('Missing request variant evidence');
+              const witness = candidates[0]!;
+              const hasOriginalImage =
+                [witness.inserted, witness.claimed, witness.requested].every(
+                  (entry) =>
+                    entry.userId === original.userId &&
+                    entry.nonce === original.nonce &&
+                    entry.requestId === original.requestId &&
+                    entry.images.includes(witness.attachmentId),
+                ) &&
+                witness.inserted.id === witness.claimed.id &&
+                witness.claimed.id === witness.requested.id;
+              const attempt: Attempt = {
+                route: request.routeId,
+                attemptId: request.attemptId,
+                callId: request.call.id,
                 bindingId,
-                credentialGeneration: 'native-variant-fixture',
-                images: hasOriginalImage ? [witness.variant.image] : [],
-              });
-              try {
-                return await attemptScope.run(attempt, () =>
-                  egress({
-                    ...request,
-                    body: new Response(Uint8Array.from(wire)).body!,
-                  }),
-                );
-              } finally {
-                manifests.delete(bindingId);
+                sessionId: witness.sessionId,
+                image,
+                messageImages: messages?.images ?? [],
+                destination: request.destination,
+                headerNames: [...request.headers.keys()],
+                call: {
+                  provider: request.call.provider,
+                  model: request.call.model,
+                  purpose: request.call.purpose,
+                },
+                current: request.isCurrent() && !request.signal.aborted,
+                protocolHeaders: Object.fromEntries(
+                  [
+                    'accept',
+                    'accept-encoding',
+                    'anthropic-version',
+                    'anthropic-beta',
+                  ].map((name) => [name, request.headers.get(name)]),
+                ),
+                wireSha256: sha(wire),
+                contentType: type,
+                attribution: attributionHeaders.filter((name) =>
+                  request.headers.has(name),
+                ),
+                fixtureCredentialPresent:
+                  request.headers.get('x-api-key') === fixtureCredential &&
+                  !request.headers.has('authorization'),
+                witness,
+                hasOriginalImage,
+              };
+              if (egress) {
+                const previous = historicalInputs.get(witness.sessionId);
+                const manifest: AttachmentManifest = {
+                  projectId: project,
+                  requirementId: original.requirementId,
+                  sessionId: witness.sessionId,
+                  bindingId,
+                  credentialGeneration,
+                  images: hasOriginalImage
+                    ? [
+                        ...(previous ? [previous.variant.image] : []),
+                        witness.variant.image,
+                      ]
+                    : [],
+                };
+                attempt.manifest = manifest;
+                attempts.push(attempt);
+                manifests.set(bindingId, manifest);
+                try {
+                  return await attemptScope.run(attempt, () =>
+                    egress({
+                      ...request,
+                      body: new Response(Uint8Array.from(wire)).body!,
+                    }),
+                  );
+                } finally {
+                  manifests.delete(bindingId);
+                }
               }
-            }
-            const allowed = await runs.authorizeModelAttempt(
-              request,
-              () =>
-                hasOriginalImage &&
-                image?.sha256 === witness.variant.image.sha256 &&
-                image.bytes === witness.variant.image.bytes &&
-                image.mediaType === witness.variant.image.mediaType,
-            );
-            attempts.push({ ...attempt, hasOriginalImage: allowed });
-            if (!allowed || request.routeId === 'files')
-              return new Response(null, { status: 403 });
-            replies++;
-            return syntheticMessages(model);
-          },
-        },
-      );
-      startedHost = host;
-      const runs = new ContextRuns(
-        host.contextGeneration,
-        (token) => host.verifyContext(token),
-        async (who, requirementId, sessionId) => {
-          contextReads.push({
-            userId: who.userId,
-            authSessionId: who.authSessionId,
-            requirementId,
-            sessionId,
-          });
-          return {
-            value: {
-              snapshot: { requirementId, contextVersion: 1 },
-              digest: 'fixture',
+              const allowed = await runs.authorizeModelAttempt(
+                request,
+                () =>
+                  hasOriginalImage &&
+                  image?.sha256 === witness.variant.image.sha256 &&
+                  image.bytes === witness.variant.image.bytes &&
+                  image.mediaType === witness.variant.image.mediaType,
+              );
+              attempts.push({ ...attempt, hasOriginalImage: allowed });
+              if (!allowed || request.routeId === 'files')
+                return new Response(null, { status: 403 });
+              replies++;
+              return syntheticMessages(model);
             },
-            validBefore: Date.now() + 30000,
-          };
-        },
-        () => false,
-        async () => ({
-          provider,
-          model,
-          revision: 'fixture',
-          routes,
-          isCurrent: () => true,
-        }),
-        useTls
-          ? async (who, requirementId, sessionId, _related, write) => {
-              const attempt = attemptScope.getStore();
-              if (!attempt)
-                throw new Error('Missing attempt at fixture authority');
-              const result = write(Date.now() + 5000);
-              lockReads.push({
-                userId: who.userId,
-                authSessionId: who.authSessionId,
-                requirementId,
-                sessionId,
-                route: attempt.route,
-                attemptId: attempt.attemptId,
-                bindingId: attempt.bindingId,
-                outcome: (result as { outcome?: string }).outcome,
-              });
-              return result;
-            }
-          : undefined,
-      );
-      const egress =
-        tls &&
-        createLoopbackAttachmentEgress(routes, tls.cert, runs, (request) =>
-          manifests.get(request.call.bindingId!),
+          },
         );
-      host.configureContext((input, token, reply) =>
-        runs.handle(input, token, reply),
-      );
+        startedHost = host;
+        const runs = new ContextRuns(
+          host.contextGeneration,
+          (token) => host.verifyContext(token),
+          async (who, requirementId, sessionId) => {
+            contextReads.push({
+              userId: who.userId,
+              authSessionId: who.authSessionId,
+              requirementId,
+              sessionId,
+            });
+            return {
+              value: {
+                snapshot: { requirementId, contextVersion: 1 },
+                digest: 'fixture',
+              },
+              validBefore: Date.now() + 30000,
+            };
+          },
+          () => false,
+          async () => ({
+            provider,
+            model,
+            revision: 'fixture',
+            routes,
+            isCurrent: () => true,
+          }),
+          useTls
+            ? async (who, requirementId, sessionId, _related, write) => {
+                authorityEntries++;
+                const attempt = attemptScope.getStore();
+                if (!attempt)
+                  throw new Error('Missing attempt at fixture authority');
+                const result = write(Date.now() + 5000);
+                lockReads.push({
+                  userId: who.userId,
+                  authSessionId: who.authSessionId,
+                  requirementId,
+                  sessionId,
+                  route: attempt.route,
+                  attemptId: attempt.attemptId,
+                  bindingId: attempt.bindingId,
+                  outcome: (result as { outcome?: string }).outcome,
+                });
+                return result;
+              }
+            : undefined,
+        );
+        const egress =
+          tls &&
+          createLoopbackAttachmentEgress(routes, tls.cert, runs, (request) =>
+            manifests.get(request.call.bindingId!),
+          );
+        host.configureContext((input, token, reply) =>
+          runs.handle(input, token, reply),
+        );
+        return { host, runs };
+      }
+      let { host, runs } = makeHost();
       await mkdir(profile, { recursive: true, mode: 0o700 });
       await writeFile(
         join(config, '.credentials.yaml'),
@@ -477,27 +524,46 @@ test
         { mode: 0o600 },
       );
 
-      async function send(text: string, checkPublicRejection = false) {
-        const requirementId = randomUUID();
+      async function send(
+        text: string,
+        checkPublicRejection = false,
+        reopened?: {
+          sessionId: string;
+          identity: Awaited<ReturnType<NativeWebHost['workspace']>> & {
+            requirementId: string;
+            userId: string;
+            authSessionId: string;
+          };
+        },
+      ) {
+        const requirementId = reopened?.identity.requirementId ?? randomUUID();
         const requestId = randomUUID();
         const workspace = await host.workspace(
           requirementId,
           'Synthetic attachment verification',
+          reopened !== undefined,
         );
-        const identity = {
+        if (reopened)
+          expect(workspace).toEqual({
+            workspaceId: reopened.identity.workspaceId,
+            cwd: reopened.identity.cwd,
+          });
+        const identity = reopened?.identity ?? {
           ...workspace,
           requirementId,
           userId: randomUUID(),
           authSessionId: randomUUID(),
         };
-        const { sessionId } = (await sessionRpc(
-          host,
-          { ...identity, purpose: 'create' },
-          'session/create',
-          {
-            workspaceId: workspace.workspaceId,
-          },
-        )) as { sessionId: string };
+        const { sessionId } =
+          reopened ??
+          ((await sessionRpc(
+            host,
+            { ...identity, purpose: 'create' },
+            'session/create',
+            {
+              workspaceId: workspace.workspaceId,
+            },
+          )) as { sessionId: string });
         const browser = {
           ...identity,
           purpose: 'browser' as const,
@@ -505,6 +571,30 @@ test
           readSessionIds: [sessionId],
         };
         const ticket = host.ticket(browser);
+        const events = async () =>
+          (
+            (await sessionRpc(host, ticket, 'session/events', {
+              address: { kind: 'session', sessionId },
+            })) as {
+              records: {
+                event: {
+                  seq: number;
+                  type: string;
+                  data: Record<string, unknown>;
+                };
+              }[];
+            }
+          ).records.map(({ event }) => event);
+        const previousEvents = reopened ? await events() : [];
+        const sequenceFloor = Math.max(
+          0,
+          ...previousEvents.map(({ seq }) => seq),
+        );
+        const firstAttempt = attempts.length;
+        const newAttempts = () => attempts.slice(firstAttempt);
+        const currentEvents = async () =>
+          (await events()).filter(({ seq }) => seq > sequenceFloor);
+
         const nonce = host.claims(ticket)!.nonce;
         originals.set(sessionId, {
           userId: identity.userId,
@@ -552,42 +642,29 @@ test
         expect(
           await sessionRpc(host, ticket, 'session/prompt', prompt),
         ).toEqual({ accepted: true });
-        const events = async () =>
-          (
-            (await sessionRpc(host, ticket, 'session/events', {
-              address: { kind: 'session', sessionId },
-            })) as {
-              records: {
-                event: {
-                  seq: number;
-                  type: string;
-                  data: Record<string, unknown>;
-                };
-              }[];
-            }
-          ).records.map(({ event }) => event);
         const expectedRoutes =
           useTls && !checkPublicRejection
             ? ['messages']
             : ['files', 'messages'];
         await expect
-          .poll(
-            () =>
-              attempts
-                .filter((attempt) => attempt.sessionId === sessionId)
-                .map((attempt) => attempt.route),
-            { timeout: 10000 },
-          )
+          .poll(() => newAttempts().map((attempt) => attempt.route), {
+            timeout: 10000,
+          })
           .toEqual(expectedRoutes);
+        const turn = newAttempts()[0]!.witness.claimed.turn;
+        if (!reopened) expect(turn).toBe(1);
+        const isTurnEnd = ({
+          type,
+          data,
+        }: Awaited<ReturnType<typeof events>>[number]) =>
+          type === 'turn/end' && data.turn === turn;
         await expect
-          .poll(
-            async () =>
-              (await events()).some((event) => event.type === 'turn/end'),
-            { timeout: 10000 },
-          )
+          .poll(async () => (await currentEvents()).some(isTurnEnd), {
+            timeout: 10000,
+          })
           .toBe(true);
-        const observed = await events();
-        const turnEnd = observed.findLast(({ type }) => type === 'turn/end');
+        const observed = await currentEvents();
+        const turnEnd = observed.find(isTurnEnd);
         const assistantMessages = observed.filter(
           ({ type }) => type === 'assistant/message',
         );
@@ -598,9 +675,12 @@ test
           );
         } else {
           expect(assistantMessages).toHaveLength(0);
+          if (reopened)
+            expect(turnEnd?.data.reason).toMatchObject({ kind: 'error' });
         }
-        const pair = attempts.filter(
-          (attempt) => attempt.sessionId === sessionId,
+        const pair = newAttempts();
+        expect(pair.every((attempt) => attempt.sessionId === sessionId)).toBe(
+          true,
         );
         expect(pair.map(({ route }) => route)).toEqual(expectedRoutes);
         expect(new Set(pair.map(({ attemptId }) => attemptId)).size).toBe(
@@ -627,7 +707,7 @@ test
             })),
           );
         }
-        for (const { witness, image, fileIdSha256 } of pair) {
+        for (const { witness, image, messageImages, route } of pair) {
           const inserted = witness.inserted;
           expect(inserted).toMatchObject({
             requestId,
@@ -639,7 +719,7 @@ test
             requestId,
             nonce,
             userId: identity.userId,
-            turn: 1,
+            turn,
             images: inserted.images,
           });
           expect(witness.requested).toMatchObject({
@@ -679,13 +759,24 @@ test
           expect(witness.variant.image.sha256).not.toBe(
             witness.original.sha256,
           );
-          if (image) expect(witness.variant.image).toEqual(image);
-          else expect(fileIdSha256).toBe(sha(receiptId));
+          if (image) {
+            expect(witness.variant.image).toEqual(image);
+            expect(messageImages).toHaveLength(route === 'messages' ? 1 : 0);
+          } else
+            expect(messageImages).toEqual(
+              Array.from({ length: reopened ? 2 : 1 }, () =>
+                expect.objectContaining({
+                  kind: 'file',
+                  fileIdSha256: sha(receiptId),
+                }),
+              ),
+            );
         }
-        return pair;
+        return { pair, identity, sessionId, previousEvents };
       }
 
-      const positive = await send(accepted, true);
+      const warm = await send(accepted, true);
+      const positive = warm.pair;
       expect(replies).toBe(1);
       expect(positive.every(({ hasOriginalImage }) => hasOriginalImage)).toBe(
         true,
@@ -693,7 +784,7 @@ test
       expect(positive[0]!.witness.inserted.images).toEqual([
         positive[0]!.witness.attachmentId,
       ]);
-      const negative = await send(late);
+      const { pair: negative } = await send(late);
       expect(negative.every(({ hasOriginalImage }) => !hasOriginalImage)).toBe(
         true,
       );
@@ -713,11 +804,11 @@ test
       expect(replies).toBe(1);
       if (useTls) {
         expect(httpEntries).toEqual(['/v1/files', '/v1/messages']);
+        expect(tlsConnections).toBe(2);
+        expect(tcpConnections).toBe(2);
         expect(lockReads).toHaveLength(2);
         expect(uploadedImages).toEqual([positive[0]!.witness.variant.image]);
-        expect(positive[1]!.fileIdSha256).toBe(sha(receiptId));
         expect(positive[1]!.contentType).toBe('application/json');
-        expect(negative[0]!.fileIdSha256).toBe(positive[1]!.fileIdSha256);
         expect(positive[0]!.attribution).toEqual(['user-agent']);
         expect(positive[1]!.attribution).toEqual(attributionHeaders);
         expect(
@@ -738,6 +829,146 @@ test
             fixtureCredentialPresent: true,
           })),
         );
+
+        const readyPath = join(
+          root,
+          'runtime',
+          'instances',
+          'project-' + project + '.ready.json',
+        );
+        const ready = async () =>
+          JSON.parse(await readFile(readyPath, 'utf8')) as {
+            pid: number;
+            generation: string;
+          };
+        const warmReady = await ready();
+        expect(warmReady.generation).toBe(host.contextGeneration);
+        const cachePath = join(
+          root,
+          'runtime',
+          'dsh',
+          'project-' + project,
+          'llm-deepseek',
+          'files-v3.json',
+        );
+        const contents = await readFile(cachePath, 'utf8');
+        const cache = JSON.parse(contents) as {
+          formatVersion: number;
+          records: {
+            attachmentId: string;
+            variantId: string;
+            fileId: string;
+          }[];
+        };
+        const warmWitness = positive[0]!.witness;
+        expect(cache.formatVersion).toBe(3);
+        expect(
+          cache.records.map(({ attachmentId, variantId, fileId }) => ({
+            attachmentId,
+            variantId,
+            fileIdSha256: sha(fileId),
+          })),
+        ).toEqual([
+          {
+            attachmentId: warmWitness.attachmentId,
+            variantId: warmWitness.variant.id,
+            fileIdSha256: sha(receiptId),
+          },
+        ]);
+        historicalInputs.set(warm.sessionId, warmWitness);
+        const before = {
+          carrier: carrierEntries.length,
+          tls: tlsConnections,
+          tcp: tcpConnections,
+          reads: contextReads.length,
+        };
+
+        await host.close();
+        expect(await readFile(cachePath, 'utf8')).toBe(contents);
+        ({ host, runs } = makeHost());
+        const cold = await send(accepted, false, warm);
+        const coldReady = await ready();
+        expect(coldReady.generation).toBe(host.contextGeneration);
+        expect(coldReady.generation).not.toBe(warmReady.generation);
+        expect(coldReady.pid).not.toBe(warmReady.pid);
+        expect(cold.previousEvents).toContainEqual(
+          expect.objectContaining({
+            type: 'agent/inbox/spliced',
+            seq: warmWitness.inserted.seq,
+            data: expect.objectContaining({
+              inserted: expect.arrayContaining([
+                expect.objectContaining({
+                  id: warmWitness.inserted.id,
+                  source: expect.objectContaining({
+                    rpcId: warmWitness.inserted.requestId,
+                  }),
+                  content: expect.arrayContaining([
+                    expect.objectContaining({
+                      type: 'image',
+                      attachment: expect.objectContaining({
+                        attachmentId: warmWitness.attachmentId,
+                      }),
+                    }),
+                  ]),
+                }),
+              ]),
+            }),
+          }),
+        );
+        expect(cold.previousEvents).toContainEqual(
+          expect.objectContaining({
+            type: 'turn/end',
+            data: expect.objectContaining({
+              turn: warmWitness.claimed.turn,
+              reason: expect.objectContaining({ kind: 'completed' }),
+            }),
+          }),
+        );
+        const [attempt] = cold.pair;
+        const warmMessage = positive[1]!;
+        expect(attempt?.witness.inserted.id).not.toBe(warmWitness.inserted.id);
+        expect(attempt?.witness.inserted.requestId).not.toBe(
+          warmWitness.inserted.requestId,
+        );
+        expect(attempt?.witness.variant).toEqual(warmWitness.variant);
+        expect(attempt?.witness.attachmentId).toBe(warmWitness.attachmentId);
+        expect(attempt?.attemptId).not.toBe(warmMessage.attemptId);
+        expect(attempt?.callId).not.toBe(warmMessage.callId);
+        expect(attempt?.bindingId).not.toBe(warmMessage.bindingId);
+        expect(attempt).toMatchObject({
+          hasOriginalImage: true,
+          destination: warmMessage.destination,
+          protocolHeaders: warmMessage.protocolHeaders,
+          headerNames: warmMessage.headerNames,
+          call: warmMessage.call,
+          current: true,
+          contentType: warmMessage.contentType,
+          fixtureCredentialPresent: true,
+          manifest: {
+            ...warmMessage.manifest,
+            bindingId: attempt!.bindingId,
+            images: [warmWitness.variant.image, attempt!.witness.variant.image],
+          },
+        });
+        expect(attempt!.messageImages[0]!.messageIndex).toBeLessThan(
+          attempt!.messageImages[1]!.messageIndex,
+        );
+        expect(contextReads.slice(before.reads)).toContainEqual({
+          userId: warm.identity.userId,
+          authSessionId: warm.identity.authSessionId,
+          requirementId: warm.identity.requirementId,
+          sessionId: warm.sessionId,
+        });
+
+        await host.close();
+        expect(carrierEntries.slice(before.carrier)).toEqual(['messages']);
+        expect(authorityEntries).toBe(2);
+        expect(tlsConnections).toBe(before.tls);
+        expect(tcpConnections).toBe(before.tcp);
+        expect(httpEntries).toEqual(['/v1/files', '/v1/messages']);
+        expect(arrivals).toHaveLength(2);
+        expect(lockReads).toHaveLength(2);
+        expect(replies).toBe(1);
       }
     } finally {
       try {

@@ -1142,6 +1142,19 @@
   <p>独立交付复审 APPROVE。首轮指出应逐路取证 Content-Type。补齐 FD 4 与 HTTPS 双侧取证及 Messages 的 JSON 断言，定点回归通过。</p>
   <p>macOS arm64、Node 24.20.0 和 Apple Git 2.54.0 下，6 个附件、载体及首写测试文件通过 43 项。<code>pnpm test</code> 通过 53 文件、300 项，另有 1 项既有非 macOS 分支跳过。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code>、<code>pnpm validate:baseline</code> 和 <code>git diff --check</code> 均通过。构建仍提示前端主包超过 500 kB。</p>
 
+  <h4 id="t13-native-attachment-cold-plan-20261120">11.16.41 T13 Native 附件缓存冷启核对</h4>
+  <p>非批量，基线 <code>3c43fe7</code>，在 §11.16.40 已通过的同一套隔离夹具增加一次冷启边界核对。生产入口、权限及回执契约沿用已审设计。先完成已验证的真实 HTTPS 上传与 Messages，读回 SDK 写入的文件索引。停稳旧 Host 及 FD 4，用同一临时 Home 和合成供应商路由创建新 Native Host、ContextRuns 与回环出口。比对实际原生进程与已签 Host 代次。</p>
+  <p>在原项目、需求、账号、登录和会话以新签名输入再次接纳同一图片。按已取证的历史原输入、本轮 spliced／claimed／readImageRequest 的顺序构造实际交给出口的两项清单，验证两条不同原生消息、完整两处文件引用及同变体，禁止用正文引用数或 SDK 变体读取次数生成清单。协议报头、合成认证、认证代和两处回执 ID 摘要与重启前对齐，本轮使用新尝试和绑定。以重启后、发送前读回的原生日志序号为下界，核对本轮 spliced／claimed 和新失败终态，确认无新增助手消息。冷启后从解析前的载体入口计数，终态后仍仅观察到该 Messages，无上传及内联回退，首写回调与 HTTPS 入口均不增加。§11.16.39 的同范围新绑定正例保留为有效回执对照。清理按 Host、回环服务、临时 Home 顺序。验证不涵盖上传结果不明时的跨进程持久核对。</p>
+
+  <p>独立方案复审第二轮 APPROVE。首轮补齐完整两项清单，防止回执查找前的数量不匹配形成假阳性。新增序号下界、当前领取轮、解析前载体计数和停稳后复查，排除旧终态及漏计。</p>
+  <p id="t13-native-attachment-cold-evidence-20261120">同一个合成 Profile 内，真实 SDK 成功上传后写入 <code>files-v3.json</code>，其附件、变体和回执摘要与前轮一致。关闭 Native 后索引原样保留。新 Native 的真实 PID、Host 代次和 FD 4 尝试与前轮均不同，重用同一项目、需求、登录和会话。原生日志读回已完成的旧轮和原图片，本轮重新签发并越过旧日志序号完成入箱与领取。旧原消息及新原消息给出口提供完整的两项顺序清单。实际 Messages 含两处相同缓存文件引用，全部报头名称、协议字段、供应商与模型、用途、认证代和变体仍一致，交接时载体有效。</p>
+  <p>该轮实际失败并无新增助手内容。关闭新 Host、排空载体后，FD 4 只增加一笔 Messages，TCP 入站、TLS 握手、HTTP 入口及首写授权次数均无增加，实际没有 Files 或内联回退。结果只覆盖明确已上传且 SDK 仍持有本地索引，但新实例缺失回执的情形。</p>
+  <p>独立技术核对确认，本机出口实例保存结果不明标记，能拒绝换键重传；重建实例后本地标记和认证摘要键均丢失，缺回执时仍拒绝引用。对于随后到来的 Files，空记录无法区分「从未写入」和「上代首写已发但回执未确认」。正式跨代持久判定及首写定序依共享 PostgreSQL 池、同库所有者和排空验收。现有业务授权回调可以在隔离库验证当代首写。具名部署和生产数据边界仍按 §11.16.17。</p>
+
+  <p>独立交付复审第二轮 APPROVE。首轮指出需排除额外报头、调用参数或载体失效导致的提前拒绝，并单独观察实际 TCP 入站。补齐完整报头名、调用模型与流状态，暖轮校准 TCP 和 TLS 各两次，冷轮两者均无新增。修订后 6 个邻域文件、43 项测试通过。</p>
+
+  <p>macOS arm64 与 Node 24.20.0 下，最终 <code>pnpm test</code> 通过 53 文件、300 项，另有 1 项既有非 macOS 条件跳过。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code>、<code>pnpm validate:baseline</code> 和 <code>git diff --check</code> 均通过。</p>
+
   <h3 id="t14-allowlist-plan-20261118">11.17 T14 平台能力白名单</h3>
   <p>Change / R3，包含新增控制面表和已有平台管理员命令。D21、D13–D16 与能力模板样稿确认平台维护已审核插件、技能和 MCP，样稿列出审核版本。首个纵向切片交付平台设置中的登记／停用、原命令重试和读回。后续项目模板与需求 preset 生成继续按 T14 验收。执行工具授权沿用现有零工具策略。工作包基线 <code>0ba0583</code>，独占主工作树，本地提交。</p>
   <ol>

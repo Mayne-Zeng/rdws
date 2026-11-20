@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, fork } from 'node:child_process';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { hashPassword } from 'better-auth/crypto';
 import { taskAssignmentMaterial } from '@rdws/contracts';
 import { NativeWebHost } from '@rdws/dsh/web';
+import { isRecord } from '@rdws/dsh/access';
 import { DemandWorktrees } from '@rdws/orchestrator';
 import { buildApp } from '@rdws/server';
 import { RepositoryMirrors } from '@rdws/syncer/mirror';
@@ -35,6 +36,150 @@ function latch() {
     };
   });
   return { promise, resolve, wait: () => expect.poll(() => opened).toBe(true) };
+}
+
+type BrokerResult = Awaited<ReturnType<OwnedWriteHandoff['execute']>>;
+type NativeOutcome = BrokerResult | { status: 'rejected'; code: number };
+
+async function nativeBrokerTool(
+  sessionId: string,
+  invoke: () => Promise<NativeOutcome>,
+  beforeDispatch: () => Promise<unknown> = async () => {},
+  mismatch = false,
+) {
+  const correlation = randomUUID();
+  const callId = 'call-' + correlation;
+  const child = fork(
+    new URL('../fixtures/native-parent-broker-tool.mjs', import.meta.url),
+    [sessionId, correlation, mismatch ? 'mismatch' : 'normal'],
+    {
+      execArgv: [],
+      env: { PATH: process.env.PATH },
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+    },
+  );
+  let fail!: (error: unknown) => void;
+  const failure = new Promise<never>((_resolve, reject) => {
+    fail = reject;
+  });
+  const closed = new Promise<number | null>((resolve) =>
+    child.once('close', resolve),
+  );
+  const timer = setTimeout(
+    () => fail(new Error('Native Broker fixture did not finish')),
+    15_000,
+  );
+  let queue = Promise.resolve();
+  let admitting = true;
+  let phase = 'declared';
+  let observed: unknown;
+  let seq: number | undefined;
+  let outcome: NativeOutcome | undefined;
+  child.on('error', fail);
+  child.once('disconnect', () => {
+    admitting = false;
+  });
+  function reply(type: string, value?: NativeOutcome) {
+    return new Promise<void>((resolve, reject) => {
+      child.send({ correlation, type, outcome: value }, (error) =>
+        error ? reject(error) : resolve(),
+      );
+    });
+  }
+  child.on('message', (message: unknown) => {
+    if (!admitting) return;
+    queue = queue.then(async () => {
+      if (
+        !isRecord(message) ||
+        message.correlation !== correlation ||
+        message.type !== phase ||
+        Buffer.byteLength(JSON.stringify(message)) > 4096
+      )
+        throw new Error('Unexpected Native Broker fixture message');
+      switch (message.type) {
+        case 'declared':
+          expect(message.names).toEqual(['rdws_broker_fixture']);
+          phase = 'observed';
+          await beforeDispatch();
+          await reply('dispatch');
+          return;
+        case 'observed':
+          if (
+            !isRecord(message.call) ||
+            !Number.isSafeInteger(message.call.seq)
+          )
+            throw new Error('Native did not observe an actual tool call');
+          seq = message.call.seq as number;
+          expect(seq).toBeGreaterThan(0);
+          expect(message.call).toEqual({
+            sessionId,
+            callId,
+            seq,
+            turn: 1,
+            step: 1,
+          });
+          observed = message.call;
+          phase = 'invoke';
+          return;
+        case 'invoke': {
+          if (!admitting) return;
+          phase = 'complete';
+          const matches =
+            JSON.stringify(message.call) === JSON.stringify(observed);
+          outcome = matches
+            ? await invoke()
+            : { status: 'rejected', code: 400 };
+          await reply('outcome', outcome);
+          return;
+        }
+        case 'complete': {
+          const content = [{ type: 'text', text: JSON.stringify(outcome) }];
+          expect(message.cause).toBe(seq);
+          expect(message.refs).toContain(seq);
+          expect(message.message).toMatchObject({
+            toolCallId: callId,
+            content,
+          });
+          expect(message.followUp).toMatchObject({
+            toolCallId: callId,
+            content,
+          });
+          phase = 'closed';
+        }
+      }
+    });
+    void queue.catch(fail);
+  });
+  try {
+    const completed = closed.then(async (code) => {
+      if (code === 0) await queue;
+      return code;
+    });
+    expect(await Promise.race([completed, failure])).toBe(0);
+    expect(phase).toBe('closed');
+    return outcome;
+  } finally {
+    admitting = false;
+    clearTimeout(timer);
+    if (child.exitCode === null && child.signalCode === null)
+      child.kill('SIGKILL');
+    let cleanupTimer: NodeJS.Timeout | undefined;
+    const cleanupDeadline = new Promise<never>((_resolve, reject) => {
+      cleanupTimer = setTimeout(
+        () =>
+          reject(new Error('Native Broker fixture cleanup was not confirmed')),
+        4_000,
+      );
+    });
+    try {
+      await Promise.race([
+        Promise.all([closed, Promise.allSettled([queue])]),
+        cleanupDeadline,
+      ]);
+    } finally {
+      clearTimeout(cleanupTimer);
+    }
+  }
 }
 
 function holdGuardedCommit(
@@ -710,6 +855,12 @@ test.skipIf(process.platform !== 'darwin')(
       const work = await demand(assigned.userId);
       const other = await demand(lead.userId);
       const forFailedClose = await demand(lead.userId);
+      const nativeWork = await demand(lead.userId);
+      const nextNativeSession = randomUUID();
+      await lab.owner.query(
+        'insert into native_session(id,requirement_id,owner_id) values ($1,$2,$3)',
+        [nextNativeSession, nativeWork.requirementId, lead.userId],
+      );
       await lab.owner.query(
         "insert into task (id,requirement_id,title,assignee_id,created_by,status) values ($1,$2,'Assignment',$3,$4,'in_progress')",
         [taskId, work.requirementId, assigned.userId, lead.userId],
@@ -890,6 +1041,218 @@ test.skipIf(process.platform !== 'darwin')(
             [id],
           )
         ).rows[0];
+      {
+        const scope = {
+          who: {
+            userId: maintainer.userId,
+            authSessionId: maintainer.authSessionId,
+          },
+          projectId,
+          requirementId: nativeWork.requirementId,
+          sessionId: nativeWork.sessionId,
+        };
+        const nextScope = { ...scope, sessionId: nextNativeSession };
+        const file = join(nativeWork.tree, 'sample.txt');
+        const readReceipt = async (commandId: string) =>
+          (
+            await lab.owner.query(
+              'select result from command_receipt where command_id=$1',
+              [commandId],
+            )
+          ).rows;
+        const initialGrant = await broker.acquire(scope, randomUUID());
+        const request = {
+          generation: initialGrant.generation,
+          commandId: randomUUID(),
+          repositoryId: 'app',
+          request: {
+            tool: 'shell' as const,
+            script:
+              "printf '|native-once' >> sample.txt; printf 'fixture-started'",
+          },
+        };
+        const started = vi.fn();
+        const completed = await nativeBrokerTool(scope.sessionId, () =>
+          broker.execute(scope, request, started),
+        );
+        expect(completed).toMatchObject({
+          status: 'finished',
+          result: { status: 'ok', stop: 'confirmed' },
+        });
+        expect(await readReceipt(request.commandId)).toEqual([
+          { result: completed },
+        ]);
+        expect(started).toHaveBeenCalledTimes(1);
+        expect(await broker.execute(scope, request, started)).toEqual(
+          completed,
+        );
+        expect(started).toHaveBeenCalledTimes(1);
+        expect(await readFile(file, 'utf8')).toBe('baseline|native-once');
+
+        const unsolicited = vi.fn(() => broker.execute(scope, request));
+        await expect(
+          nativeBrokerTool(scope.sessionId, unsolicited, undefined, true),
+        ).resolves.toEqual({ status: 'rejected', code: 400 });
+        expect(unsolicited).not.toHaveBeenCalled();
+
+        const staleCommandId = randomUUID();
+        const stale = vi.fn();
+        const denied = await nativeBrokerTool(
+          scope.sessionId,
+          () =>
+            broker
+              .execute(scope, { ...request, commandId: staleCommandId }, stale)
+              .catch((error: unknown) => {
+                const code = (error as { statusCode?: number }).statusCode;
+                if (code === undefined) throw error;
+                return { status: 'rejected', code } as const;
+              }),
+          () => broker.release(scope, initialGrant.generation, randomUUID()),
+        );
+        expect(denied).toEqual({ status: 'rejected', code: 409 });
+        expect(stale).not.toHaveBeenCalled();
+        expect(await readReceipt(staleCommandId)).toEqual([]);
+        expect(await broker.execute(scope, request, started)).toEqual(
+          completed,
+        );
+        expect(started).toHaveBeenCalledTimes(1);
+        expect(await readFile(file, 'utf8')).toBe('baseline|native-once');
+
+        const runningGrant = await broker.acquire(scope, randomUUID());
+        const runningCommandId = randomUUID();
+        let output = '';
+        const runningTool = nativeBrokerTool(scope.sessionId, () =>
+          broker.execute(
+            scope,
+            {
+              ...request,
+              generation: runningGrant.generation,
+              commandId: runningCommandId,
+              request: {
+                tool: 'shell',
+                script:
+                  'printf "|old-active" >> sample.txt; printf "started:%s\\n" "$$"; while :; do :; done',
+              },
+            },
+            ({ stream, chunk }) => {
+              if (stream === 'stdout') output += chunk.toString();
+            },
+          ),
+        );
+        void runningTool.catch(() => {});
+        await expect.poll(() => output).toMatch(/started:[1-9][0-9]*\n/);
+        const pid = Number(/started:([1-9][0-9]*)\n/.exec(output)![1]);
+        const [parent, group] = execFileSync(
+          '/bin/ps',
+          ['-o', 'ppid=', '-o', 'pgid=', '-p', String(pid)],
+          {
+            encoding: 'utf8',
+          },
+        )
+          .trim()
+          .split(/\s+/)
+          .map(Number);
+        expect(parent).toBe(process.pid);
+        expect(group).toBe(pid);
+        expect(pid).toBeGreaterThan(1);
+        const targetGroup = -pid;
+        expect(process.kill(pid, 0)).toBe(true);
+        const attempt = randomUUID();
+        await expect(broker.acquire(nextScope, attempt)).rejects.toMatchObject({
+          statusCode: 409,
+        });
+        expect(await rows(scope.requirementId)).toMatchObject({
+          phase: 'held',
+          generation: runningGrant.generation,
+        });
+
+        const stopRequested = latch();
+        const signal = process.kill.bind(process);
+        let intercepted = false;
+        let stopError: unknown;
+        const pauseStop = vi
+          .spyOn(process, 'kill')
+          .mockImplementation((pid, method) => {
+            if (pid === targetGroup && method === 'SIGKILL') {
+              intercepted = true;
+              stopRequested.resolve();
+              return true;
+            }
+            return signal(pid, method);
+          });
+        const release = broker.release(
+          scope,
+          runningGrant.generation,
+          randomUUID(),
+        );
+        void release.catch(() => {});
+        try {
+          await stopRequested.wait();
+          expect(signal(targetGroup, 0)).toBe(true);
+          expect(await rows(scope.requirementId)).toMatchObject({
+            phase: 'draining',
+            generation: runningGrant.generation,
+          });
+          await expect(
+            broker.acquire(nextScope, attempt),
+          ).rejects.toMatchObject({ statusCode: 409 });
+        } finally {
+          pauseStop.mockRestore();
+          if (intercepted) {
+            try {
+              signal(targetGroup, 'SIGKILL');
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'ESRCH')
+                stopError = error;
+            }
+          }
+        }
+        if (stopError) throw stopError;
+        expect(await release).toBe('released');
+        const stopped = await runningTool;
+        expect(stopped).toMatchObject({
+          status: 'finished',
+          result: { status: 'aborted', stop: 'confirmed' },
+        });
+        expect(() => signal(pid, 0)).toThrow(
+          expect.objectContaining({ code: 'ESRCH' }),
+        );
+        expect(() => signal(targetGroup, 0)).toThrow(
+          expect.objectContaining({ code: 'ESRCH' }),
+        );
+        expect(await rows(scope.requirementId)).toMatchObject({
+          phase: 'released',
+          generation: runningGrant.generation,
+          run_id: null,
+        });
+        expect(await readReceipt(runningCommandId)).toEqual([
+          { result: stopped },
+        ]);
+        const nextGrant = await broker.acquire(nextScope, attempt);
+        expect(nextGrant.generation).not.toBe(runningGrant.generation);
+        await expect(
+          nativeBrokerTool(nextScope.sessionId, () =>
+            broker.execute(nextScope, {
+              ...request,
+              generation: nextGrant.generation,
+              commandId: randomUUID(),
+              request: {
+                tool: 'shell',
+                script: "printf '|new-active' >> sample.txt",
+              },
+            }),
+          ),
+        ).resolves.toMatchObject({
+          status: 'finished',
+          result: { status: 'ok' },
+        });
+        expect(await readFile(file, 'utf8')).toBe(
+          'baseline|native-once|old-active|new-active',
+        );
+        expect(
+          await broker.release(nextScope, nextGrant.generation, randomUUID()),
+        ).toBe('released');
+      }
       async function launch(
         who: typeof developer,
         target: typeof work,

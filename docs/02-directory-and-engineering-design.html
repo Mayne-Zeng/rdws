@@ -1478,6 +1478,19 @@
   <p id="t07-native-tool-boundary-evidence-20261120">独立方案复审 APPROVE。现有正式 Host 的签名运行和 non-owner 输入得到真实回环 HTTP。夹具实际观察同一 Agent 的领取、<code>when</code> 和 <code>pre-step</code>。满足夹具条件时首请求只有指定工具，另一会话首请求工具数为零。相同测试工具名的两个模型调用均有真实 <code>tool/call</code> 和 <code>pre-execute</code>，夹具仅对该工具及合成调用标识给出前置放行，随后均被现有 RDWS 根守卫拒绝。两组执行体入口均为零，原生拒绝结果回指原调用，后续实际 HTTP 的 <code>role:tool</code> 关联相同调用 ID。</p>
   <p>独立锁包运行时在模型适配器实际收到已声明工具后放行合成调用。持续许可时工具体执行一次，返回常量并产生原生关联结果。放回工具调用前撤销夹具许可时，guard 收到同一实时 ID 并拒绝，执行体入口为零。无声明组即使夹具 guard 允许，真实工具结果仍为 <code>UNKNOWN_TOOL</code>，执行体为零。去掉声明限制时未获条件的真实首 HTTP 错带工具声明。去掉独立 guard 的撤权拒绝时，撤权组错误执行了一次合成工具。两项故障注入均退出 1。恢复后 <code>pnpm test tests/integration/native-tool-authority-boundary.test.ts tests/integration/native-egress-confinement.test.ts tests/integration/local-execution.test.ts</code> 通过 3 文件、14 项。独立交付复审 APPROVE，类型、lint、格式、构建和基线通过。</p>
 
+  <h4 id="t07-native-parent-broker-fixture-20261120">11.20.7 T07 锁版 Native 工具与父 Broker 联测</h4>
+  <p>Change / R3，基线 <code>7b24f6b</code>。沿 I2-AUTH、I3-WRITE、I3-CONTEXT、T06 和 §11.20.4–6，在本机隔离环境把锁版 Native 实际工具派发接到 §11.20.5 已验受管 BFF 的父进程 Broker，执行一个父端固定的合成动作。两个子智能体分别核对装配约束、当前原生日志事件、执行器和停稳。现有 <code>paused</code> BFF 在原生运行领取前阻断公开 Prompt。正式 Host 根守卫及受管模型正文沿现有门槛。选择复用分离的锁版 AgentLoop 与合成 Adapter，保留真实 Broker 和实际 T06 执行，先验证工具结果回传和已批准的持有者交接。</p>
+  <ol>
+    <li><strong>取证边界。</strong>复用当前共享 BFF 的一次性受管 PostgreSQL、真实合成工作树和具备资格的本人会话。独立的锁版 Native Node 子进程通过父进程创建的测试专用 IPC 往返。父端冻结原登录、项目／需求、当前写代、仓库和固定合成操作，AgentLoop 使用原 Broker 所在 PostgreSQL 中登记的同一个本人会话 ID。子进程只提供定型、受限的关联标识，以及实时 Native <code>tool/call</code> 的轮次、步骤、事件序号和调用 ID。消息源须是本次父进程启动的子进程，校验当前调用、单次开始、大小、时限和 IPC 关联。父端固定本次子进程和写代内的坐标到原命令键。原生 <code>session/event</code> 只记录实际调用，工具体须在锁版执行守卫成功之后才请求父端。IPC 启动仅来自测试夹具，证据范围为本地子进程和父端受信装配。</li>
+    <li><strong>真实结果和否定对照。</strong>父 Broker 走既有资格、上下文版本与写代重验，并由真实 Seatbelt/T06 写入合成工作树。实际通过 guard 的工具体等待父端结构化终态后回传 Native。核对原生 <code>tool/result.sourceEventSeqs</code> 回指实时 <code>tool/call</code>，下步合成 Adapter 收到实际同 ID 结果。用固定追加标记、持久命令回执和父端实际启动计数验证一次写入与合法同键回读。Adapter 已收到声明后由当前持有者真实释放写代，随后仍让实际原生调用进入 IPC。父端的 Broker 须拒绝失效写代的新命令，核实零占位、零启动、零写入，拒绝结果仍回指原调用。另以错坐标验证 IPC 关联拒绝，合法已结算原键仍按实际持久回执核对。</li>
+    <li><strong>持有者交接和清理。</strong>独立观察旧代实际进程仍在时，让另一合资格本人会话先申请并确认未授予、原代仍在。当前持有者发起释放后，在停稳或持久结算确认的可观察停点由同一候选再次申请，核对仍被拒绝且原代处于 <code>draining</code>。放开停点后独立核对旧进程回收、进程组消失、原代持久终态和工具结果。另一会话随后获得新代并实际写入。IPC 关闭同步禁新，父端有界等待已受理任务、子进程退出和 Broker 排空。通道退出只触发禁新并保留原键结果，实际停稳失确认时沿旧代 <code>draining</code>。后续正式联合验收继续验证实际 NativeWebHost 的精确根授权、签名活跃步骤及起跑复核、单次取消、完整生命周期、正式工具正文与模型出口和编队 UI。</li>
+    <li><strong>验收与回退。</strong>先验证锁版夹具与 Broker 的合成正例、守卫拒绝和停稳，再跑相邻 Native/T06、类型、lint、格式、构建、整仓和基线，双面独立方案与交付复审。改动限测试和现有文档，无迁移。回退测试提交前确认本轮夹具全部退出，保留独立证据及未确认的写代记录。</li>
+  </ol>
+
+  <p id="t07-native-parent-broker-evidence-20261120"><strong>独立复审与联测证据。</strong>修订方案双面 APPROVE，明确使用同一 PG 登记会话、声明后真实释放仍到达父 Broker、释放已发起时的竞争停点及原键重放。交付复审补实父 IPC 成功与异常排空期限。进程组探针先独立读取进程父 PID 和组长，确认组属于本次夹具后，仅重放已截获的 Broker 原停止信号。A/B 两面交付终审 APPROVE。</p>
+  <p>锁定 Native 的工具处理器等待父端给出的实际 T06 终态，原生结果指向同一实时调用，下一步合成 Adapter 收到逐字相同的结果。固定文件标记追加一次；实际 Broker 原键在释放前后均返回同一持久回执。错事件序号在父端拒绝。声明后持有者真实释放，随后 Native 工具仍抵达父 Broker，旧代的新命令返回 409，数据库没有该命令回执，工作树没有新增标记。旧进程实际存活和释放在途两个时点均拒绝另一会话，确认旧 PID 与独立组退出、PG 旧代释放后，新会话实际取得新代并完成写入。</p>
+  <p><code>pnpm test tests/integration/shared-write-authority.test.ts tests/integration/native-tool-authority-boundary.test.ts tests/integration/write-handoff.test.ts tests/integration/local-execution.test.ts</code> 退出 0，4 文件、22 项。整仓 <code>pnpm test</code> 退出 0，54 文件、309 项及 1 项条件跳过。类型、lint、当前 Git 文件 Prettier 检查、构建、基线通过。交付修订以本地 <code>test: connect a locked Native tool to the managed write broker</code> 为准。正式 Host 根授权、单次取消、模型出口和产品编队仍待联合验收。</p>
+
   <h3 id="t11-maintenance-acceptance-20261119">11.21 T11 已确认的导入与人员维护</h3>
   <p>2026-11-19 用户确认需求批量导入采用同页的上传、预览、修正与整批提交。上传后动态显示解析和校验进度，下方逐条呈现需求明细、状态与可定位的问题。用户可在同页修正并重新校验。预览和校验阶段不写业务数据。全部通过后由用户显式整批提交入库，提交结果继续在同页逐条呈现。</p>
   <p>参与者和开发负责人维护按当前项目角色授权。移除参与者或更换负责人时，相关未完成子任务须显式交给当前具备资格的接手人，并保留原分派记录。验收覆盖无资格接手、已有分派记录保留，以及原有阶段与任务按钮权限。</p>

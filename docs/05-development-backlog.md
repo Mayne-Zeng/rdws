@@ -258,6 +258,7 @@
   - 已本地验证隔离子项：[固定派生切点的只读取证](02-directory-and-engineering-design.html#t13-fixed-fork-evidence-delivery-20261121)。真实回环两模型、停稳后的锁版 Native v4 父子原始日志和最终数据库回执分别核对领取、原生选模事件、实际首写及精确继承。同值新修订无原生选模事件时保留未知。独立终审、终稿定点 4 项、邻域 9 项、整仓 374 项与 1 条件跳过、静态及基线通过。产品派生门禁继续待验收。
   - 已本地验证隔离子项：[本人当前保存修订的首写回证](02-directory-and-engineering-design.html#t13-saved-model-first-write-readback-evidence-20261121)。试点本人 GET 核对原保存修订的准备状态或已确认首写，错 Host、账号、项目或会话均不构成证据。真实冷读零 Native 启动与供应商连接。独立终审、邻域 31 项、整仓 375 项与 1 条件跳过、静态及基线通过。正式界面和产品派生门禁待验收。
   - 已本地验证隔离子项：[锁版 Workbench SDK 被动跟随](02-directory-and-engineering-design.html#t13-pilot-passive-follow-evidence-20261121)。真实 Chromium 验证有未决消息的冷会话打开和重连无 Agent、领取或外发。另一个本人会话实际经 SDK 发文本并收到流式和最终回复，供应商实收已预设模型。普通同构帧及直接活化、越权、WS Prompt、旧登录反例通过。双面终审、邻域 17 项、整仓 377 项与 1 条件跳过、普通 Chromium 51 项、受管 2 项、静态及基线通过。完整选模操作和产品派生门禁待验收。
+  - 已本地验证修复：[试点模型目录查询故障](02-directory-and-engineering-design.html#t13-pilot-catalog-failure-evidence-20261121)。现有本人保存和发送分别区分目标供应商查询失败与健康缺项。实际故障零业务派发与供方连接，恢复同键可用，已保存回执继续按原键读取。独立终审、邻域 31 项、整仓 377 项与 1 条件跳过、静态及基线通过。
   - 已整合工程子项：[附件清单与图片准入分支](02-directory-and-engineering-design.html#t13-local-branch-consolidation-20261120)。附件来源证明、SDK 图片说明投影、工作目录投影及新选图片原登录准入已合入 `main`。双面复审、88 项邻域及静态检查通过。正式图片入口、历史复用、选模和具名部署仍待继续验收。
 
 - [ ] **T14 · 能力白名单与模板**（待验收：软件及隔离 Native 验证完成，待运营制品与用户侧验收）

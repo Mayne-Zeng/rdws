@@ -98,6 +98,8 @@ test.skipIf(process.platform !== 'darwin')(
     let loseNativeReply: string | undefined;
     let loseFreezeCommit: string | undefined;
     let withholdObservation: string | undefined;
+    let failingCatalogProvider: string | undefined;
+    let catalogFailures = 0;
     let freezeCommittedWithoutReply = false;
     let firstWriteFault:
       | {
@@ -140,6 +142,36 @@ test.skipIf(process.platform !== 'darwin')(
       const nativeFetch = NativeWebHost.prototype.fetch;
       vi.spyOn(NativeWebHost.prototype, 'fetch').mockImplementation(
         async function (this: NativeWebHost, path, grant, init) {
+          const unavailable = failingCatalogProvider;
+          if (
+            unavailable &&
+            this.projectId === projectId &&
+            path === '/api/session/modelCatalog'
+          ) {
+            const response = await nativeFetch.call(this, path, grant, init);
+            expect(response.status).toBe(200);
+            const envelope = await response.json();
+            expect(envelope.result.ok).toBe(true);
+            const catalog = envelope.result.value as {
+              groups: { id: string }[];
+              routableProviders: string[];
+              failures: { id: string; name: string; message: string }[];
+            };
+            expect(catalog.routableProviders).toContain(provider);
+            catalog.groups = catalog.groups.filter(
+              ({ id }) => id !== unavailable,
+            );
+            catalog.routableProviders = catalog.routableProviders.filter(
+              (id) => id !== unavailable,
+            );
+            catalog.failures.push({
+              id: unavailable,
+              name: unavailable,
+              message: 'Synthetic private provider diagnostic',
+            });
+            catalogFailures++;
+            return Response.json(envelope);
+          }
           if (path !== '/api/session/prompt' || typeof init?.body !== 'string')
             return nativeFetch.call(this, path, grant, init);
           const requestId = JSON.parse(init.body).payload.args.request
@@ -681,16 +713,46 @@ test.skipIf(process.platform !== 'darwin')(
           headers,
           body: JSON.stringify({ commandId: id, provider, model: selected }),
         });
+      failingCatalogProvider = provider;
+      const catalogSave = await save(commandId, model);
+      expect(catalogSave.status).toBe(503);
+      expect(await catalogSave.json()).toEqual({
+        error: '会话模型目录暂不可用',
+      });
+      expect(catalogFailures).toBe(1);
+      expect(
+        (
+          await lab.owner.query(
+            'select revision from session_model_selection where native_session_id=$1',
+            [sessionId],
+          )
+        ).rows,
+      ).toEqual([]);
+      expect(
+        (
+          await lab.owner.query(
+            'select command_id from command_receipt where command_id=$1',
+            [commandId],
+          )
+        ).rows,
+      ).toEqual([]);
+      expect(supplierRequests).toBe(0);
+      expect(wireConnections).toHaveLength(0);
+      failingCatalogProvider = 'unrelated-fixture-provider';
       const result = await save(commandId, model);
       expect(result.status).toBe(200);
+      expect(catalogFailures).toBe(2);
       expect(result.headers.get('cache-control')).toBe('no-store');
       const saved = await result.json();
       expect(saved).toEqual({
         selection: { provider, model, revision: expect.any(String) },
       });
+      failingCatalogProvider = provider;
       const repeated = await save(commandId, model);
       expect(repeated.status).toBe(200);
       expect(await repeated.json()).toEqual(saved);
+      expect(catalogFailures).toBe(2);
+      failingCatalogProvider = undefined;
       const conflicting = await save(commandId, defaultModel);
       expect(conflicting.status).toBe(409);
       await conflicting.text();
@@ -865,6 +927,25 @@ test.skipIf(process.platform !== 'darwin')(
 
       const firstPrompt = randomUUID();
       const firstText = 'Synthetic prompt with the saved alternate model';
+      failingCatalogProvider = provider;
+      const catalogPrompt = await prompt(firstPrompt, firstText);
+      expect(catalogPrompt.status).toBe(503);
+      expect(await catalogPrompt.json()).toEqual({
+        error: '会话模型目录暂不可用',
+      });
+      expect(catalogFailures).toBe(3);
+      expect(
+        (
+          await lab.owner.query(
+            'select request_id from session_prompt_dispatch where native_session_id=$1 and request_id=$2',
+            [sessionId, firstPrompt],
+          )
+        ).rows,
+      ).toEqual([]);
+      expect(nativePosts).toEqual([]);
+      expect(supplierRequests).toBe(0);
+      expect(wireConnections).toHaveLength(0);
+      failingCatalogProvider = undefined;
       const first = await prompt(firstPrompt, firstText);
       expect(first.status, await first.clone().text()).toBe(200);
       expect((await first.json()).result).toEqual({

@@ -54,7 +54,8 @@ export async function readPilotModelOptions(
   )
     .then(publicModelCatalogValue)
     .catch(() => undefined);
-  if (!catalog) businessError(503, '会话模型目录暂不可用');
+  if (!catalog || catalog.failures.some(({ id }) => id === policy.provider))
+    businessError(503, '会话模型目录暂不可用');
   const models = catalog.routableProviders.includes(policy.provider)
     ? (catalog.groups
         .find(({ id }) => id === policy.provider)

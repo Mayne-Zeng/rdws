@@ -9,7 +9,10 @@ import {
 } from '@rdws/db';
 import { runMacosWorktree, type ExecutionRequest } from '@rdws/dsh/execution';
 import type { DemandWorktrees } from '@rdws/orchestrator';
-import type { RequirementWriteAuthority } from '@rdws/contracts';
+import type {
+  RequirementWriteAuthority,
+  WriteAuthorityCommand as WriteCommand,
+} from '@rdws/contracts';
 import {
   businessError,
   createBusiness,
@@ -71,11 +74,9 @@ type ReleaseRequest = { scope: Scope; generation: string; commandId: string };
 type ReleaseState = 'released' | 'draining';
 type PendingRelease = ReleaseRequest & {
   uncertain: boolean;
+  assertCurrent: () => void;
   work?: Promise<ReleaseState>;
 };
-type WriteCommand =
-  | { type: 'acquire'; commandId: string }
-  | { type: 'release'; commandId: string; generation: string };
 type AuthorityResolution = 'committed' | 'rolled-back' | 'unknown';
 type AuthorityConfirmation = (tx: Queries) => Promise<AuthorityResolution>;
 
@@ -465,11 +466,16 @@ export function createOwnedWriteHandoff(
     }, delay).unref();
   }
 
-  async function acquire(scope: Scope, commandId: string) {
+  async function acquire(
+    scope: Scope,
+    commandId: string,
+    assertCurrent: () => void,
+  ) {
     let proposed: Grant | undefined;
     const issued = await transaction(async (tx, deadline) => {
       const snapshot = await context(tx, scope);
       const old = await lockedLease(tx, scope.requirementId);
+      assertCurrent();
       const receipt = await reserve(
         tx,
         scope.who,
@@ -491,6 +497,7 @@ export function createOwnedWriteHandoff(
           Math.min(deadline, snapshot.validBefore, grant.expiresAt),
           scope,
         );
+        assertCurrent();
         return { grant, snapshot };
       }
       const tracked = holdings.get(scope.requirementId);
@@ -529,6 +536,7 @@ export function createOwnedWriteHandoff(
         .values(values)
         .onConflictDoUpdate({ target: leases.requirementId, set: values });
       await finish(tx, receipt.value, { ...grant, ownerGeneration: authority });
+      assertCurrent();
       allowed(Math.min(deadline, expiresAt), scope);
       proposed = grant;
       propose(scope, grant, commandId);
@@ -546,6 +554,7 @@ export function createOwnedWriteHandoff(
     if (tracked?.grant.generation !== generation)
       businessError(409, '原写入资格已失效，请重新申请');
     allowed(expiresAt, scope);
+    assertCurrent();
     tracked.confirmed = true;
     return {
       generation,
@@ -595,9 +604,14 @@ export function createOwnedWriteHandoff(
     );
   }
 
-  async function checkCommand(scope: Scope, command: WriteCommand) {
+  async function readForCommand<T>(
+    scope: Scope,
+    assertCurrent: () => void,
+    read: (tx: Queries) => Promise<T>,
+  ) {
     requireLiveLogin(scope);
-    const { generation, validBefore } = await readTransaction(async (tx) => {
+    assertCurrent();
+    const { result, validBefore } = await readTransaction(async (tx) => {
       const reader = await business.authorizeRequirement(
         scope.who,
         scope.requirementId,
@@ -617,12 +631,24 @@ export function createOwnedWriteHandoff(
         );
       if (!owned) businessError(403, '只能核对本人会话的写权操作');
       return {
-        generation: await recordedGeneration(tx, scope, command),
+        result: await read(tx),
         validBefore: reader.expiresAt.getTime(),
       };
     });
     requireLiveLogin(scope);
     if (validBefore <= Date.now()) businessError(401, '登录已失效，请重新登录');
+    assertCurrent();
+    return result;
+  }
+
+  async function checkCommand(
+    scope: Scope,
+    command: WriteCommand,
+    assertCurrent: () => void,
+  ) {
+    const generation = await readForCommand(scope, assertCurrent, (tx) =>
+      recordedGeneration(tx, scope, command),
+    );
     return generation
       ? { state: 'recorded' as const, generation }
       : { state: 'unrecorded' as const };
@@ -657,6 +683,7 @@ export function createOwnedWriteHandoff(
       const expiresAt = old.expiresAt.getTime();
       const assertCurrent = () => {
         if (recovering) return;
+        request.assertCurrent();
         requireLiveLogin(scope);
         if (
           stopping ||
@@ -735,7 +762,12 @@ export function createOwnedWriteHandoff(
     ));
   }
 
-  async function release(scope: Scope, generation: string, commandId: string) {
+  async function release(
+    scope: Scope,
+    generation: string,
+    commandId: string,
+    assertCurrent: () => void,
+  ) {
     requireLiveLogin(scope);
     const command = { type: 'release', generation, commandId } as const;
     const { receipt, lease, validBefore } = await readTransaction(
@@ -760,6 +792,7 @@ export function createOwnedWriteHandoff(
     if (validBefore <= Date.now()) businessError(401, '登录已失效，请重新登录');
     const live =
       sameHolder(lease, scope, generation) && lease.phase !== 'released';
+    assertCurrent();
     const existing = releaseFences.get(scope.requirementId);
     if (
       existing?.generation === generation &&
@@ -782,7 +815,13 @@ export function createOwnedWriteHandoff(
     )
       businessError(409, '仅当前持有会话可以释放写入');
     allowed(Math.min(validBefore, lease.expiresAt.getTime()), scope);
-    const request = { scope, generation, commandId, uncertain: false };
+    const request = {
+      scope,
+      generation,
+      commandId,
+      uncertain: false,
+      assertCurrent,
+    };
     releaseFences.set(scope.requirementId, request);
     return runRelease(request);
   }
@@ -1152,43 +1191,66 @@ export function createOwnedWriteHandoff(
     projectId: string,
     requirementId: string,
     assertReader: () => void,
+    actionsEnabled = false,
   ): Promise<RequirementWriteAuthority> {
     const deadline = Date.now() + 1800;
-    const { reader, lease, holder } = await readTransaction(async (tx) => {
-      const reader = await business.authorizeRequirement(
-        who,
-        requirementId,
-        projectId,
-        'reader',
-        tx,
-      );
-      const [lease] = await tx
-        .select()
-        .from(leases)
-        .where(
-          and(
-            eq(leases.projectId, projectId),
-            eq(leases.requirementId, requirementId),
-          ),
+    const { reader, lease, holder, applicant } = await readTransaction(
+      async (tx) => {
+        const reader = await business.authorizeRequirement(
+          who,
+          requirementId,
+          projectId,
+          'reader',
+          tx,
         );
-      let holder: Awaited<ReturnType<typeof business.writeContext>> | undefined;
-      if (lease?.phase === 'held') {
-        try {
-          holder = await business.writeContext(
-            tx,
-            { userId: lease.ownerId, authSessionId: lease.authSessionId },
-            projectId,
-            requirementId,
-            lease.nativeSessionId,
-            false,
+        const [lease] = await tx
+          .select()
+          .from(leases)
+          .where(
+            and(
+              eq(leases.projectId, projectId),
+              eq(leases.requirementId, requirementId),
+            ),
           );
-        } catch (error) {
-          const status = (error as { statusCode?: number }).statusCode;
-          if (status !== 401 && status !== 403 && status !== 404) throw error;
+        async function eligible(actor: Actor, sessionId: string) {
+          try {
+            return await business.writeContext(
+              tx,
+              actor,
+              projectId,
+              requirementId,
+              sessionId,
+              false,
+            );
+          } catch (error) {
+            const status = (error as { statusCode?: number }).statusCode;
+            if (status !== 401 && status !== 403 && status !== 404) throw error;
+          }
         }
-      }
-      return { reader, lease, holder };
-    });
+        const holder =
+          lease?.phase === 'held'
+            ? await eligible(
+                { userId: lease.ownerId, authSessionId: lease.authSessionId },
+                lease.nativeSessionId,
+              )
+            : undefined;
+        const [owned] =
+          actionsEnabled && (!lease || lease.phase === 'released')
+            ? await tx
+                .select({ id: schema.nativeSession.id })
+                .from(schema.nativeSession)
+                .where(
+                  and(
+                    eq(schema.nativeSession.requirementId, requirementId),
+                    eq(schema.nativeSession.ownerId, who.userId),
+                  ),
+                )
+                .limit(1)
+            : [];
+        const applicant = owned ? await eligible(who, owned.id) : undefined;
+        return { reader, lease, holder, applicant };
+      },
+    );
     assertReader();
     const now = Date.now();
     if (reader.expiresAt.getTime() <= now)
@@ -1196,20 +1258,27 @@ export function createOwnedWriteHandoff(
     if (deadline <= now) businessError(503, '写权状态读取超时');
 
     const tracked = holdings.get(requirementId);
+    const hints = actionsEnabled ? { actionsEnabled: true as const } : {};
     if (
       !stopping &&
       !fenced(requirementId) &&
       !tracked &&
       (!lease || (lease.phase === 'released' && !lease.runId))
     )
-      return { state: 'idle' };
+      return {
+        ...hints,
+        state: 'idle',
+        ...(applicant &&
+          applicant.validBefore > now &&
+          !loginClosed(who.authSessionId) && { canAcquire: true as const }),
+      };
     if (
       !tracked?.confirmed ||
       !sameHolder(lease, tracked.scope, tracked.grant.generation) ||
       tracked.grant.contextVersion !== lease.contextVersion ||
       tracked.grant.expiresAt !== lease.expiresAt.getTime()
     )
-      return { state: 'unconfirmed' };
+      return { ...hints, state: 'unconfirmed' };
     const execution = lease.runId ? executions.get(lease.runId) : undefined;
     const running =
       execution?.requirementId === requirementId &&
@@ -1221,7 +1290,7 @@ export function createOwnedWriteHandoff(
       execution.controller.signal.aborted &&
       settlement?.outcome.status !== 'unknown'
     )
-      return { state: 'stopping' };
+      return { ...hints, state: 'stopping' };
     const awaitingSettlement = [...settlements.values()].some(
       ({ scope, generation }) =>
         scope.requirementId === requirementId &&
@@ -1233,33 +1302,53 @@ export function createOwnedWriteHandoff(
       fenced(requirementId) ||
       loginClosed(lease.authSessionId) ||
       !holder ||
-      holder.requirement.contextVersion !== lease.contextVersion ||
       awaitingSettlement ||
       (lease.runId && (!running || execution.controller.signal.aborted))
     )
-      return { state: 'unconfirmed' };
+      return { ...hints, state: 'unconfirmed' };
     const expiresAt = Math.min(lease.expiresAt.getTime(), holder.validBefore);
-    if (expiresAt <= now) return { state: 'unconfirmed' };
-    if (
-      lease.ownerId !== who.userId ||
-      lease.authSessionId !== who.authSessionId
-    )
-      return { state: 'held' };
+    if (expiresAt <= now) return { ...hints, state: 'unconfirmed' };
+    const own =
+      lease.ownerId === who.userId && lease.authSessionId === who.authSessionId;
+    const target = own
+      ? {
+          sessionId: lease.nativeSessionId,
+          generation: lease.generation,
+          expiresAt,
+        }
+      : undefined;
+    const release = actionsEnabled && target ? { releaseTarget: target } : {};
+    if (holder.requirement.contextVersion !== lease.contextVersion)
+      return { ...hints, ...release, state: 'unconfirmed' };
     return {
+      ...hints,
+      ...release,
       state: 'held',
-      holder: {
-        sessionId: lease.nativeSessionId,
-        generation: lease.generation,
-        expiresAt,
-      },
+      ...(target && { holder: target }),
     };
   }
 
   return {
     readStatus,
-    checkCommand: (scope: Scope, command: WriteCommand) =>
+    confirmCommandScope: (scope: Scope, assertCurrent: () => void) =>
       admit(() =>
-        checkCommand(structuredClone(scope), structuredClone(command)),
+        readForCommand(
+          structuredClone(scope),
+          assertCurrent,
+          async () => undefined,
+        ),
+      ),
+    checkCommand: (
+      scope: Scope,
+      command: WriteCommand,
+      assertCurrent = () => {},
+    ) =>
+      admit(() =>
+        checkCommand(
+          structuredClone(scope),
+          structuredClone(command),
+          assertCurrent,
+        ),
       ),
     assertWireLease(scope: Scope, generation: string, contextVersion: number) {
       const tracked = confirmedHolding(scope, generation);
@@ -1267,8 +1356,8 @@ export function createOwnedWriteHandoff(
         businessError(409, '当前会话没有可用的写入资格');
       allowed(tracked.grant.expiresAt, scope);
     },
-    acquire: (scope: Scope, commandId: string) =>
-      admit(() => acquire(structuredClone(scope), commandId)),
+    acquire: (scope: Scope, commandId: string, assertCurrent = () => {}) =>
+      admit(() => acquire(structuredClone(scope), commandId, assertCurrent)),
     execute: (
       scope: Scope,
       input: Invocation,
@@ -1285,8 +1374,15 @@ export function createOwnedWriteHandoff(
           beforeCallStart,
         ),
       ),
-    release: (scope: Scope, generation: string, commandId: string) =>
-      admit(() => release(structuredClone(scope), generation, commandId)),
+    release: (
+      scope: Scope,
+      generation: string,
+      commandId: string,
+      assertCurrent = () => {},
+    ) =>
+      admit(() =>
+        release(structuredClone(scope), generation, commandId, assertCurrent),
+      ),
     beginAuthorityChange,
     changeAuthority: <T>(
       operationId: string,

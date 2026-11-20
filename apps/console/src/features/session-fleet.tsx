@@ -6,6 +6,7 @@ import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import { api } from '../lib/ui.tsx';
 import { WORKBENCH_POLL_INTERVAL_MS } from '../lib/query.ts';
 import { SessionHistory } from './session-history.tsx';
+import { FleetWriteCommands } from './fleet-write-commands.tsx';
 import './session-fleet.css';
 
 type FleetSession = {
@@ -199,17 +200,15 @@ function FleetWriteStatus({
   sessions: FleetSession[];
   onAccessLost: () => void;
 }) {
+  const requirementPath = `/api/requirements/${encodeURIComponent(requirementId)}`;
   const writeStatus = useQuery({
     queryKey: ['fleet-write-status', projectId, requirementId, userId, loginId],
     queryFn: ({ signal }) =>
-      api<RequirementWriteAuthority>(
-        `/api/requirements/${encodeURIComponent(requirementId)}/write-authority`,
-        {
-          cache: 'no-store',
-          headers: { [OBSERVED_LOGIN_HEADER]: loginId },
-          signal,
-        },
-      ),
+      api<RequirementWriteAuthority>(requirementPath + '/write-authority', {
+        cache: 'no-store',
+        headers: { [OBSERVED_LOGIN_HEADER]: loginId },
+        signal,
+      }),
     refetchOnMount: 'always',
     refetchInterval: (query) =>
       query.state.data?.state === 'unavailable'
@@ -227,7 +226,7 @@ function FleetWriteStatus({
   }, [failure, onAccessLost]);
   const holder = status?.state === 'held' ? status.holder : undefined;
   const [elapsed, setElapsed] = useState<number>();
-  const expiresAt = holder?.expiresAt;
+  const expiresAt = (holder ?? status?.releaseTarget)?.expiresAt;
   useEffect(() => {
     if (expiresAt === undefined || expiresAt <= Date.now()) return;
     const timer = window.setTimeout(
@@ -251,9 +250,26 @@ function FleetWriteStatus({
       ? writeStatusLabels[state]
       : undefined;
   return label ? (
-    <p className="muted fleet-write-status" role="status" aria-label="写权状态">
-      {label}
-      {ownPosition > 0 && ` · 本人会话 ${ownPosition}`}
-    </p>
+    <div className="fleet-write-panel">
+      <p
+        className="muted fleet-write-status"
+        role="status"
+        aria-label="写权状态"
+      >
+        {label}
+        {ownPosition > 0 && ` · 本人会话 ${ownPosition}`}
+      </p>
+      {writeStatus.data?.actionsEnabled && (
+        <FleetWriteCommands
+          keyScope={[projectId, requirementId, userId, loginId]}
+          loginId={loginId}
+          requirementPath={requirementPath}
+          status={expired && status ? { state: 'unconfirmed' } : status}
+          sessions={sessions}
+          onAccessLost={onAccessLost}
+          refreshStatus={() => void writeStatus.refetch()}
+        />
+      )}
+    </div>
   ) : null;
 }

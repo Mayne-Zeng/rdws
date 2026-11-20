@@ -20,6 +20,7 @@ import {
   validateWriteHandoffDatabase,
 } from './modules/write-handoff.ts';
 import { checkedWriteTransaction } from './modules/checked-write-transaction.ts';
+import { isWriteAuthorityCommand } from './modules/workbench-paths.ts';
 import {
   createAuth,
   logoutRevocationHeader,
@@ -35,7 +36,7 @@ export function buildApp(options: {
   nativeProfiles?: ReadonlyMap<string, string>;
   authorityTicket?: string;
   mainModelPolicy?: unknown;
-  isolatedWrite?: { gitPath: string; fixtureTool?: true };
+  isolatedWrite?: { gitPath: string; fixtureTool?: true; fleetCommands?: true };
 }) {
   const modelEgress = resolveNativeModelEgress(
     process.env.RDWS_NATIVE_MODEL_EGRESS,
@@ -226,6 +227,8 @@ export function buildApp(options: {
   });
   if (!isolatedWrite) app.addHook('onClose', closeDatabase);
   app.addHook('onRequest', async (request, reply) => {
+    if (isWriteAuthorityCommand(request))
+      reply.header('cache-control', 'no-store');
     if (isolatedWrite && closing)
       return reply.code(503).send({ error: '共享运行正在关闭' });
     if (request.method === 'POST' && request.headers.origin !== options.origin)
@@ -301,6 +304,7 @@ export function buildApp(options: {
       checked,
       isolatedWrite ? trackWork : undefined,
       fixture,
+      isolatedWrite?.fleetCommands === true,
     );
   });
   app.setErrorHandler((error: FastifyError, _request, reply) => {

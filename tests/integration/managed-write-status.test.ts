@@ -105,8 +105,14 @@ test.skipIf(process.platform !== 'darwin')(
       const viewer = await login('status_tester');
       const outside = await login('status_outside');
       const expired = await login('status_developer');
+      const expiringObserver = await login('status_developer');
       type Login = typeof owner;
       const url = (id = demand) => `/api/requirements/${id}/write-authority`;
+      const commandUrl = `/api/requirements/${demand}/sessions/${ownSession}/write-authority`;
+      const originalCommand = {
+        type: 'acquire' as const,
+        commandId: randomUUID(),
+      };
       const check = (
         login: Login = owner,
         id = demand,
@@ -125,6 +131,16 @@ test.skipIf(process.platform !== 'darwin')(
       expect(disabled.statusCode).toBe(200);
       expect(disabled.json()).toEqual({ state: 'unavailable' });
       expect((await check(outside)).statusCode).toBe(403);
+      expect(
+        (
+          await ordinary.inject({
+            method: 'POST',
+            url: commandUrl + '/commands',
+            headers: { origin: options.origin, cookie: owner.cookie },
+            payload: originalCommand,
+          })
+        ).statusCode,
+      ).toBe(404);
       await ordinary.close();
 
       await lab.owner.query(
@@ -135,6 +151,12 @@ test.skipIf(process.platform !== 'darwin')(
         "update auth_session set expires_at=now()-interval '1 minute' where id=$1",
         [expired.id],
       );
+      const expiry = (
+        await lab.owner.query<{ expires_at: Date }>(
+          "update auth_session set expires_at=now()+interval '8 seconds' where id=$1 returning expires_at",
+          [expiringObserver.id],
+        )
+      ).rows[0]!.expires_at;
       await lab.owner.query(
         "insert into requirement_write_lease(requirement_id,project_id,owner_id,auth_session_id,native_session_id,generation,phase,expires_at,context_version) values($1,$2,$3,$4,$5,$6,'held',now()-interval '1 minute',1)",
         [stranded, project, developer, owner.id, strandedSession, randomUUID()],
@@ -148,6 +170,7 @@ test.skipIf(process.platform !== 'darwin')(
         ...options,
         authorityTicket: ticket,
         isolatedWrite: {
+          fleetCommands: true,
           gitPath: execFileSync('/usr/bin/which', ['git'], {
             encoding: 'utf8',
           }).trim(),
@@ -156,14 +179,17 @@ test.skipIf(process.platform !== 'darwin')(
       app = managed;
       let pause:
         | {
+            path: string;
             entered: ReturnType<typeof latch>;
             release: ReturnType<typeof latch>;
+            statusCode?: number;
           }
         | undefined;
-      managed.addHook('preSerialization', async (request, _reply, payload) => {
-        if (pause && request.url === url()) {
+      managed.addHook('preSerialization', async (request, reply, payload) => {
+        if (pause && request.url === pause.path) {
           const active = pause;
           pause = undefined;
+          active.statusCode = reply.statusCode;
           active.entered.open();
           await active.release.wait;
         }
@@ -179,15 +205,25 @@ test.skipIf(process.platform !== 'darwin')(
         requirementId: demand,
         sessionId: ownSession,
       };
-      async function pauseStatus() {
-        const entered = latch(),
-          release = latch();
-        pause = { entered, release };
-        releaseChecks.push(release);
-        const pending = check();
-        await entered.wait;
-        return { pending, release };
-      }
+      const post = (
+        path: 'commands' | 'check',
+        payload: object = originalCommand,
+        login = owner,
+        headers: Record<string, string | undefined> = {},
+      ) =>
+        managed.inject({
+          method: 'POST',
+          url: commandUrl + '/' + path,
+          headers: Object.fromEntries(
+            Object.entries({
+              origin: options.origin,
+              cookie: login.cookie,
+              'x-rdws-edit-session': login.id,
+              ...headers,
+            }).filter(([, value]) => value !== undefined),
+          ),
+          payload,
+        });
       const records = async () =>
         (
           await lab.owner.query(
@@ -196,12 +232,67 @@ test.skipIf(process.platform !== 'darwin')(
           )
         ).rows;
       const originalSessions = await records();
+      const missing = await post('check');
+      expect(missing.statusCode).toBe(200);
+      expect(missing.headers['cache-control']).toBe('no-store');
+      expect(missing.json()).toEqual({
+        ...originalCommand,
+        state: 'unrecorded',
+      });
+      const noOrigin = await post('commands', originalCommand, owner, {
+        origin: undefined,
+      });
+      const wrongOrigin = await post('check', originalCommand, owner, {
+        origin: 'http://127.0.0.1:1',
+      });
+      for (const rejected of [noOrigin, wrongOrigin]) {
+        expect(rejected.statusCode).toBe(403);
+        expect(rejected.headers['cache-control']).toBe('no-store');
+      }
+      expect(
+        (
+          await post('commands', {
+            ...originalCommand,
+            generation: randomUUID(),
+          })
+        ).statusCode,
+      ).toBe(400);
+      expect(
+        (
+          await post('commands', originalCommand, owner, {
+            'x-rdws-edit-session': separate.id,
+          })
+        ).statusCode,
+      ).toBe(401);
+      expect((await post('commands', originalCommand, viewer)).statusCode).toBe(
+        403,
+      );
+      expect((await post('check')).json()).toEqual({
+        ...originalCommand,
+        state: 'unrecorded',
+      });
+      async function pauseResponse(path = url(), request = () => check()) {
+        const entered = latch(),
+          release = latch();
+        const gate: NonNullable<typeof pause> = { path, entered, release };
+        pause = gate;
+        releaseChecks.push(release);
+        const pending = request();
+        await entered.wait;
+        return { pending, release, statusCode: gate.statusCode };
+      }
       const idle = await check();
       expect(idle.headers['cache-control']).toBe('no-store');
       expect(idle.headers['set-cookie']).toBeUndefined();
-      expect(idle.json()).toEqual({ state: 'idle' });
+      const ready = { state: 'idle', actionsEnabled: true, canAcquire: true };
+      expect(idle.json()).toEqual(ready);
+      expect((await check(viewer)).json()).toEqual({
+        state: 'idle',
+        actionsEnabled: true,
+      });
       expect((await check(owner, stranded)).json()).toEqual({
         state: 'unconfirmed',
+        actionsEnabled: true,
       });
       const coldCommand = { type: 'acquire' as const, commandId: randomUUID() };
       const coldScope = {
@@ -236,7 +327,7 @@ test.skipIf(process.platform !== 'darwin')(
         ).statusCode,
       ).toBe(404);
 
-      const initialIdle = await pauseStatus();
+      const initialIdle = await pauseResponse();
       const acknowledge = latch(),
         committed = latch();
       releaseChecks.push(acknowledge);
@@ -267,35 +358,72 @@ test.skipIf(process.platform !== 'darwin')(
             return client;
           });
         } as typeof connect);
-      const acquiring = broker.acquire(scope, randomUUID());
+      const acquiring = broker.acquire(scope, originalCommand.commandId);
       void acquiring.catch(() => {});
       try {
         await committed.wait;
-        expect((await check()).json()).toEqual({ state: 'unconfirmed' });
+        expect((await check()).json()).toEqual({
+          state: 'unconfirmed',
+          actionsEnabled: true,
+        });
+        expect((await post('check')).json()).toEqual({
+          ...originalCommand,
+          state: 'recorded',
+          generation: expect.any(String),
+        });
       } finally {
         acknowledge.open();
         stopCommit.mockRestore();
       }
       const grant = await acquiring;
+      const target = {
+        sessionId: ownSession,
+        generation: grant.generation,
+        expiresAt: grant.expiresAt,
+      };
       const held = {
         state: 'held',
-        holder: {
-          sessionId: ownSession,
-          generation: grant.generation,
-          expiresAt: grant.expiresAt,
-        },
+        actionsEnabled: true,
+        holder: target,
+        releaseTarget: target,
       };
       initialIdle.release.open();
       expect((await initialIdle.pending).json()).toEqual(held);
-      expect((await check(separate)).json()).toEqual({ state: 'held' });
-      expect((await check(viewer)).json()).toEqual({ state: 'held' });
+      expect((await check(separate)).json()).toEqual({
+        state: 'held',
+        actionsEnabled: true,
+      });
+      expect((await check(viewer)).json()).toEqual({
+        state: 'held',
+        actionsEnabled: true,
+      });
+      expect((await post('commands')).json()).toEqual({
+        ...originalCommand,
+        state: 'acquired',
+        generation: grant.generation,
+      });
+      expect((await post('check', originalCommand, separate)).statusCode).toBe(
+        409,
+      );
+      const collision = await pauseResponse(commandUrl + '/check', () =>
+        Promise.resolve(post('check', originalCommand, expiringObserver)),
+      );
+      expect(collision.statusCode).toBe(409);
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.max(0, expiry.getTime() - Date.now() + 5)),
+      );
+      collision.release.open();
+      const expiredConflict = await collision.pending;
+      expect(expiredConflict.statusCode).toBe(401);
+      expect(expiredConflict.headers['cache-control']).toBe('no-store');
+      expect(expiredConflict.json()).not.toHaveProperty('generation');
 
-      const initialHeld = await pauseStatus();
+      const initialHeld = await pauseResponse();
       await broker.release(scope, grant.generation, randomUUID());
       initialHeld.release.open();
-      expect((await initialHeld.pending).json()).toEqual({ state: 'idle' });
+      expect((await initialHeld.pending).json()).toEqual(ready);
       const next = await broker.acquire(scope, randomUUID());
-      const initialVersion = await pauseStatus();
+      const initialVersion = await pauseResponse();
       const modified = await managed.inject({
         method: 'POST',
         url: `/api/requirements/${demand}/commands`,
@@ -310,10 +438,33 @@ test.skipIf(process.platform !== 'darwin')(
       initialVersion.release.open();
       expect((await initialVersion.pending).json()).toEqual({
         state: 'unconfirmed',
+        actionsEnabled: true,
+        releaseTarget: {
+          sessionId: ownSession,
+          generation: next.generation,
+          expiresAt: next.expiresAt,
+        },
       });
-      await broker.release(scope, next.generation, randomUUID());
+      expect((await check(separate)).json()).toEqual({
+        state: 'unconfirmed',
+        actionsEnabled: true,
+      });
+      const release = {
+        type: 'release',
+        commandId: randomUUID(),
+        generation: next.generation,
+      };
+      expect((await post('commands', release)).json()).toEqual({
+        ...release,
+        state: 'released',
+      });
 
-      const initialAccess = await pauseStatus();
+      const lateCommand = { type: 'acquire', commandId: randomUUID() };
+      const pendingCommand = await pauseResponse(commandUrl + '/commands', () =>
+        Promise.resolve(post('commands', lateCommand)),
+      );
+      expect(pendingCommand.statusCode).toBe(200);
+      const initialAccess = await pauseResponse();
       const logout = await managed.inject({
         method: 'POST',
         url: '/api/auth/sign-out',
@@ -326,6 +477,10 @@ test.skipIf(process.platform !== 'darwin')(
       expect(logout.statusCode).toBe(200);
       initialAccess.release.open();
       expect((await initialAccess.pending).statusCode).toBe(401);
+      pendingCommand.release.open();
+      const withdrawn = await pendingCommand.pending;
+      expect(withdrawn.statusCode).toBe(401);
+      expect(withdrawn.json()).not.toHaveProperty('generation');
       expect(nativeStart).not.toHaveBeenCalled();
       expect(nativeRevoke).not.toHaveBeenCalled();
     } finally {

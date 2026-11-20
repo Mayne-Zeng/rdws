@@ -11,12 +11,55 @@ export const ProjectList = Type.Object({
 export type ProjectList = Static<typeof ProjectList>;
 export const Health = Type.Object({ status: Type.Literal('ok') });
 export const ApiError = Type.Object({ error: Type.String() });
-export type RequirementWriteAuthority =
+export type WriteAuthorityHolder = {
+  sessionId: string;
+  generation: string;
+  expiresAt: number;
+};
+export type RequirementWriteAuthority = (
   | { state: 'unavailable' | 'idle' | 'stopping' | 'unconfirmed' }
   | {
       state: 'held';
-      holder?: { sessionId: string; generation: string; expiresAt: number };
-    };
+      holder?: WriteAuthorityHolder;
+    }
+) & {
+  actionsEnabled?: true;
+  canAcquire?: true;
+  releaseTarget?: WriteAuthorityHolder;
+};
+export type WriteAuthorityCommand =
+  | { type: 'acquire'; commandId: string }
+  | { type: 'release'; commandId: string; generation: string };
+export type WriteAuthorityCommandOutcome = {
+  type: WriteAuthorityCommand['type'];
+  commandId: string;
+  generation: string;
+  state: 'acquired' | 'released' | 'draining';
+};
+export type WriteAuthorityCommandReceipt = Pick<
+  WriteAuthorityCommandOutcome,
+  'type' | 'commandId'
+> &
+  ({ state: 'recorded'; generation: string } | { state: 'unrecorded' });
+
+const writeUuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+export function isWriteAuthorityCommand(
+  value: unknown,
+): value is WriteAuthorityCommand {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const { type, commandId, generation } = value as Record<string, unknown>;
+  if (typeof commandId !== 'string' || !writeUuid.test(commandId)) return false;
+  const keys = Object.keys(value);
+  return type === 'acquire'
+    ? keys.length === 2 && keys.includes('type') && keys.includes('commandId')
+    : type === 'release' &&
+        typeof generation === 'string' &&
+        writeUuid.test(generation) &&
+        keys.length === 3 &&
+        keys.includes('type') &&
+        keys.includes('commandId') &&
+        keys.includes('generation');
+}
 export const SessionCreate = Type.Object(
   {
     commandId: Type.Optional(Type.String({ format: 'uuid' })),

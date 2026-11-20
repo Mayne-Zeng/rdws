@@ -42,6 +42,32 @@
   overflow-wrap: anywhere;
 }
 
+.fleet-write-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.fleet-write-commands .session-actions {
+  margin: 0;
+}
+
+.fleet-write-commands select,
+.fleet-write-commands .session-actions button {
+  min-height: var(--control-h);
+}
+
+.fleet-write-commands select {
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0 8px;
+}
+
+.fleet-write-commands p {
+  margin: 6px 0 0;
+}
+
 @media (max-width: 620px) {
   .workspace-tabs:has(#view-fleet) [role='tab'] {
     justify-content: center;

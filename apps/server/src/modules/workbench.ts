@@ -8,7 +8,11 @@ import {
 import { registerRequirementImport } from './workbench-import.ts';
 import { registerSessions } from './workbench-sessions.ts';
 import { registerNativeTransport } from './workbench-native.ts';
-import { writeAuthorityStatusPath } from './workbench-paths.ts';
+import {
+  writeAuthorityCheckPath,
+  writeAuthorityCommandPath,
+  writeAuthorityStatusPath,
+} from './workbench-paths.ts';
 
 export async function registerWorkbench(
   ...args: Parameters<typeof createWorkbenchRuntime>
@@ -26,6 +30,14 @@ export async function registerWorkbench(
     { exposeHeadRoute: false },
     runtime.readWriteAuthorityStatus,
   );
+  if (runtime.fleetCommands) {
+    app.post(writeAuthorityCommandPath, (request) =>
+      runtime.writeFleetCommand(request, false),
+    );
+    app.post(writeAuthorityCheckPath, (request) =>
+      runtime.writeFleetCommand(request, true),
+    );
+  }
   await registerNativeTransport(app, runtime);
   runtime.registerShutdown();
   return {

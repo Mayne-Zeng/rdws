@@ -3,6 +3,10 @@ export const templateBindingPath = '/api/requirements/:id/capability-template';
 export const personnelPath = '/api/requirements/:id/personnel';
 export const sessionsPath = '/api/requirements/:id/sessions';
 export const writeAuthorityStatusPath = '/api/requirements/:id/write-authority';
+export const writeAuthorityCommandPath =
+  '/api/requirements/:id/sessions/:sessionId/write-authority/commands';
+export const writeAuthorityCheckPath =
+  '/api/requirements/:id/sessions/:sessionId/write-authority/check';
 export const sessionHistoryPath =
   '/api/requirements/:id/sessions/:sessionId/history';
 export const sessionAnchorsPath =
@@ -46,6 +50,10 @@ export const isPassiveRequirementRead = (request: FastifyRequest) =>
 export const isWriteAuthorityStatus = (request: FastifyRequest) =>
   request.method === 'GET' &&
   request.routeOptions.url === writeAuthorityStatusPath;
+export const isWriteAuthorityCommand = (request: FastifyRequest) =>
+  request.method === 'POST' &&
+  (request.routeOptions.url === writeAuthorityCommandPath ||
+    request.routeOptions.url === writeAuthorityCheckPath);
 export const isProjectAuditRead = (request: FastifyRequest) =>
   request.method === 'GET' &&
   request.routeOptions.url === projectBusinessAuditPath;

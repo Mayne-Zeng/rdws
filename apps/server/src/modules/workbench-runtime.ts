@@ -3,7 +3,10 @@ import { join } from 'node:path';
 import type {
   RequirementWorkspace,
   RequirementWriteAuthority,
+  WriteAuthorityCommandOutcome,
+  WriteAuthorityCommandReceipt,
 } from '@rdws/contracts';
+import { isWriteAuthorityCommand as validWriteCommand } from '@rdws/contracts';
 import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import {
   businessError,
@@ -37,6 +40,8 @@ import {
   isTemplateBindingRequest,
   isPassiveRequirementRead,
   isWriteAuthorityStatus,
+  isWriteAuthorityCommand,
+  writeAuthorityCheckPath,
   sessionAnchorsPath,
   sessionExecutionPath,
   isProjectAuditRead,
@@ -84,6 +89,7 @@ export function createWorkbenchRuntime(
   writeTransaction?: CheckedWriteTransaction,
   trackWork = <T>(work: () => Promise<T>) => work(),
   fixture?: import('./native-fixture-tool-job.ts').FixtureToolAssembly,
+  fleetCommands = false,
 ) {
   const instanceRoot =
     process.env.RDWS_MODE === 'test'
@@ -630,8 +636,9 @@ export function createWorkbenchRuntime(
       isProjectAccessAuditRead(request) ||
       isPlatformAccountAuditRead(request);
     const sessionWrite = isSessionWrite(request);
-    const writeStatus = isWriteAuthorityStatus(request);
-    if (passiveRead || auditRead || sessionWrite || writeStatus)
+    const writeRoute =
+      isWriteAuthorityStatus(request) || isWriteAuthorityCommand(request);
+    if (passiveRead || auditRead || sessionWrite || writeRoute)
       reply.header('cache-control', 'no-store');
     if (
       Object.keys(request.headers).some(
@@ -649,7 +656,7 @@ export function createWorkbenchRuntime(
               passiveRead ||
               auditRead ||
               sessionWrite ||
-              writeStatus ||
+              writeRoute ||
               (request.method === 'GET' &&
                 request.routeOptions.url === nativeBootstrapPath) ||
               (request.routeOptions.url === personnelPath &&
@@ -734,7 +741,8 @@ export function createWorkbenchRuntime(
       if (path !== '/api/projects' && !project && !demand) return;
       const templateBinding = isTemplateBindingRequest(request);
       const passiveRead = isPassiveRequirementRead(request);
-      const writeStatus = isWriteAuthorityStatus(request);
+      const writeRoute =
+        isWriteAuthorityStatus(request) || isWriteAuthorityCommand(request);
       const exactSessionRead =
         passiveRead &&
         (request.routeOptions.url === sessionAnchorsPath ||
@@ -742,14 +750,14 @@ export function createWorkbenchRuntime(
       const projectAudit = isProjectAuditRead(request);
       const accessAudit = isProjectAccessAuditRead(request);
       const epoch = authorizationEpoch;
-      const who = writeStatus
+      const who = writeRoute
         ? await auth.api.readObservedLogin({
             headers: fromNodeHeaders(request.headers),
           })
         : await actor(request.headers);
       if (!who) fail(401, '请先登录');
       if (templateBinding) verifyEditLogin(request, who.authSessionId);
-      if (projectAudit || accessAudit || exactSessionRead || writeStatus)
+      if (projectAudit || accessAudit || exactSessionRead || writeRoute)
         verifyEditLogin(request, who.authSessionId, true);
       if ((passiveRead && !exactSessionRead) || isSessionWrite(request))
         verifyEditLogin(request, who.authSessionId, false);
@@ -769,7 +777,7 @@ export function createWorkbenchRuntime(
         projectAudit ||
         (request.routeOptions.url === '/api/projects/:projectId/requirements' &&
           (request.method === 'GET' || request.method === 'HEAD'));
-      if (!writeStatus && projectId && (requirementId || demandList))
+      if (!writeRoute && projectId && (requirementId || demandList))
         await recoverPersonnelFences(
           who.userId,
           projectId,
@@ -820,6 +828,18 @@ export function createWorkbenchRuntime(
       ) {
         if (reply.statusCode === 200 && isWriteAuthorityStatus(request))
           return JSON.stringify(await readWriteAuthorityStatus(request));
+        if (reply.statusCode === 200 && isWriteAuthorityCommand(request)) {
+          const receipt = await readFleetCommand(request);
+          if (request.routeOptions.url === writeAuthorityCheckPath)
+            return JSON.stringify(receipt);
+          if (receipt.state !== 'recorded') fail(503, '写权命令回执尚未确认');
+          return payload;
+        }
+        if (reply.statusCode === 409 && isWriteAuthorityCommand(request)) {
+          const { broker, scope, current } = fleetCommand(request);
+          await broker.confirmCommandScope(scope, current);
+          return payload;
+        }
         if (scope.importReply)
           await business.authorizeImport(
             scope,
@@ -1038,6 +1058,7 @@ export function createWorkbenchRuntime(
         scope.projectId,
         scope.requirementId,
         () => assertResponse(scope),
+        fleetCommands,
       );
     const reader = await business.authorizeRequirement(
       scope,
@@ -1049,6 +1070,54 @@ export function createWorkbenchRuntime(
     if (reader.expiresAt.getTime() <= Date.now())
       fail(401, '登录已失效，请重新登录');
     return { state: 'unavailable' };
+  }
+
+  function fleetCommand(request: FastifyRequest) {
+    const original = requestDemandScope(request);
+    if (!original.requirementId) fail(404, '需求不存在');
+    if (!validWriteCommand(request.body)) fail(400, '写权命令格式不正确');
+    const broker = writeHandoff();
+    if (!fleetCommands || !broker) fail(503, '写权命令暂不可用');
+    assertResponse(original);
+    const scope = {
+      who: { userId: original.userId, authSessionId: original.authSessionId },
+      projectId: original.projectId,
+      requirementId: original.requirementId,
+      sessionId: (request.params as { sessionId: string }).sessionId,
+    };
+    return {
+      broker,
+      command: request.body,
+      scope,
+      current: () => assertResponse(original),
+    };
+  }
+
+  async function readFleetCommand(
+    request: FastifyRequest,
+  ): Promise<WriteAuthorityCommandReceipt> {
+    const { broker, command, scope, current } = fleetCommand(request);
+    const receipt = await broker.checkCommand(scope, command, current);
+    return { type: command.type, commandId: command.commandId, ...receipt };
+  }
+
+  async function writeFleetCommand(
+    request: FastifyRequest,
+    check: boolean,
+  ): Promise<WriteAuthorityCommandOutcome | WriteAuthorityCommandReceipt> {
+    if (check) return readFleetCommand(request);
+    const { broker, command, scope, current } = fleetCommand(request);
+    if (command.type === 'acquire') {
+      const grant = await broker.acquire(scope, command.commandId, current);
+      return { ...command, generation: grant.generation, state: 'acquired' };
+    }
+    const state = await broker.release(
+      scope,
+      command.generation,
+      command.commandId,
+      current,
+    );
+    return { ...command, state };
   }
 
   function verifyEditLogin(
@@ -1120,6 +1189,8 @@ export function createWorkbenchRuntime(
     recoverPersonnelFences,
     requestDemandScope,
     readWriteAuthorityStatus,
+    fleetCommands,
+    writeFleetCommand,
     responseScopes,
     revokeMember,
     settlePersonnelFence,

@@ -1995,6 +1995,11 @@
   <p>真实受管 BFF 测试涵盖平台管理员在 Read 出站授权查询停点实际撤去项目管理员席位，页被丢弃，复授后原游标仍拒绝，新 Read 可用。关停实测 Read 组和另一真实写组退出后交还 PostgreSQL owner；对同一次 Read 的真实组截留停止信号时，终止状态不明确，返回 503，无页并保留 owner。仅在测试夹具确认的原读取组上恢复清理。Native／回环实际正文、工具历史恢复和双人红到绿旅程继续按联合验收推进。</p>
   <p><code>pnpm test tests/integration/local-execution.test.ts tests/integration/write-handoff.test.ts</code> 通过 14 项，<code>pnpm test tests/integration/t07-owner-crash.test.ts -t 'read-revoke|read-shutdown|read-unknown'</code> 通过 3 项。整仓 <code>pnpm test</code> 通过 58 文件、370 项，1 项平台条件跳过。<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code>、<code>pnpm validate:baseline</code>、暂存检查返回 0，构建仍有既有体积提示。本项不改界面。</p>
 
+  <h4 id="t07-configured-test-handoff">T07 真实工作树的单测失败、修复和接手</h4>
+  <p>隔离验收切片，基线 5285dcf。使用现有受管写权服务、实际 T05 需求工作树、T06 macOS 受限进程以及两名开发成员的本人会话。临时基线项目内登记一个真实的 package.json 测试脚本，提供能加载但计算结果不正确的实现。受权会话只从实际需求树读取脚本，用其 Node 单文件命令确定同一测试入口。测试夹具只支持此处实际使用的命令形式，不向产品新增脚本解释器。</p>
+  <p>由 A 取得写权，在需求树写入首个单测；记录真实退出码、stdout/stderr 与断言预期／实际值，确认红灯源于计算错误。A 修改实现后按同一配置和同一测试文件重跑，核对退出 0 和通过断言。B 在修改前、后分别 Read，同步核对原快照和最新实际文件；跟踪的实现变更另由受限本地 Git diff 核对。B 用自己的会话接手后，A 的旧代操作拒绝且文件未变，B 能实际写入并释放。记录测试、实现和 Git 基线的归属；不把本层流式输出计作 DSH 模型实收。工作台与 Native 正式工具、运行中写命令及子进程的整条旅程继续按 T07 原判据。</p>
+  <p>本次临时项目的脚本使用随机测试文件名。实际运行同名 Node 单测，首轮 TAP 为 not ok／fail 1，预期 6、实际 3，进程退出 1。修复后同文件 TAP 为 ok／pass 1／fail 0，退出 0，两个进程都确认停稳。受限 Git diff 和 status 对应已跟踪实现和新增测试文件。旧代发起的新文件写、Shell、Git 均返回 409，B 的新写入可由 A 重新读取。定点 write-handoff.test.ts 通过。两文件邻域 9 项，整仓 61 文件 378 项通过、1 项条件跳过。类型、lint、格式、构建和基线均通过，方案及交付独立评审批准。</p>
+
   <h3 id="t11-maintenance-acceptance-20261119">11.21 T11 已确认的导入与人员维护</h3>
   <p>2026-11-19 用户确认需求批量导入采用同页的上传、预览、修正与整批提交。上传后动态显示解析和校验进度，下方逐条呈现需求明细、状态与可定位的问题。用户可在同页修正并重新校验。预览和校验阶段不写业务数据。全部通过后由用户显式整批提交入库，提交结果继续在同页逐条呈现。</p>
   <p>参与者和开发负责人维护按当前项目角色授权。移除参与者或更换负责人时，相关未完成子任务须显式交给当前具备资格的接手人，并保留原分派记录。验收覆盖无资格接手、已有分派记录保留，以及原有阶段与任务按钮权限。</p>

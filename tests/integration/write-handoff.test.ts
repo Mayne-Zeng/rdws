@@ -16,7 +16,11 @@ import { DemandWorktrees } from '@rdws/orchestrator';
 import { RepositoryMirrors } from '@rdws/syncer/mirror';
 import { Pool, type PoolClient } from 'pg';
 import { expect, test, vi } from 'vitest';
-import { createWriteHandoff } from '../../apps/server/src/modules/write-handoff.ts';
+import {
+  createWriteHandoff,
+  type WriteHandoffScope,
+} from '../../apps/server/src/modules/write-handoff.ts';
+import type { ExecutionRequest } from '@rdws/dsh/execution';
 import { authorityDatabase } from '../helpers/authority-database.ts';
 import { fixtureGit, httpsGitFixture } from '../helpers/https-git.ts';
 
@@ -300,6 +304,170 @@ function controlledCommits() {
   };
 }
 
+async function checkConfiguredTestHandoff(
+  broker: Awaited<ReturnType<typeof createWriteHandoff>>,
+  first: WriteHandoffScope,
+  second: WriteHandoffScope,
+  tree: string,
+) {
+  const repositoryId = 'app';
+  const implementation = 'double.mjs';
+  const read = (who: WriteHandoffScope, path: string) =>
+    broker.readWorktree(who, { repositoryId, path });
+  const run = async (
+    who: WriteHandoffScope,
+    generation: string,
+    request: ExecutionRequest,
+  ) => {
+    const out: Record<'stdout' | 'stderr', Buffer[]> = {
+      stdout: [],
+      stderr: [],
+    };
+    const receipt = await broker.execute(
+      who,
+      { commandId: randomUUID(), generation, repositoryId, request },
+      (event) => out[event.stream].push(event.chunk),
+    );
+    return {
+      receipt,
+      stdout: Buffer.concat(out.stdout).toString(),
+      stderr: Buffer.concat(out.stderr).toString(),
+    };
+  };
+  async function take(who: WriteHandoffScope) {
+    const command = { type: 'takeover' as const, commandId: randomUUID() };
+    await broker.takeover(who, command.commandId);
+    const state = await vi.waitFor(async () => {
+      const found = await broker.checkCommand(who, command);
+      if (found.state !== 'acquired')
+        throw new Error('Waiting for a current write session');
+      return found;
+    });
+    return state.generation;
+  }
+  const generation = await take(first);
+  const before = await read(second, implementation);
+  const original = 'export const double = value => value;\n';
+  const fixed = 'export const double = value => value * 2;\n';
+  expect(before).toMatchObject({ text: original, truncated: false });
+  async function configuredEntry() {
+    const config = await read(first, 'package.json');
+    expect(config.truncated).toBe(false);
+    const script = JSON.parse(config.text).scripts.test as string;
+    const match = /^node ([a-zA-Z0-9_.-]+\.test\.mjs)$/.exec(script);
+    if (!match)
+      throw new Error(
+        'Expected the fixture package to declare a single Node test entry',
+      );
+    return match[1]!;
+  }
+  const entry = await configuredEntry();
+  await expect(readFile(join(tree, entry))).rejects.toMatchObject({
+    code: 'ENOENT',
+  });
+  const testSource = [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import { double } from './double.mjs';",
+    "test('double returns six for three', () => assert.equal(double(3), 6, 'double(3) must return 6'));",
+    '',
+  ].join('\n');
+  const written = await run(first, generation, {
+    tool: 'file',
+    operation: 'write',
+    path: entry,
+    text: testSource,
+  });
+  expect(written.receipt).toMatchObject({
+    status: 'finished',
+    result: { status: 'ok', exitCode: 0, stop: 'confirmed' },
+  });
+  const red = await run(first, generation, { tool: 'test', path: entry });
+  expect(red.receipt).toMatchObject({
+    status: 'finished',
+    result: { status: 'failed', exitCode: 1, stop: 'confirmed' },
+  });
+  expect(red.stdout).toContain('not ok 1 - double returns six for three');
+  expect(red.stdout).toContain('# fail 1');
+  expect(red.stdout + red.stderr).toContain('double(3) must return 6');
+  expect(red.stdout + red.stderr).toMatch(/expected:\s*6/i);
+  expect(red.stdout + red.stderr).toMatch(/actual:\s*3/i);
+  expect((await read(second, implementation)).text).toBe(original);
+  const edit = await run(first, generation, {
+    tool: 'file',
+    operation: 'write',
+    path: implementation,
+    text: fixed,
+  });
+  expect(edit.receipt).toMatchObject({
+    status: 'finished',
+    result: { status: 'ok', exitCode: 0 },
+  });
+  const rerun = await configuredEntry();
+  expect(rerun).toBe(entry);
+  expect(await readFile(join(tree, entry), 'utf8')).toBe(testSource);
+  const green = await run(first, generation, { tool: 'test', path: rerun });
+  expect(green.receipt).toMatchObject({
+    status: 'finished',
+    result: { status: 'ok', exitCode: 0, stop: 'confirmed' },
+  });
+  expect(green.stdout).toContain('ok 1 - double returns six for three');
+  expect(green.stdout).not.toContain('not ok');
+  expect(green.stdout).toContain('# pass 1');
+  expect(green.stdout).toContain('# fail 0');
+  const diff = await run(first, generation, { tool: 'git', operation: 'diff' });
+  expect(diff.receipt).toMatchObject({
+    status: 'finished',
+    result: { status: 'ok', exitCode: 0 },
+  });
+  expect(diff.stdout).toContain('+' + fixed.trimEnd());
+  expect(diff.stdout).toContain('-' + original.trimEnd());
+  const status = await run(first, generation, {
+    tool: 'git',
+    operation: 'status',
+  });
+  expect(status.stdout.split('\n')).toContain('?? ' + entry);
+  const fresh = await read(second, implementation);
+  expect(fresh.text).toBe(fixed);
+  expect(fresh.snapshotId).not.toBe(before.snapshotId);
+  expect(before.text).toBe(original);
+  const successor = await take(second);
+  expect(successor).not.toBe(generation);
+  await expect(
+    run(first, generation, {
+      tool: 'file',
+      operation: 'write',
+      path: implementation,
+      text: original,
+    }),
+  ).rejects.toMatchObject({ statusCode: 409 });
+  await expect(
+    run(first, generation, { tool: 'shell', script: 'printf fixture' }),
+  ).rejects.toMatchObject({ statusCode: 409 });
+  await expect(
+    run(first, generation, { tool: 'git', operation: 'status' }),
+  ).rejects.toMatchObject({ statusCode: 409 });
+  expect(await readFile(join(tree, implementation), 'utf8')).toBe(fixed);
+  const next = 'export const double = value => 2 * value;\n';
+  expect(
+    (
+      await run(second, successor, {
+        tool: 'file',
+        operation: 'write',
+        path: implementation,
+        text: next,
+      })
+    ).receipt,
+  ).toMatchObject({
+    status: 'finished',
+    result: { status: 'ok', exitCode: 0 },
+  });
+  expect((await read(first, implementation)).text).toBe(next);
+  expect(await broker.release(second, successor, randomUUID())).toBe(
+    'released',
+  );
+}
+
 test.skipIf(process.platform !== 'darwin')(
   'one qualified session can write until its execution stops, then the next session writes',
   async () => {
@@ -408,7 +576,26 @@ test.skipIf(process.platform !== 'darwin')(
       mirrors = new RepositoryMirrors(fixture.root);
       trees = new DemandWorktrees(fixture.root, mirrors);
       await writeFile(join(fixture.work, 'sample.txt'), 'isolated baseline');
-      await fixtureGit(['-C', fixture.work, 'add', '--', 'sample.txt']);
+      const packageConfig = {
+        scripts: { test: 'node case-' + randomUUID() + '.test.mjs' },
+      };
+      await writeFile(
+        join(fixture.work, 'package.json'),
+        JSON.stringify(packageConfig),
+      );
+      await writeFile(
+        join(fixture.work, 'double.mjs'),
+        'export const double = value => value;\n',
+      );
+      await fixtureGit([
+        '-C',
+        fixture.work,
+        'add',
+        '--',
+        'sample.txt',
+        'package.json',
+        'double.mjs',
+      ]);
       await fixture.commit();
       await fixture.update();
       expect(
@@ -509,6 +696,7 @@ test.skipIf(process.platform !== 'darwin')(
           active.acquire(denied, randomUUID()),
         ).rejects.toMatchObject({ statusCode: 403 });
 
+      await checkConfiguredTestHandoff(active, lead, worker, scope.tree);
       const candidates = [lead, worker];
       const candidateIds = candidates.map(() => randomUUID());
       const outcomes = await Promise.allSettled(

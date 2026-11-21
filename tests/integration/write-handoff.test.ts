@@ -21,6 +21,7 @@ import {
   type WriteHandoffScope,
 } from '../../apps/server/src/modules/write-handoff.ts';
 import type { ExecutionRequest } from '@rdws/dsh/execution';
+import { nativeWorktreeReadFixture } from '../helpers/native-worktree-read.ts';
 import { authorityDatabase } from '../helpers/authority-database.ts';
 import { fixtureGit, httpsGitFixture } from '../helpers/https-git.ts';
 
@@ -468,6 +469,111 @@ async function checkConfiguredTestHandoff(
   );
 }
 
+async function checkNativeFileReads(
+  broker: Awaited<ReturnType<typeof createWriteHandoff>>,
+  writer: WriteHandoffScope,
+  reader: WriteHandoffScope,
+) {
+  const current = 'native-read-state.txt';
+  const paged = 'native-read-lines.txt';
+  const generation = (await broker.acquire(writer, randomUUID())).generation;
+  const write = async (path: string, text: string) => {
+    const result = await broker.execute(writer, {
+      commandId: randomUUID(),
+      generation,
+      repositoryId: 'app',
+      request: { tool: 'file', operation: 'write', path, text },
+    });
+    expect(result).toMatchObject({
+      status: 'finished',
+      result: { status: 'ok', exitCode: 0 },
+    });
+  };
+  const plugin = await nativeWorktreeReadFixture(broker, reader, 'app', [
+    current,
+    paged,
+  ]);
+  const badScope = await nativeWorktreeReadFixture(
+    broker,
+    { ...reader, sessionId: writer.sessionId },
+    'app',
+    [current],
+  );
+  try {
+    expect(plugin.schemas).toEqual(['read']);
+    await write(current, 'first synthetic source');
+    const observed = await plugin.call({ file_path: current });
+    expect(observed.isError).not.toBe(true);
+    const firstText = observed.content[0]?.text;
+    expect(firstText).toContain('<path>/workspace/' + current + '</path>');
+    expect(firstText).toContain('1: first synthetic source');
+    await write(current, 'latest synthetic source');
+    const fresh = await plugin.call({ file_path: current });
+    expect(fresh.content[0]?.text).toContain('1: latest synthetic source');
+    expect(observed.content[0]?.text).toBe(firstText);
+    expect(plugin.reads.text).toBe(2);
+    const longTail = 'UNREAD-LONG-LINE-TAIL';
+    const border = 'abc界 short multibyte line';
+    const input =
+      ('a'.repeat(62) + '\n').repeat(260) +
+      border +
+      '\n' +
+      'q'.repeat(2100) +
+      longTail +
+      '\nnext visible line';
+    expect(Buffer.byteLength(input.slice(0, input.indexOf('界')))).toBe(
+      16 * 1024 - 1,
+    );
+    await write(paged, input);
+    const window = await plugin.call({
+      file_path: paged,
+      offset: 260,
+      limit: 2,
+    });
+    expect(window.content[0]?.text).toContain('261: ' + border);
+    expect(window.content[0]?.text).toContain('offset=262');
+    const long = await plugin.call({ file_path: paged, offset: 262, limit: 1 });
+    expect(long.content[0]?.text).toContain('line truncated to 2000 chars');
+    expect(long.content[0]?.text).not.toContain(longTail);
+    expect(
+      (await plugin.call({ file_path: paged, offset: 262, limit: 1 })).content,
+    ).toEqual(long.content);
+    const end = await plugin.call({ file_path: paged, offset: 263, limit: 1 });
+    expect(end.content[0]?.text).toContain('263: next visible line');
+    expect(end.content[0]?.text).not.toContain(longTail);
+    expect(plugin.reads.stream).toBe(4);
+    expect(plugin.reads.continuations).toBeGreaterThanOrEqual(4);
+    const other = await plugin.call({
+      file_path: current,
+      repositoryId: 'other-fixture',
+      sessionId: writer.sessionId,
+    });
+    expect(other.isError).toBe(false);
+    expect(other.content).toEqual(fresh.content);
+    for (const result of [
+      await plugin.call({ file_path: '../other-fixture.txt' }),
+      await plugin.call({ file_path: current, content: 'mutate' }, 'write'),
+      await badScope.call({ file_path: current }),
+    ]) {
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).not.toContain(
+        'latest synthetic source',
+      );
+    }
+    expect(
+      (
+        await broker.readWorktree(reader, {
+          repositoryId: 'app',
+          path: current,
+        })
+      ).text,
+    ).toBe('latest synthetic source');
+  } finally {
+    await Promise.all([plugin.dispose(), badScope.dispose()]);
+    await broker.release(writer, generation, randomUUID());
+  }
+}
+
 test.skipIf(process.platform !== 'darwin')(
   'one qualified session can write until its execution stops, then the next session writes',
   async () => {
@@ -697,6 +803,7 @@ test.skipIf(process.platform !== 'darwin')(
         ).rejects.toMatchObject({ statusCode: 403 });
 
       await checkConfiguredTestHandoff(active, lead, worker, scope.tree);
+      await checkNativeFileReads(active, lead, tester);
       const candidates = [lead, worker];
       const candidateIds = candidates.map(() => randomUUID());
       const outcomes = await Promise.allSettled(

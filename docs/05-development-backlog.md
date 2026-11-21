@@ -163,6 +163,7 @@
   - 已本地交付子项：[接替实例精确补结算](02-directory-and-engineering-design.html#t07-cold-stop-recovery-evidence-20261121)。隔离 PostgreSQL、真实工作树和多个真实 BFF 进程证实浏览器之外的同键冷续作、已授未确认的空持有退休、原执行异常保留和新会话实写。缺可信证据的旧执行保持只读。双面复审、定点邻域 37 项、整仓 366 项与 1 条件跳过、静态和基线通过。正式工具和双人红到绿旅程仍待完成。
   - 已本地交付子项：[受管内部源码 Read 与分段](02-directory-and-engineering-design.html#t07-read-snapshot-evidence-20261121)。只读身份可在写执行活跃或旧占位未确认时读真实工作树。实际 UTF-8 分段、真实撤席与关停边界、双面独立复审、17 项定点和邻域、整仓 370 项与 1 条件跳过、静态及基线通过。锁版 Native 和回环出站仍待接入。
   - 已本地验证[配置指向的真实单测与写权接手](02-directory-and-engineering-design.html#t07-configured-test-handoff)。同一测试文件第一次真实退出 1（预期 6、实得 3），修改实现后退出 0。第二开发会话重读最新代码并接手，旧代的文件写入、Shell 和 Git 请求均拒绝。回环模型读取失败输出和完整工作台旅程继续单独验收。
+  - [DSH Read 与受管工作树的隔离兼容性验证](02-directory-and-engineering-design.html#t07-native-read-provider-fixture)覆盖真实原生参数、行号、续页、修改后重读和跨字节页的 UTF-8。单行截断后的尾部不能用原生行 offset 补齐。正式调用及回环实际收取仍待验。
   - 来源：I2-AUTH、I3-WRITE、I3-CONTEXT。
 
 - [ ] **T08 · 变更查看与交付快照**

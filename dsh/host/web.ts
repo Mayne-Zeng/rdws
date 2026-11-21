@@ -441,6 +441,24 @@ export class NativeWebHost {
       )
         await verifyFile(overlay);
       const overlayPatches = [
+        ...(this.imageIntake && this.modelTransport?.attachmentManifests
+          ? [
+              { id: 'llm', name: '@deepseek-ai/dsh-llm', disabled: true },
+              {
+                insert: [
+                  {
+                    id: 'rdws-history-llm',
+                    name: fileURLToPath(
+                      new URL(
+                        '../plugins/rdws-access/history-runtime.mjs',
+                        import.meta.url,
+                      ),
+                    ),
+                  },
+                ],
+              },
+            ]
+          : []),
         ...(this.configurationHome
           ? [
               {

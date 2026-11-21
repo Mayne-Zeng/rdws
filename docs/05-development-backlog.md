@@ -215,6 +215,7 @@
   - [二次派生切点取证](02-directory-and-engineering-design.html#t13-nested-fork-evidence)已覆盖真实父、子、孙。未明确选模的孙会话可读祖先消息，主动发送得到 409，派发和持久首写均零行。两代继承标记和完整前缀与各自来源、截止核对。
   - [已生效来源直接发送](02-directory-and-engineering-design.html#t13-proven-fork-send)在本机试点验证。父确切修订已有成功推理、固定前缀可完整核对时，子无需重新保存即可手动发送；同源兄弟遇父同值新修订时仍需显选。正式配置和具名部署按原判据。
   - 已确认的历史图片规则（T13-A2）：同一本人会话默认只发送文字。可一键「沿用上一张图」，输入框显示可移除缩略图，选择仅随本条消息生效。发送时重新核对当前登录、本人会话和适用模型外发权限。[产品决定](02-directory-and-engineering-design.html#t13-history-image-rule-20261120)。
+  - [历史图文后的默认文字续聊](02-directory-and-engineering-design.html#t13-default-text-after-image)已在本人暖态根会话的受管附件装配验证。第二轮保留两条用户原文，回环未收到旧图，原生保留首轮图文。冷启缺证仍拒绝；显式沿用、缩略图与正式工作台附件接线另验。
   - 前置：T03；已核实所需原生公开配置接口。
   - 来源：D2、D19；台账模型配置权威。
   - 当前证据：[原生授权核查](02-directory-and-engineering-design.html#t13-native-evidence-20261118)及[会话选模验证](02-directory-and-engineering-design.html#t13-session-model-evidence-20261118)。通过 Host 公共会话能力写入原生选择，目标会话冷启动后仍能读取，另一会话与实例默认值保持原值。普通浏览器授权继续拒绝配置读取和直接选模。分层配置与用户选模入口待接线。

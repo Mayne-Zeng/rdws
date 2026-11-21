@@ -1,3 +1,8 @@
+import {
+  requireImageScope,
+  readImageForCall,
+  withHistoryText,
+} from './history-text.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -55,8 +60,18 @@ export function installModelCarrier(
     const read = attachments.readImageRequest;
     if (typeof read !== 'function') throw unavailable();
     const observe = async function (ref, ...args) {
-      const attachment = calls.getStore()?.attachment;
-      const result = await read.call(this, ref, ...args);
+      const scope = calls.getStore();
+      const attachment = scope?.attachment;
+      if (
+        attachment &&
+        (!attachment.active ||
+          !attachment.origin.isCurrent() ||
+          !attachment.origin.expected.some(
+            (source) => source.attachmentId === ref.attachmentId,
+          ))
+      )
+        throw unavailable();
+      const result = await readImageForCall(read, this, ref, args);
       if (attachment) {
         const id = ref.attachmentId;
         if (
@@ -123,7 +138,11 @@ export function installModelCarrier(
       throw new Error('Native model route unavailable');
     if (!attachmentRoutes?.has(route))
       return channel.fetch(route, call, request);
-    if (!attachment?.active || !attachment.origin.isCurrent())
+    if (
+      (calls.getStore()?.projection && !calls.getStore().projection.used) ||
+      !attachment?.active ||
+      !attachment.origin.isCurrent()
+    )
       throw unavailable();
     request = new Request(request, {
       signal: AbortSignal.any([
@@ -167,12 +186,14 @@ export function installModelCarrier(
       !uuid.test(ack.grant)
     )
       throw unavailable();
-    return channel.fetch(
+    const response = await channel.fetch(
       route,
       { ...call, attachmentGrant: ack.grant },
       request,
       () => attachment.active && attachment.origin.isCurrent(),
     );
+    if (route === 'messages' && response.ok) attachment.origin.delivered?.();
+    return response;
   };
   globalThis.fetch = fetchModel;
   ctx.effect(() => () => {
@@ -198,30 +219,46 @@ export function installModelCarrier(
       };
       if (agentRequest && contextBinding.confirmModelFirstWrite)
         await contextBinding.confirmModelFirstWrite(options, call);
+      const projection =
+        agentRequest && contextBinding.historyTextFor?.(options, call);
       const origin =
-        agentRequest && contextBinding.attachmentCallFor?.(options, call);
+        agentRequest &&
+        contextBinding.attachmentCallFor?.(
+          projection ? projection.projected : options,
+          call,
+        );
+      requireImageScope(
+        !!contextBinding.historyTextFor,
+        options,
+        agentRequest,
+        call,
+        origin,
+      );
       const attachment = origin && {
         origin,
         variants: new Map(),
         active: true,
         stop: new AbortController(),
       };
-      const scope = { call, attachment };
+      const scope = { call, attachment, projection };
+      const inScope = (fn) =>
+        calls.run(scope, () => withHistoryText(projection, fn));
       let stream;
       try {
-        stream = calls.run(scope, () => next()[Symbol.asyncIterator]());
+        stream = inScope(() => next()[Symbol.asyncIterator]());
         for (;;) {
-          const item = await calls.run(scope, () => stream.next());
+          const item = await inScope(() => stream.next());
           if (item.done) return;
           yield item.value;
         }
       } finally {
+        if (projection) projection.active = false;
         if (attachment) {
           attachment.active = false;
           attachment.stop.abort();
         }
         try {
-          await calls.run(scope, () => stream?.return?.());
+          await inScope(() => stream?.return?.());
         } finally {
           if (attachment?.ready) await attachment.origin.close();
         }

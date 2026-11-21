@@ -1,3 +1,8 @@
+import {
+  textWitness,
+  matchesText,
+  currentTextPosition,
+} from './history-text.mjs';
 import { randomUUID, createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
@@ -110,6 +115,23 @@ export function installContext(ctx, config, key, route, requestContext) {
     modelSteps = new Map();
   const imageOrigins = config.attachmentManifests ? new WeakMap() : undefined;
   const intakeImages = config.imageIntake ? new WeakMap() : undefined;
+  const historyImages =
+    intakeImages && imageOrigins ? new WeakMap() : undefined;
+  if (historyImages)
+    ctx.on(
+      'session/event',
+      (session, event) => {
+        if (event.type !== 'turn/end') return;
+        const known = historyImages.get(session);
+        if (!known) return;
+        for (const [id, entry] of known) {
+          if (entry.turn !== event.data.turn || entry.completed) continue;
+          if (event.data.reason?.kind === 'completed') entry.completed = true;
+          else known.delete(id);
+        }
+      },
+      { global: true },
+    );
   const matchesIntake = (run, message) =>
     !intakeImages || intakeImageMatches(message, intakeImages.get(run));
   let modelSequence = 0;
@@ -206,6 +228,11 @@ export function installContext(ctx, config, key, route, requestContext) {
             !imageOrigins.has(run)
           )
             imageOrigins.set(run, {
+              originalDigest: historyImages && bodyHash(message.content),
+              text:
+                historyImages && !intakeImages.has(run)
+                  ? textWitness(message, inputIdentity(message))
+                  : undefined,
               origin: matchesIntake(run, message)
                 ? imageOrigin(message)
                 : undefined,
@@ -389,6 +416,13 @@ export function installContext(ctx, config, key, route, requestContext) {
         run.claimed = true;
         run.claimedTurn = turn;
         const attachment = imageOrigins?.get(run);
+        if (
+          historyImages &&
+          attachment?.text &&
+          !intakeImages.has(run) &&
+          matchesText(attachment.text, message, inputIdentity(message))
+        )
+          attachment.textTurn = turn;
         if (
           attachment &&
           matchingOrigin(attachment.origin, imageOrigin(message)) &&
@@ -664,6 +698,22 @@ export function installContext(ctx, config, key, route, requestContext) {
         : undefined;
       const newRunIds = modelPilot?.(agent, turn, newPrompts, modelSelection);
       if (modelPilot && !newRunIds) return { kind: 'reject' };
+      let originalText;
+      if (historyImages && !agent.session.header.isSeeded) {
+        const inputs = messages.filter(
+          (m) => m.source?.kind === 'user' || m.source?.kind === 'retry',
+        );
+        if (inputs.length === 1) {
+          const msg = inputs[0];
+          const run = currentInputRun(agent, msg);
+          const proof = run && imageOrigins.get(run);
+          if (
+            proof?.textTurn === turn &&
+            matchesText(proof.text, msg, inputIdentity(msg))
+          )
+            originalText = proof.text;
+        }
+      }
       const attachmentSources = imageOrigins
         ? claimedImages(agent, messages, turn)
         : undefined;
@@ -754,6 +804,12 @@ export function installContext(ctx, config, key, route, requestContext) {
             },
             signal,
             attachmentSources,
+            historyText:
+              originalText &&
+              prompts.length === 1 &&
+              matchesText(originalText, prompts[0], inputIdentity(prompts[0]))
+                ? originalText
+                : undefined,
             runs: bindings.map((binding) => authorized.get(lookup(binding))),
             close: () => closeModelStep(record),
           };
@@ -776,6 +832,14 @@ export function installContext(ctx, config, key, route, requestContext) {
           record?.body ?? state.binding,
           signal,
         );
+        if (record && historyImages)
+          record.authorizedUserId = snapshot.permissions?.userId;
+        if (record?.historyText) {
+          const actor = prompts[0].source.principal?.userId;
+          if (typeof actor === 'string' && actor === record.authorizedUserId)
+            record.historyUserId = actor;
+          else record.historyText = undefined;
+        }
         if (record) {
           if (
             !currentModelStep(record) ||
@@ -1047,6 +1111,65 @@ export function installContext(ctx, config, key, route, requestContext) {
         throw new Error('Native image intake unavailable');
       intakeImages.set(run, image);
     },
+    historyTextFor:
+      historyImages &&
+      ((options, call) => {
+        const record = modelSteps.get(options.sessionId);
+        if (
+          !record?.historyText ||
+          !call.bindingId ||
+          modelBindingFor(options) !== call.bindingId
+        )
+          return;
+        const known = historyImages.get(record.agent.session);
+        if (
+          !known ||
+          !options.messages.some((m) =>
+            m.content.some((p) => p.type === 'image'),
+          )
+        )
+          return;
+        const currentAt = currentTextPosition(
+          options.messages,
+          record.historyText,
+          inputIdentity,
+        );
+        if (currentAt < 0) throw attachmentUnavailable();
+        const seen = new Set();
+        const messages = options.messages.map((message, index) => {
+          if (!message.content.some((p) => p.type === 'image')) return message;
+          const prior = known.get(message.id);
+          if (
+            index >= currentAt ||
+            !prior?.completed ||
+            prior.turn >= record.body.turn ||
+            prior.userId !== record.historyUserId ||
+            prior.requirementId !== record.body.requirementId ||
+            prior.digest !==
+              bodyHash([inputIdentity(message), message.content]) ||
+            message.role !== 'user' ||
+            message.content.some(
+              (p) => p.type !== 'text' && (p.type !== 'image' || p.offloaded),
+            ) ||
+            seen.has(message.id)
+          )
+            throw attachmentUnavailable();
+          seen.add(message.id);
+          const content = message.content.filter((p) => p.type === 'text');
+          if (!content.some((p) => p.text)) throw attachmentUnavailable();
+          return Object.freeze({ ...message, content: Object.freeze(content) });
+        });
+        return {
+          original: options,
+          projected: Object.freeze({
+            ...options,
+            messages: Object.freeze(messages),
+          }),
+          active: true,
+          used: false,
+          current: () => currentModelStep(record),
+        };
+      }),
     attachmentCallFor:
       imageOrigins &&
       ((options, call) => {
@@ -1126,6 +1249,42 @@ export function installContext(ctx, config, key, route, requestContext) {
         const projectedUserContentSha256 = bodyHash(userContent);
         return {
           expected,
+          delivered:
+            historyImages &&
+            expected.length &&
+            !record.agent.session.header.isSeeded
+              ? () => {
+                  if (!currentModelStep(record)) return;
+                  let known = historyImages.get(record.agent.session);
+                  if (!known)
+                    historyImages.set(
+                      record.agent.session,
+                      (known = new Map()),
+                    );
+                  for (const id of seen) {
+                    const msg = options.messages.find((m) => m.id === id);
+                    const source = record.attachmentSources.get(id);
+                    if (
+                      !msg ||
+                      !source ||
+                      source.origin.userId !== record.authorizedUserId ||
+                      imageOrigins.get(source.run)?.originalDigest !==
+                        bodyHash(msg.content) ||
+                      !matchesIntake(source.run, msg)
+                    )
+                      continue;
+                    if (known.size >= 32 && !known.has(id))
+                      known.delete(known.keys().next().value);
+                    known.set(id, {
+                      turn: record.body.turn,
+                      completed: false,
+                      userId: source.origin.userId,
+                      requirementId: record.body.requirementId,
+                      digest: bodyHash([inputIdentity(msg), msg.content]),
+                    });
+                  }
+                }
+              : undefined,
           signal: record.signal,
           isCurrent: () => currentModelStep(record),
           prepare: (images, signal) =>

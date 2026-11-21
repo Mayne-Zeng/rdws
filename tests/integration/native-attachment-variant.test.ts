@@ -229,6 +229,91 @@ function syntheticMessages(model: string) {
   );
 }
 
+test('the history-text terminal consumes only the original live call and forbids image reads without that terminal', async () => {
+  const { consumeHistoryText, readImageForCall, withHistoryText } =
+    await import('../../dsh/plugins/rdws-access/history-text.mjs');
+  const original = Object.freeze({ tag: 'synthetic original' });
+  const projected = Object.freeze({ tag: 'synthetic text' });
+  let current = true;
+  const plan = {
+    original,
+    projected,
+    used: false,
+    active: true,
+    current: () => current,
+  };
+  const read = vi.fn(() => 42);
+  expect(consumeHistoryText(original)).toBe(original);
+  await withHistoryText(plan, async () => {
+    expect(() => consumeHistoryText({ ...original })).toThrow(
+      'Native history projection unavailable',
+    );
+    expect(() => readImageForCall(read, null, {}, [])).toThrow(
+      'Native attachment evidence unavailable',
+    );
+    expect(read).not.toHaveBeenCalled();
+    current = false;
+    expect(() => consumeHistoryText(original)).toThrow();
+    current = true;
+    expect(consumeHistoryText(original)).toBe(projected);
+    expect(() => consumeHistoryText(original)).toThrow();
+    expect(() => readImageForCall(read, null, {}, [])).toThrow();
+  });
+  expect(() =>
+    withHistoryText({ ...plan, used: false, active: false }, () =>
+      consumeHistoryText(original),
+    ),
+  ).toThrow();
+  expect(readImageForCall(read, null, {}, [])).toBe(42);
+  expect(read).toHaveBeenCalledTimes(1);
+});
+
+test('a default history projection requires the same unique current text and a live image scope', async () => {
+  const { textWitness, matchesText, currentTextPosition, requireImageScope } =
+    await import('../../dsh/plugins/rdws-access/history-text.mjs');
+  const message = {
+    id: 'm',
+    role: 'user',
+    source: { kind: 'user' },
+    content: [{ type: 'text', text: 'exact  ' }],
+  };
+  const key = (m: typeof message) => m.id;
+  const witness = textWitness(message, key(message));
+  expect(matchesText(witness, message, key(message))).toBe(true);
+  expect(
+    matchesText(
+      witness,
+      { ...message, content: [{ type: 'text', text: 'exact' }] },
+      key(message),
+    ),
+  ).toBe(false);
+  expect(
+    textWitness(
+      { ...message, content: [...message.content, { type: 'image' }] },
+      key(message),
+    ),
+  ).toBeUndefined();
+  expect(currentTextPosition([message], witness, key)).toBe(0);
+  expect(currentTextPosition([], witness, key)).toBe(-1);
+  expect(currentTextPosition([message, message], witness, key)).toBe(-1);
+  expect(
+    currentTextPosition([message, { ...message, id: 'later' }], witness, key),
+  ).toBe(-1);
+  const options = { messages: [{ content: [{ type: 'image' }] }] };
+  const execute = vi.fn();
+  for (const [marked, call, scope] of [
+    [true, {}, undefined],
+    [true, { bindingId: 'original' }, { isCurrent: () => false }],
+    [false, { bindingId: 'original' }, { isCurrent: () => true }],
+  ] as const) {
+    expect(() => {
+      requireImageScope(true, options, marked, call, scope);
+      execute();
+    }).toThrow('Native attachment evidence unavailable');
+  }
+  expect(execute).not.toHaveBeenCalled();
+});
+
 test
   .skipIf(process.platform !== 'darwin')
   .each([
@@ -242,6 +327,10 @@ test
     'native offload all',
     'native text replay',
     'native uploaded',
+    'native upload history text',
+    'native upload history cold',
+    'native upload history normalized',
+    'native upload history cancelled',
     'native upload revoked',
     'native upload lost ACK',
     'native upload cancelled',
@@ -251,6 +340,7 @@ test
     const useTls = transport !== 'inline';
     const nativeManifest = transport.startsWith('native ');
     const nativeInline = transport === 'native inline';
+    const historyText = transport.startsWith('native upload history');
     const textReplay = transport === 'native text replay';
     const uploadIntake = transport.startsWith('native upload');
     const stageRevoked = transport === 'native upload revoked';
@@ -328,6 +418,9 @@ test
     const receivedImages: Attempt['messageImages'][] = [];
     const receivedTextBoundaries: boolean[] = [];
     const authoredFollowUpDigests: string[][] = [];
+    const authoredHistory: string[][] = [];
+    const readAttemptsPath = join(root, 'synthetic-variant-reads.jsonl');
+    const historyBarrier = join(root, 'synthetic-history-barrier');
     const wireGrants = new Set<string>();
     const visibleGrants: boolean[] = [];
     const httpEntries: string[] = [];
@@ -481,6 +574,22 @@ test
                       type === 'text' && typeof text === 'string' ? [text] : [],
                     ),
                   );
+                if (historyText) {
+                  expect(
+                    readDeepSeekMessagesEvidence(
+                      wire,
+                      'application/json',
+                      model,
+                    ),
+                  ).toBeDefined();
+                  authoredHistory.push(
+                    userTexts.filter(
+                      (t) =>
+                        t === accepted ||
+                        t === 'Synthetic follow-up text at ' + authoredPath,
+                    ),
+                  );
+                }
                 const reminders = userTexts.filter((text) =>
                   text.startsWith('<system-reminder>\n'),
                 );
@@ -931,6 +1040,14 @@ test
                   accepted,
                   late,
                   evidencePath,
+                  ...(historyText && {
+                    readAttemptsPath,
+                    normalizeFollowUp:
+                      transport === 'native upload history normalized',
+                    ...(transport === 'native upload history cancelled' && {
+                      historyBarrier,
+                    }),
+                  }),
                   repeatImages: nativeManifest,
                   observeOnly: uploadIntake,
                   activationGate,
@@ -956,6 +1073,7 @@ test
           };
         },
       ) {
+        const withImage = uploadIntake && !reopened;
         const requirementId = reopened?.identity.requirementId ?? randomUUID();
         const requestId = randomUUID();
         const workspace = await host.workspace(
@@ -1077,12 +1195,14 @@ test
           nonce,
           cwd: identity.cwd,
         });
-        if (!uploadIntake) {
+        const admitted = !withImage
+          ? runs.admit(identity, requirementId, sessionId, requestId, nonce)
+          : undefined;
+        if (admitted)
           await host.control('run', {
-            ...runs.admit(identity, requirementId, sessionId, requestId, nonce),
+            ...admitted,
             authSessionId: identity.authSessionId,
           });
-        }
         const prompt = {
           sessionId,
           requestId,
@@ -1116,7 +1236,7 @@ test
           });
           expect(rejected.status).toBe(503);
         }
-        if (uploadIntake) {
+        if (withImage) {
           const command = prepareNativeImagePrompt(
             host,
             runs,
@@ -1516,6 +1636,20 @@ test
         expect(
           await sessionRpc(host, ticket, 'session/prompt', prompt),
         ).toEqual({ accepted: true });
+        if (
+          transport === 'native upload history cancelled' &&
+          reopened &&
+          admitted
+        ) {
+          await expect
+            .poll(() => existsSync(historyBarrier + '.entered'))
+            .toBe(true);
+          try {
+            await host.control('run.cancel', { runId: admitted.runId });
+          } finally {
+            await writeFile(historyBarrier + '.released', 'released');
+          }
+        }
         if (nativeManifest) {
           const currentTurn = async () =>
             (await currentEvents()).find(({ type }) => type === 'turn/end');
@@ -1524,7 +1658,11 @@ test
             .toBe(true);
           const completed = checkPublicRejection && !denied;
           expect((await currentTurn())?.data.reason).toMatchObject({
-            kind: completed ? 'completed' : 'error',
+            kind: completed
+              ? 'completed'
+              : transport === 'native upload history cancelled'
+                ? expect.stringMatching(/^(error|aborted|cancelled)$/)
+                : 'error',
           });
           const observed = await currentEvents();
           const snapshots = observed.filter(
@@ -1773,6 +1911,88 @@ test
         return;
       }
       const warm = await send(accepted, true);
+      if (historyText) {
+        const authored = 'Synthetic follow-up text at ' + authoredPath;
+        const readsBefore = await readFile(readAttemptsPath, 'utf8');
+        const readIds: unknown[] = readsBefore
+          .split('\n')
+          .filter(Boolean)
+          .map((row) => JSON.parse(row));
+        expect(readIds.length).toBeGreaterThan(0);
+        if (transport === 'native upload history cold') {
+          await host.close();
+          ({ host, runs } = makeHost());
+          const cold = await send(authored, false, warm);
+          expect(cold.sessionId).toBe(warm.sessionId);
+          expect(httpEntries).toEqual(['/v1/files', '/v1/messages']);
+          expect(await readFile(readAttemptsPath, 'utf8')).toBe(readsBefore);
+          expect(authoredHistory).toEqual([[accepted]]);
+          expect(replies).toBe(1);
+          return;
+        }
+        if (
+          transport === 'native upload history normalized' ||
+          transport === 'native upload history cancelled'
+        ) {
+          const stopped = await send(authored + '  ', false, warm);
+          expect(stopped.sessionId).toBe(warm.sessionId);
+          expect(httpEntries).toEqual(['/v1/files', '/v1/messages']);
+          expect(await readFile(readAttemptsPath, 'utf8')).toBe(readsBefore);
+          expect(replies).toBe(1);
+          return;
+        }
+        const later = await send(authored, true, warm);
+        expect(await readFile(readAttemptsPath, 'utf8')).toBe(readsBefore);
+        expect(authoredHistory).toEqual([[accepted], [accepted, authored]]);
+        const nativeScope = {
+          ...warm.identity,
+          purpose: 'browser' as const,
+          readSessionIds: [warm.sessionId],
+          ownSessionIds: [warm.sessionId],
+        };
+        const history = (await sessionRpc(host, nativeScope, 'session/events', {
+          address: { kind: 'session', sessionId: warm.sessionId },
+          maxMessages: 50,
+        })) as { records: { event: (typeof later.previousEvents)[number] }[] };
+        const originalImage = later.previousEvents.find(
+          (e) =>
+            e.type === 'user/message' &&
+            Array.isArray(e.data.content) &&
+            e.data.content.some((p) => isRecord(p) && p.type === 'image'),
+        );
+        expect(originalImage).toBeDefined();
+        const blocks = originalImage!.data.content;
+        if (!Array.isArray(blocks))
+          throw new Error('Missing original image content');
+        const ref = blocks.find(
+          (part) => isRecord(part) && part.type === 'image',
+        )?.attachment;
+        expect(ref?.attachmentId).toMatch(/^sha256:[a-f0-9]{64}$/);
+        expect(readIds).toContain(ref.attachmentId);
+        expect(
+          history.records.find(({ event }) => event.seq === originalImage!.seq)
+            ?.event,
+        ).toEqual(originalImage);
+        expect(later.sessionId).toBe(warm.sessionId);
+        expect(
+          later.previousEvents.some(
+            (e) =>
+              e.type === 'user/message' &&
+              Array.isArray(e.data.content) &&
+              e.data.content.some((p) => isRecord(p) && p.type === 'image'),
+          ),
+        ).toBe(true);
+        expect(httpEntries).toEqual([
+          '/v1/files',
+          '/v1/messages',
+          '/v1/messages',
+        ]);
+        expect(receivedImages.at(-1)).toEqual([]);
+        expect(receivedTextBoundaries).toEqual([true, true]);
+        expect(authoredFollowUpDigests.at(-1)).toEqual([sha(authored)]);
+        expect(replies).toBe(2);
+        return;
+      }
       if (uploadIntake) return;
       if (nativeManifest) {
         const origin = {

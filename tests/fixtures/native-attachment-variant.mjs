@@ -36,6 +36,9 @@ export function apply(
     accepted,
     late,
     evidencePath,
+    readAttemptsPath,
+    normalizeFollowUp,
+    historyBarrier,
     repeatImages,
     file,
     runtimeNote,
@@ -152,6 +155,29 @@ export function apply(
     'agent/pre-step',
     async (_event, next) => {
       const decision = await next();
+      if (normalizeFollowUp && decision.kind === 'enter') {
+        return {
+          ...decision,
+          messages: decision.messages.map((message) => {
+            if (
+              !message.content.some(
+                (part) =>
+                  part.type === 'text' &&
+                  part.text.startsWith('Synthetic follow-up text at'),
+              )
+            )
+              return message;
+            return {
+              ...message,
+              content: message.content.map((part) =>
+                part.type === 'text'
+                  ? { ...part, text: part.text.trimEnd() }
+                  : part,
+              ),
+            };
+          }),
+        };
+      }
       if (
         decision.kind === 'enter' &&
         file &&
@@ -200,6 +226,25 @@ export function apply(
   ctx.on(
     'llm/stream',
     async function* (options, next) {
+      if (
+        historyBarrier &&
+        options.messages.some((m) =>
+          m.content.some(
+            (part) =>
+              part.type === 'text' &&
+              part.text.startsWith('Synthetic follow-up text at'),
+          ),
+        )
+      ) {
+        writeFileSync(historyBarrier + '.entered', 'entered');
+        const deadline = Date.now() + 8000;
+        while (
+          !existsSync(historyBarrier + '.released') &&
+          !options.signal?.aborted &&
+          Date.now() < deadline
+        )
+          await wait(10);
+      }
       const sessionId = options.sessionId;
       const claim = claimed.get(sessionId);
       const requested =
@@ -228,6 +273,11 @@ export function apply(
     'readImageRequest',
     (original) =>
       async function (ref, target, signal) {
+        if (readAttemptsPath)
+          appendFileSync(
+            readAttemptsPath,
+            JSON.stringify(ref.attachmentId) + '\n',
+          );
         const current = scope.getStore();
         const variant = await original.call(this, ref, target, signal);
         if (current) {

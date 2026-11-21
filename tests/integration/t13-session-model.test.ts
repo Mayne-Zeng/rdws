@@ -707,12 +707,46 @@ test.skipIf(process.platform !== 'darwin')(
         firstWrite: null,
       });
       const commandId = randomUUID();
+      const delayedSaveId = randomUUID();
       const save = (id: string, selected: string) =>
         fetch(path, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ commandId: id, provider, model: selected }),
+          body: JSON.stringify({
+            commandId: id,
+            provider,
+            model: selected,
+            ...(id === commandId && { supersedes: [delayedSaveId] }),
+          }),
         });
+      const unauthorized = await fetch(path, {
+        method: 'POST',
+        headers: otherHeaders,
+        body: JSON.stringify({
+          commandId: randomUUID(),
+          provider,
+          model,
+          supersedes: [commandId],
+        }),
+      });
+      expect(unauthorized.status).toBe(403);
+      await unauthorized.text();
+      for (const supersedes of [
+        null,
+        [],
+        [commandId],
+        [delayedSaveId, delayedSaveId],
+        ['invalid'],
+        Array.from({ length: 33 }, () => randomUUID()),
+      ]) {
+        const invalid = await fetch(path, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ commandId, provider, model, supersedes }),
+        });
+        expect(invalid.status).toBe(400);
+        await invalid.text();
+      }
       failingCatalogProvider = provider;
       const catalogSave = await save(commandId, model);
       expect(catalogSave.status).toBe(503);
@@ -753,6 +787,11 @@ test.skipIf(process.platform !== 'darwin')(
       expect(await repeated.json()).toEqual(saved);
       expect(catalogFailures).toBe(2);
       failingCatalogProvider = undefined;
+      const delayedSave = await save(delayedSaveId, defaultModel);
+      expect(delayedSave.status).toBe(409);
+      expect(await delayedSave.json()).toEqual({
+        error: '原保存已被后续选模命令替代',
+      });
       const conflicting = await save(commandId, defaultModel);
       expect(conflicting.status).toBe(409);
       await conflicting.text();

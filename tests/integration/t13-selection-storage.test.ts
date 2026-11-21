@@ -14,6 +14,14 @@ import { checkedWriteTransaction } from '../../apps/server/src/modules/checked-w
 import { createSessionModelSelection } from '../../apps/server/src/modules/session-model-selection.ts';
 import { authorityDatabase } from '../helpers/authority-database.ts';
 
+function barrier() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 test('managed model selection and dispatch records survive permission refresh and logout', async () => {
   const context = execFileSync(
     'docker',
@@ -353,6 +361,140 @@ test('managed model selection and dispatch records survive permission refresh an
       },
       firstWrite: null,
     });
+    const late = {
+      commandId: randomUUID(),
+      provider: 'fixture',
+      model: 'model-a',
+    };
+    const unseen = { ...late, commandId: randomUUID() };
+    const replacement = {
+      commandId: randomUUID(),
+      provider: 'fixture',
+      model: 'model-b',
+      supersedes: [late.commandId, unseen.commandId],
+    };
+    const entered = barrier();
+    const release = barrier();
+    const delayed = store.save(scope, late, current, async () => {
+      const directory = await readOptions();
+      entered.resolve();
+      await release.promise;
+      return directory;
+    });
+    await entered.promise;
+    try {
+      let valid = true;
+      await expect(
+        store.save(scope, replacement, current, async () => ({
+          ...(await readOptions()),
+          isCurrent: () => {
+            const previous = valid;
+            valid = false;
+            return previous;
+          },
+        })),
+      ).rejects.toMatchObject({ statusCode: 503 });
+      expect(
+        (
+          await lab.owner.query(
+            'select command_id from command_receipt where command_id=any($1::text[])',
+            [[...replacement.supersedes, replacement.commandId]],
+          )
+        ).rows,
+      ).toEqual([]);
+      const confirmed = await store.save(
+        scope,
+        replacement,
+        current,
+        readOptions,
+      );
+      release.resolve();
+      await expect(delayed).rejects.toMatchObject({ statusCode: 409 });
+      await expect(
+        store.save(scope, unseen, current, skipOptions),
+      ).rejects.toMatchObject({ statusCode: 409 });
+      expect(
+        await store.save(
+          scope,
+          { ...replacement, supersedes: [...replacement.supersedes].reverse() },
+          current,
+          skipOptions,
+        ),
+      ).toEqual(confirmed);
+      await expect(
+        store.save(
+          scope,
+          { ...replacement, supersedes: [late.commandId] },
+          current,
+          skipOptions,
+        ),
+      ).rejects.toMatchObject({ statusCode: 409 });
+      expect((await store.read(scope, current)).selection).toEqual(confirmed);
+      const next = await store.save(
+        scope,
+        {
+          ...replacement,
+          commandId: randomUUID(),
+          model: 'model-a',
+          supersedes: [late.commandId, replacement.commandId],
+        },
+        current,
+        readOptions,
+      );
+      expect(
+        await store.save(scope, replacement, current, skipOptions),
+      ).toEqual(confirmed);
+      await expect(
+        store.save(scope, late, current, skipOptions),
+      ).rejects.toMatchObject({ statusCode: 409 });
+      expect((await store.read(scope, current)).selection).toEqual(next);
+    } finally {
+      release.resolve();
+      await delayed.catch(() => {});
+    }
+    const remaining = barrier();
+    const pending = ['model-a', 'model-b'].map((model) => {
+      const ready = barrier();
+      const commandId = randomUUID();
+      const work = store.save(
+        scope,
+        { commandId, provider: 'fixture', model },
+        current,
+        async () => {
+          const directory = await readOptions();
+          ready.resolve();
+          await remaining.promise;
+          return directory;
+        },
+      );
+      return { commandId, ready: ready.promise, work };
+    });
+    const settled = Promise.allSettled(pending.map(({ work }) => work));
+    try {
+      await Promise.all(pending.map(({ ready }) => ready));
+      const last = await store.save(
+        scope,
+        {
+          commandId: randomUUID(),
+          provider: 'fixture',
+          model: 'model-a',
+          supersedes: pending.map(({ commandId }) => commandId),
+        },
+        current,
+        readOptions,
+      );
+      remaining.resolve();
+      expect(await settled).toEqual(
+        pending.map(() => ({
+          status: 'rejected',
+          reason: expect.objectContaining({ statusCode: 409 }),
+        })),
+      );
+      expect((await store.read(scope, current)).selection).toEqual(last);
+    } finally {
+      remaining.resolve();
+      await settled;
+    }
     const saveInput = {
       commandId: randomUUID(),
       provider: 'fixture',
@@ -383,7 +525,12 @@ test('managed model selection and dispatch records survive permission refresh an
     });
     const changed = await store.save(
       scope,
-      { ...saveInput, commandId: randomUUID(), model: 'model-b' },
+      {
+        ...saveInput,
+        commandId: randomUUID(),
+        model: 'model-b',
+        supersedes: [saveInput.commandId],
+      },
       current,
       readOptions,
     );

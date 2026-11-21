@@ -103,7 +103,7 @@ export function registerSessions(
       const data = request.body;
       if (
         !isRecord(data) ||
-        !onlyKeys(data, ['commandId', 'provider', 'model']) ||
+        !onlyKeys(data, ['commandId', 'provider', 'model', 'supersedes']) ||
         typeof data.commandId !== 'string' ||
         !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(data.commandId) ||
         typeof data.provider !== 'string' ||
@@ -121,6 +121,7 @@ export function registerSessions(
           commandId: data.commandId,
           provider: data.provider,
           model: data.model,
+          supersedes: data.supersedes,
         },
         current,
         async () => {

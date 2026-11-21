@@ -201,17 +201,42 @@ export function createSessionModelSelection(
 
   async function save(
     scope: ModelSessionScope,
-    input: { commandId: string; provider: string; model: string },
+    input: {
+      commandId: string;
+      provider: string;
+      model: string;
+      supersedes?: unknown;
+    },
     current: () => void,
     readOptions: () => Promise<SessionModelOptions>,
   ) {
     const selected = { provider: input.provider, model: input.model };
+    let replaced: string[] = [];
+    if (input.supersedes !== undefined) {
+      const ids = input.supersedes;
+      if (
+        !Array.isArray(ids) ||
+        ids.length < 1 ||
+        ids.length > 32 ||
+        ids.some(
+          (id) =>
+            typeof id !== 'string' ||
+            !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[0-9a-f]{12}$/.test(id) ||
+            id === input.commandId,
+        ) ||
+        new Set(ids).size !== ids.length
+      )
+        businessError(400, '替代的选模命令格式不正确');
+      replaced = [...ids].sort();
+    }
     const key = {
       actorId: scope.who.userId,
       scope: 'session:' + scope.sessionId,
       operation: 'model.select',
       commandId: input.commandId,
-      digest: digestOf(selected),
+      digest: digestOf(
+        replaced.length ? { ...selected, supersedes: replaced } : selected,
+      ),
     };
     const condition = and(
       eq(receipts.actorId, key.actorId),
@@ -225,6 +250,11 @@ export function createSessionModelSelection(
         .from(receipts)
         .where(condition);
       if (!receipt) return undefined;
+      if (
+        isRecord(receipt.result) &&
+        typeof receipt.result.supersededBy === 'string'
+      )
+        businessError(409, '原保存已被后续选模命令替代');
       if (receipt.digest !== key.digest)
         businessError(409, '操作标识已用于不同内容，请重新发起');
       const value = receipt.result;
@@ -254,6 +284,20 @@ export function createSessionModelSelection(
           set: { ...result, updatedAt: new Date() },
         });
       await tx.insert(receipts).values({ ...key, result });
+      if (replaced.length) {
+        const terminal = { supersededBy: input.commandId };
+        await tx
+          .insert(receipts)
+          .values(
+            replaced.map((commandId) => ({
+              ...key,
+              commandId,
+              digest: digestOf(terminal),
+              result: terminal,
+            })),
+          )
+          .onConflictDoNothing();
+      }
       if (!options.isCurrent()) businessError(503, '会话模型目录暂不可用');
       return result;
     });

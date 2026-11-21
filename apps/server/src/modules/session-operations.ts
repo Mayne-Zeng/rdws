@@ -7,6 +7,12 @@ import type { SessionOperationResult } from '@rdws/contracts';
 import { isDemandPreset, type NativeWebHost } from '@rdws/dsh/web';
 import { isRecord, type Grant } from '@rdws/dsh/access';
 import { forkBoundary, sessionRpc } from '@rdws/dsh/sessions';
+import { readForkModelPrefix } from './fork-model-evidence.ts';
+import {
+  recordForkSource,
+  recordForkChild,
+  type ForkKey,
+} from './fork-model-receipt.ts';
 import {
   businessError,
   digestOf,
@@ -42,6 +48,7 @@ export function createSessionOperations(
   db: Database,
   business: ReturnType<typeof createBusiness>,
   native: NativeWebHost,
+  proveForkModel = false,
 ) {
   const generation = randomUUID(),
     active = new Set<string>();
@@ -167,6 +174,8 @@ export function createSessionOperations(
     }
     if (active.has(row.id)) return result(row);
     active.add(row.id);
+    let observedFork:
+      { key: ForkKey; childId: string; sourceDigest: string } | undefined;
     try {
       if (row.status === 'dispatched' || row.status === 'unknown') {
         const saved = await readFile(orphan, 'utf8')
@@ -283,6 +292,26 @@ export function createSessionOperations(
           agentPreset,
         };
         frozen.requestDigest = frozenDigest(frozen, sourceSessionId);
+        const forkKey: ForkKey | undefined =
+          proveForkModel && sourceSessionId && atSeq !== undefined
+            ? {
+                actorId: who.userId,
+                projectId: native.projectId,
+                requirementId,
+                sourceSessionId,
+                cut: atSeq,
+                operationId: row.id,
+                commandId,
+              }
+            : undefined;
+        const prefix =
+          forkKey &&
+          (await readForkModelPrefix(
+            native,
+            prepared.grant,
+            forkKey.sourceSessionId,
+            forkKey.cut,
+          ));
         const dispatched = await authorized(async (tx, item, expiresAt) => {
           if (item.nativeWorkspaceId !== frozen.workspaceId) return;
           let failure = rejection;
@@ -330,7 +359,11 @@ export function createSessionOperations(
                   : { ...prepared.grant, purpose: 'create', agentPreset },
                 expiresAt,
               );
-          return { entry, ticket };
+          const sourceDigest =
+            ticket && forkKey && prefix
+              ? await recordForkSource(tx, forkKey, prefix)
+              : undefined;
+          return { entry, ticket, sourceDigest };
         });
         if (!dispatched) {
           const [existing] = await db
@@ -358,6 +391,12 @@ export function createSessionOperations(
             !/^session-[a-zA-Z0-9-]+$/.test(value.sessionId)
           )
             throw new Error('Invalid Native child identity');
+          if (forkKey && dispatched.sourceDigest)
+            observedFork = {
+              key: forkKey,
+              childId: value.sessionId,
+              sourceDigest: dispatched.sourceDigest,
+            };
           if (!(await remember(value.sessionId)))
             return { ...result(row), status: 'unknown' };
         } catch (error) {
@@ -419,9 +458,24 @@ export function createSessionOperations(
           .where(eq(schema.nativeSession.id, row.nativeSessionId!));
         if (
           mapping?.requirementId !== requirementId ||
-          mapping.ownerId !== who.userId
+          mapping.ownerId !== who.userId ||
+          (proveForkModel &&
+            (mapping.sourceSessionId !== (sourceSessionId ?? null) ||
+              mapping.sourceThroughSeq !== (row.frozen!.atSeq ?? null)))
         )
           businessError(409, '会话归属冲突，请核对原操作');
+        if (
+          observedFork &&
+          mapping.id === observedFork.childId &&
+          mapping.sourceSessionId === observedFork.key.sourceSessionId &&
+          mapping.sourceThroughSeq === observedFork.key.cut
+        )
+          await recordForkChild(
+            tx,
+            observedFork.key,
+            mapping.id,
+            observedFork.sourceDigest,
+          );
         const [entry] = await tx
           .update(table)
           .set({ status: 'mapped', updatedAt: new Date() })

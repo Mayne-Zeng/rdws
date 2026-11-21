@@ -1,3 +1,4 @@
+import { inheritedForkModel } from './fork-model-receipt.ts';
 import { randomUUID } from 'node:crypto';
 import { schema, type connectDatabase } from '@rdws/db';
 import { isRecord } from '@rdws/dsh/access';
@@ -46,6 +47,9 @@ export async function validateSessionModelStorage(
           and pg_catalog.has_table_privilege(current_user,c.oid,'INSERT')
           and pg_catalog.has_table_privilege(current_user,c.oid,'UPDATE')
           and not pg_catalog.has_table_privilege(current_user,c.oid,'DELETE,TRUNCATE'))
+      and exists(select 1 from pg_catalog.pg_trigger t
+        where t.tgrelid='public.command_receipt'::regclass and t.tgname='rdws_authority_writer'
+          and t.tgtype=62 and t.tgenabled='A' and t.tgfoid=pg_catalog.to_regprocedure('rdws_authority.check_writer()'))
       and exists(select 1 from pg_catalog.pg_class c
         join pg_catalog.pg_namespace n on n.oid=c.relnamespace
         join pg_catalog.pg_trigger t on t.tgrelid=c.oid
@@ -166,7 +170,7 @@ export function createSessionModelSelection(
   }
 
   function read(scope: ModelSessionScope, current: () => void) {
-    return scoped(scope, current, async (tx) => {
+    return scoped(scope, current, async (tx, _expiry, isFork) => {
       const evidence = tx
         .select({ state: firstWrites.state })
         .from(firstWrites)
@@ -205,7 +209,16 @@ export function createSessionModelSelection(
         })
         .from(selections)
         .where(eq(selections.nativeSessionId, scope.sessionId));
-      if (!row) return { selection: null, firstWrite: null };
+      if (!row) {
+        const inherited = isFork
+          ? await inheritedForkModel(tx, scope.who.userId, scope.sessionId)
+          : undefined;
+        return {
+          selection: null,
+          firstWrite: null,
+          ...(inherited && { inherited }),
+        };
+      }
       const { firstWrite, ...selection } = row;
       return { selection, firstWrite };
     });
@@ -340,7 +353,9 @@ export function createSessionModelSelection(
           tx,
           scope.who.userId,
           scope.sessionId,
-          await readSelection(tx, scope.sessionId),
+          (await readSelection(tx, scope.sessionId)) ??
+            (await inheritedForkModel(tx, scope.who.userId, scope.sessionId)) ??
+            null,
         );
       return prior;
     });
@@ -358,7 +373,12 @@ export function createSessionModelSelection(
     return scoped(scope, current, async (tx, _expiry, isFork) => {
       const prior = await promptRecord(tx, scope, input);
       if (prior) return prior;
-      const saved = await readSelection(tx, scope.sessionId);
+      const saved =
+        (await readSelection(tx, scope.sessionId)) ??
+        (isFork
+          ? await inheritedForkModel(tx, scope.who.userId, scope.sessionId)
+          : null) ??
+        null;
       if (isFork)
         await requireSavedChildModel(
           tx,

@@ -10,6 +10,8 @@ import { bodyHash, isRecord } from '@rdws/dsh/access';
 import { forkBoundary, sessionPage } from '@rdws/dsh/sessions';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { buildApp } from '@rdws/server';
+import { intactForkReceipt } from '../../apps/server/src/modules/fork-model-receipt.ts';
+import { usedForkModels } from '../../apps/server/src/modules/fork-model-evidence.ts';
 import { hashPassword } from 'better-auth/crypto';
 import { expect, test, vi } from 'vitest';
 import { authorityDatabase } from '../helpers/authority-database.ts';
@@ -701,6 +703,80 @@ test.skipIf(process.platform !== 'darwin')(
       const initialEvents = await finish(1);
       expect(modelsReceived).toEqual([alpha]);
       expect(connections).toBe(1);
+      const classify = (events: typeof initialEvents) =>
+        usedForkModels(events, owner, requirement);
+      expect(classify(initialEvents)).toMatchObject([
+        { requestId: first, model: alpha, provider },
+      ]);
+      for (const events of [
+        initialEvents.filter((event) => event.type !== 'assistant/message'),
+        initialEvents.map((event) =>
+          event.type === 'assistant/message'
+            ? { ...event, type: 'assistant/attempt' }
+            : event,
+        ),
+        initialEvents.map((event) =>
+          event.type === 'assistant/message'
+            ? { ...event, data: { ...event.data, interrupted: true } }
+            : event,
+        ),
+        initialEvents.map((event) =>
+          event.type === 'turn/end'
+            ? {
+                ...event,
+                data: { ...event.data, reason: { kind: 'interrupted' } },
+              }
+            : event,
+        ),
+        initialEvents.map((event) =>
+          event.type === 'step/end'
+            ? { ...event, data: { ...event.data, step: 42 } }
+            : event,
+        ),
+        [
+          ...initialEvents,
+          {
+            seq: initialEvents.length,
+            type: 'model/selection',
+            data: { provider, model: beta },
+          },
+        ],
+      ])
+        expect(classify(events)).toBeUndefined();
+      const provenFork = await bff.inject({
+        method: 'POST',
+        url: sessions + '/' + sessionId + '/fork',
+        headers,
+        payload: { commandId: randomUUID() },
+      });
+      expect(provenFork.statusCode).toBe(200);
+      const provenChild = provenFork.json<{ sessionId: string }>().sessionId;
+      const storedWitness = (
+        await lab.owner.query(
+          "select result,digest from command_receipt where operation='model.fork-source' and result->'key'->>'sourceSessionId'=$1",
+          [sessionId],
+        )
+      ).rows[0]!;
+      expect(
+        intactForkReceipt({
+          digest: storedWitness.digest,
+          result: storedWitness.result,
+        }),
+      ).toBe(true);
+      expect(
+        intactForkReceipt({
+          digest: storedWitness.digest,
+          result: {
+            ...storedWitness.result,
+            choice: { ...storedWitness.result.choice, model: beta },
+          },
+        }),
+      ).toBe(false);
+      const provenModelPath = sessions + '/' + provenChild + '/model-selection';
+      expect(
+        (await bff.inject({ url: provenModelPath, headers })).json(),
+      ).toEqual({ selection: null, firstWrite: null, inherited: initial });
+      wire['x-rdws-client-generation'] = randomUUID();
       const replacement = await select(beta);
       await send(changed);
       const changedEvents = await finish(2);
@@ -847,8 +923,8 @@ test.skipIf(process.platform !== 'darwin')(
       expect(
         (
           await lab.owner.query(
-            'select id,owner_id,source_through_seq::int as cut from native_session where requirement_id=$1 and source_session_id=$2',
-            [requirement, sessionId],
+            'select id,owner_id,source_through_seq::int as cut from native_session where requirement_id=$1 and source_session_id=$2 and id=$3',
+            [requirement, sessionId, child],
           )
         ).rows,
       ).toEqual([{ id: child, owner_id: owner, cut: stableCut }]);
@@ -1096,6 +1172,9 @@ test.skipIf(process.platform !== 'darwin')(
         'x-rdws-client-generation': randomUUID(),
       };
       expect(connections).toBe(2);
+      expect(
+        (await cold.inject({ url: provenModelPath, headers })).json(),
+      ).toEqual({ selection: null, firstWrite: null, inherited: initial });
       const sending = send(childRequest, child, cold, freshWire);
       void sending.catch(() => {});
       try {
@@ -1135,6 +1214,22 @@ test.skipIf(process.platform !== 'darwin')(
         releaseChild();
         await sending.catch(() => {});
       }
+      const persistedSend = randomUUID();
+      await send(persistedSend, provenChild, cold, freshWire);
+      await expect
+        .poll(() => modelsReceived)
+        .toEqual([alpha, beta, beta, alpha]);
+      await expect
+        .poll(
+          async () =>
+            (
+              await lab.owner.query(
+                "select model,selection_revision as revision from session_model_first_write where native_session_id=$1 and selection_request_id=$2 and state='submitted'",
+                [provenChild, persistedSend],
+              )
+            ).rows,
+        )
+        .toEqual([{ model: alpha, revision: initial.revision }]);
     } finally {
       releaseChild();
       probe.mockRestore();

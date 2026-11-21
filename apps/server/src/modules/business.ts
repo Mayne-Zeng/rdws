@@ -1,3 +1,6 @@
+import { digestOf } from './command-digest.ts';
+export { digestOf } from './command-digest.ts';
+import { inheritedForkModel } from './fork-model-receipt.ts';
 import { randomUUID, createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { and, eq, inArray, asc, desc, gt, ne, or, sql } from 'drizzle-orm';
@@ -72,6 +75,14 @@ export async function requireSavedChildModel(
       )
       .limit(1);
     if (receipt) return;
+    const inherited = await inheritedForkModel(tx, actorId, sessionId);
+    if (
+      inherited &&
+      inherited.revision === choice.revision &&
+      inherited.model === choice.model &&
+      inherited.provider === choice.provider
+    )
+      return;
   }
   businessError(409, '请先为派生会话明确选择当前可用模型');
 }
@@ -129,21 +140,7 @@ export function businessError(
 ): never {
   throw Object.assign(new Error(publicMessage), { statusCode, publicMessage });
 }
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
-  if (value && typeof value === 'object')
-    return (
-      '{' +
-      Object.entries(value)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, v]) => JSON.stringify(key) + ':' + canonical(v))
-        .join(',') +
-      '}'
-    );
-  return JSON.stringify(value) ?? 'null';
-}
-export const digestOf = (value: unknown) =>
-  createHash('sha256').update(canonical(value)).digest('hex');
+
 export function normalizeManagement(input: ManagementCommand) {
   return {
     ...input,

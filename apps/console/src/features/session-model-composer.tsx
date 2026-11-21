@@ -26,6 +26,7 @@ type Pending = {
 };
 type Snapshot = {
   selection: Saved | null;
+  inherited?: Saved;
   firstWrite: 'submitted' | 'prepared' | null;
   catalogReady: boolean;
   options: Choice[];
@@ -179,6 +180,8 @@ export function SessionModelComposer({
       const data = await response.json();
       if (
         !(data.selection === null || saved(data.selection)) ||
+        (data.inherited !== undefined &&
+          (!saved(data.inherited) || data.selection !== null)) ||
         ![null, 'prepared', 'submitted'].includes(data.firstWrite)
       )
         throw new Error();
@@ -213,6 +216,7 @@ export function SessionModelComposer({
       const next = {
         catalogReady,
         selection: data.selection,
+        inherited: data.inherited,
         firstWrite: data.firstWrite,
         options,
       } as Snapshot;
@@ -319,12 +323,18 @@ export function SessionModelComposer({
         setSaving((value) => (value === cmd.commandId ? undefined : value));
     }
   }
-  const permitted = (state: Snapshot) =>
-    state.catalogReady &&
-    (state.selection
-      ? state.selection.revision !== pending.current.refusedRevision &&
-        state.options.some((item) => slot(item) === slot(state.selection!))
-      : !isFork && state.options.length > 0);
+  const listed = (state: Snapshot, model: Choice) =>
+    state.options.some((item) => slot(item) === slot(model));
+  const permitted = (state: Snapshot) => {
+    const effective = state.selection ?? state.inherited;
+    return (
+      state.catalogReady &&
+      (effective
+        ? effective.revision !== pending.current.refusedRevision &&
+          listed(state, effective)
+        : !isFork && state.options.length > 0)
+    );
+  };
   async function submit(retry: boolean) {
     const original = pending.current.prompt;
     if (
@@ -558,9 +568,20 @@ export function SessionModelComposer({
                 : snapshot.firstWrite === 'prepared'
                   ? '首写待核对'
                   : '待生效')
-            : isFork
-              ? '首次发送前请明确选择模型。'
-              : '尚未保存个人选择。'}
+            : snapshot.inherited
+              ? !snapshot.catalogReady
+                ? '来源模型的可用性待核对。'
+                : permitted(snapshot)
+                  ? '可沿用来源会话已使用的模型 ' +
+                    snapshot.inherited.provider +
+                    ' / ' +
+                    snapshot.inherited.model
+                  : listed(snapshot, snapshot.inherited)
+                    ? '来源模型已恢复可用，请重新选择后发送。'
+                    : '来源模型当前不可用，请重新选择后发送。'
+              : isFork
+                ? '首次发送前请明确选择模型。'
+                : '尚未保存个人选择。'}
         </p>
       )}
       {snapshot && !snapshot.catalogReady && (
@@ -572,7 +593,11 @@ export function SessionModelComposer({
       {snapshot?.catalogReady && snapshot.selection && !permitted(snapshot) && (
         <Alert
           theme="warning"
-          message="已选模型当前不可用，请重新选择后发送。"
+          message={
+            listed(snapshot, snapshot.selection)
+              ? '已选模型已恢复可用，请重新选择后发送。'
+              : '已选模型当前不可用，请重新选择后发送。'
+          }
         />
       )}
       {record.choice && (

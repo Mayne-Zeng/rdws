@@ -1,3 +1,4 @@
+import { soleSubmittedAttempt } from '../../apps/server/src/modules/fork-model-receipt.ts';
 import { execFileSync, fork } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
@@ -1038,6 +1039,21 @@ test.skipIf(process.platform !== 'darwin')(
         .toEqual(['submitted', 'submitted']);
       const writes = (await modelReceipt()).rows;
       const [originalWrite, retriedWrite] = writes;
+      const attempts = writes.map((row) => ({
+        state: String(row.state),
+        id: String(row.attempt_id),
+      }));
+      expect(soleSubmittedAttempt(attempts)).toBeUndefined();
+      expect(
+        soleSubmittedAttempt([
+          attempts[0]!,
+          { ...attempts[1]!, state: 'prepared' },
+        ]),
+      ).toBeUndefined();
+      expect(
+        soleSubmittedAttempt([{ ...attempts[0]!, state: 'prepared' }]),
+      ).toBeUndefined();
+      expect(soleSubmittedAttempt([attempts[1]!])).toEqual(attempts[1]);
       expect(originalWrite).toMatchObject({
         project_id: projectId,
         requirement_id: requirementId,

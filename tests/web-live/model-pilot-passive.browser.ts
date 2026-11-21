@@ -856,17 +856,17 @@ test('the model pilot browser opens cold sessions without activation and receive
     const recovery = await login('pilot_browser_owner', origin);
     const ui = await recovery.context.newPage();
     ui.setDefaultTimeout(8000);
-    const openSession = async (id: string) => {
-      await ui.goto(url);
-      const reply = await recovery.context.request.get(sessionsPath, {
-        headers: recovery.headers,
+    const openSession = async (id: string, target = ui, viewer = recovery) => {
+      await target.goto(url);
+      const reply = await viewer.context.request.get(sessionsPath, {
+        headers: viewer.headers,
       });
       const { sessions: directory } = (await reply.json()) as {
         sessions: { id: string; sourceSessionId?: string }[];
       };
       const offset = directory.findIndex((row) => row.id === id);
       expect(offset).toBeGreaterThanOrEqual(0);
-      await ui
+      await target
         .getByRole('button', {
           name:
             '会话 ' +
@@ -876,7 +876,7 @@ test('the model pilot browser opens cold sessions without activation and receive
           exact: true,
         })
         .click();
-      await expect(ui.getByTestId('active-session-model')).toBeVisible();
+      await expect(target.getByTestId('active-session-model')).toBeVisible();
     };
     await openSession(sessionId);
     await ui.setViewportSize({ width: 390, height: 850 });
@@ -1083,6 +1083,12 @@ test('the model pilot browser opens cold sessions without activation and receive
       await expect(draft).toHaveValue(
         'Synthetic explicit reselect after healthy removal',
       );
+      catalogState = undefined;
+      await ui.getByRole('button', { name: '选择会话模型' }).click();
+      await expect(
+        ui.getByText('已选模型已恢复可用，请重新选择后发送。', { exact: true }),
+      ).toBeVisible();
+      await expect(send).toBeDisabled();
       await pick(firstModel);
       await ui.getByRole('button', { name: '保存选择', exact: true }).click();
       await expect(send).toBeEnabled();
@@ -1151,6 +1157,330 @@ test('the model pilot browser opens cold sessions without activation and receive
       await send.click();
       await expect.poll(() => received.length).toBe(5);
       expect(received.at(-1)?.model).toBe(firstModel);
+      const sourceReply = await recovery.context.request.post(sessionsPath, {
+        headers: recovery.headers,
+        data: { commandId: randomUUID() },
+      });
+      expect(sourceReply.status()).toBe(200);
+      const sourceId = (await sourceReply.json()).sessionId;
+      await openSession(sourceId);
+      await pick(selectedModel);
+      await ui.getByRole('button', { name: '保存选择', exact: true }).click();
+      await draft.fill('Synthetic confirmed non-default source model');
+      await send.click();
+      await expect.poll(() => received.length).toBe(6);
+      expect(received.at(-1)?.model).toBe(selectedModel);
+      await expect(
+        ui.getByText(
+          '已保存 ' + provider + ' / ' + selectedModel + ' · 已开始发送',
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await expect
+        .poll(async () =>
+          (await journal(root, sourceId)).events.some(
+            (e) => e.type === 'turn/end',
+          ),
+        )
+        .toBe(true);
+      const healthy = await recovery.context.request.post(
+        sessionsPath + '/' + sourceId + '/fork',
+        { headers: recovery.headers, data: { commandId: randomUUID() } },
+      );
+      expect(healthy.status()).toBe(200);
+      const healthyChild = (await healthy.json()).sessionId;
+      const sourcePath = sessionsPath + '/' + sourceId + '/model-selection';
+      const sourceSaved = (
+        await (
+          await recovery.context.request.get(sourcePath, {
+            headers: recovery.headers,
+          })
+        ).json()
+      ).selection;
+      const getChild = async (id: string) =>
+        (
+          await recovery.context.request.get(
+            sessionsPath + '/' + id + '/model-selection',
+            { headers: recovery.headers },
+          )
+        ).json();
+      expect(await getChild(healthyChild)).toEqual({
+        selection: null,
+        firstWrite: null,
+        inherited: sourceSaved,
+      });
+      const orphanCommand = randomUUID();
+      const forkUrl = sessionsPath + '/' + sourceId + '/fork';
+      const resumeFork = () =>
+        recovery.context.request.post(forkUrl, {
+          headers: recovery.headers,
+          data: { commandId: orphanCommand },
+        });
+      const workingHost = NativeWebHost.prototype.fetch;
+      let recoveredId: string | undefined;
+      NativeWebHost.prototype.fetch = async function (path, grant, init) {
+        const reply = await workingHost.call(this, path, grant, init);
+        if (path !== '/api/session/fork' || recoveredId || !reply.ok)
+          return reply;
+        const result = await reply.clone().json();
+        if (!result.result?.ok) return reply;
+        recoveredId = result.result.value.sessionId;
+        return Response.json({
+          ...result,
+          result: {
+            ok: false,
+            error: {
+              code: 'session/workspace-attach-failed',
+              message: 'Synthetic attachment result unknown',
+              details: { sessionId: recoveredId },
+            },
+          },
+        });
+      };
+      try {
+        const unmapped = await resumeFork();
+        expect(unmapped.status()).toBe(202);
+        expect((await unmapped.json()).status).toBe('native-created');
+      } finally {
+        NativeWebHost.prototype.fetch = workingHost;
+      }
+      const recoveredSibling = await resumeFork();
+      expect(recoveredSibling.status()).toBe(200);
+      expect((await recoveredSibling.json()).sessionId).toBe(recoveredId);
+      expect(recoveredId).not.toBe(healthyChild);
+      expect(await getChild(recoveredId!)).toEqual({
+        firstWrite: null,
+        selection: null,
+      });
+      const sourceProofs = await lab.owner.query(
+        "select o.native_session_id as id,o.frozen,s.digest,c.command_id as binding from session_operation o join command_receipt s on s.command_id=o.id and s.operation='model.fork-source' left join command_receipt c on c.command_id=o.id and c.operation='model.fork-child' where o.native_session_id=any($1::text[])",
+        [[healthyChild, recoveredId]],
+      );
+      expect(sourceProofs.rows).toHaveLength(2);
+      expect(sourceProofs.rows[0].frozen).toEqual(sourceProofs.rows[1].frozen);
+      expect(
+        sourceProofs.rows.find((row) => row.id === healthyChild)?.binding,
+      ).toEqual(expect.any(String));
+      expect(
+        sourceProofs.rows.find((row) => row.id === recoveredId)?.binding,
+      ).toBeNull();
+      const promptFrom = async (account: typeof recovery) => {
+        const bootstrap = await account.context.request.get(
+          rootApi + '/bootstrap',
+          { headers: account.headers },
+        );
+        expect(bootstrap.status()).toBe(200);
+        const { loginBinding } = await bootstrap.json();
+        return (id: string) =>
+          account.context.request.post(promptRoute, {
+            headers: {
+              origin,
+              'x-rdws-native-login': loginBinding,
+              'x-rdws-client-generation': randomUUID(),
+            },
+            data: {
+              type: 'client-request',
+              method: 'session/prompt',
+              rpcId: randomUUID(),
+              payload: {
+                args: {
+                  request: {
+                    sessionId: id,
+                    requestId: randomUUID(),
+                    mode: 'queue',
+                    content: [
+                      { type: 'text', text: 'Synthetic manual child prompt' },
+                    ],
+                  },
+                },
+              },
+            },
+          });
+      };
+      const unknownSend = await (await promptFrom(recovery))(recoveredId!);
+      expect(unknownSend.status()).toBe(409);
+      expect(await unknownSend.json()).toEqual({
+        error: '请先为派生会话明确选择当前可用模型',
+      });
+      expect(
+        (
+          await lab.owner.query(
+            'select request_id from session_prompt_dispatch where native_session_id=$1',
+            [recoveredId],
+          )
+        ).rowCount,
+      ).toBe(0);
+      await openSession(recoveredId!);
+      await draft.fill(
+        'Synthetic recovered sibling requires an explicit choice',
+      );
+      await expect(send).toBeDisabled();
+      expect(await getChild(healthyChild)).toEqual({
+        firstWrite: null,
+        selection: null,
+        inherited: sourceSaved,
+      });
+      expect(received).toHaveLength(6);
+      const nested = await recovery.context.request.post(
+        sessionsPath + '/' + healthyChild + '/fork',
+        { headers: recovery.headers, data: { commandId: randomUUID() } },
+      );
+      expect(nested.status()).toBe(200);
+      expect(
+        (await getChild((await nested.json()).sessionId)).inherited,
+      ).toEqual(sourceSaved);
+
+      let releaseRead!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      let announceRead!: () => void;
+      const reading = new Promise<void>((resolve) => {
+        announceRead = resolve;
+      });
+      const catalogFetch = NativeWebHost.prototype.fetch;
+      let waiting = true;
+      NativeWebHost.prototype.fetch = async function (path, grant, init) {
+        if (
+          waiting &&
+          path === '/api/session/events' &&
+          typeof init?.body === 'string'
+        ) {
+          const read = JSON.parse(init.body)?.payload?.args?.request;
+          if (
+            read?.address?.sessionId === sourceId &&
+            read.throughSeq !== undefined
+          ) {
+            waiting = false;
+            announceRead();
+            await gate;
+          }
+        }
+        return catalogFetch.call(this, path, grant, init);
+      };
+      const sibling = recovery.context.request.post(
+        sessionsPath + '/' + sourceId + '/fork',
+        { headers: recovery.headers, data: { commandId: randomUUID() } },
+      );
+      try {
+        await Promise.race([
+          reading,
+          sibling.then(() => {
+            throw new Error('Fork completed before the fixed-cut read');
+          }),
+        ]);
+        const laterSave = await recovery.context.request.post(sourcePath, {
+          headers: recovery.headers,
+          data: { commandId: randomUUID(), provider, model: selectedModel },
+        });
+        expect(laterSave.status()).toBe(200);
+        expect((await laterSave.json()).selection.revision).not.toBe(
+          sourceSaved.revision,
+        );
+      } finally {
+        releaseRead();
+        NativeWebHost.prototype.fetch = catalogFetch;
+      }
+      const siblingReply = await sibling;
+      expect(siblingReply.status()).toBe(200);
+      expect(await getChild((await siblingReply.json()).sessionId)).toEqual({
+        selection: null,
+        firstWrite: null,
+      });
+      const nextLogin = await login('pilot_browser_owner', origin);
+      const childPage = await nextLogin.context.newPage();
+      catalogState = 'missing';
+      await openSession(healthyChild, childPage, nextLogin);
+      await expect(
+        childPage.getByText('来源模型当前不可用，请重新选择后发送。', {
+          exact: true,
+        }),
+      ).toBeVisible();
+      await expect(
+        childPage.getByText('可沿用来源会话已使用的模型', { exact: false }),
+      ).toHaveCount(0);
+      await childPage
+        .getByLabel('消息', { exact: true })
+        .fill('Synthetic draft while the source model is missing');
+      await expect(
+        childPage.getByRole('button', { name: '发送消息', exact: true }),
+      ).toBeDisabled();
+      expect((await getChild(healthyChild)).inherited).toEqual(sourceSaved);
+      catalogState = 'outage';
+      await childPage.getByRole('button', { name: '选择会话模型' }).click();
+      await expect(
+        childPage.getByText('来源模型的可用性待核对。', { exact: true }),
+      ).toBeVisible();
+      await expect(
+        childPage.getByRole('button', { name: '发送消息', exact: true }),
+      ).toBeDisabled();
+      expect(received).toHaveLength(6);
+      catalogState = undefined;
+      await childPage.getByRole('button', { name: '选择会话模型' }).click();
+      await expect(
+        childPage.getByText(
+          '可沿用来源会话已使用的模型 ' + provider + ' / ' + selectedModel,
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await expect(
+        childPage
+          .getByText('Synthetic confirmed non-default source model', {
+            exact: true,
+          })
+          .first(),
+      ).toBeVisible();
+      expect(received).toHaveLength(6);
+      await childPage
+        .getByLabel('消息', { exact: true })
+        .fill('Synthetic first child send using the proved source');
+      const inheritedSend = childPage.getByRole('button', {
+        name: '发送消息',
+        exact: true,
+      });
+      await expect(inheritedSend).toBeEnabled();
+      await inheritedSend.click();
+      await expect.poll(() => received.length).toBe(7);
+      expect(received.at(-1)?.model).toBe(selectedModel);
+      await expect
+        .poll(
+          async () =>
+            (
+              await lab.owner.query(
+                "select f.model,f.selection_revision as revision,f.step_seq > n.source_through_seq as local_step, d.auth_session_id as login from session_model_first_write f join native_session n on n.id=f.native_session_id join session_prompt_dispatch d on d.native_session_id=n.id and d.request_id=f.selection_request_id where n.id=$1 and f.state='submitted'",
+                [healthyChild],
+              )
+            ).rows,
+        )
+        .toEqual([
+          {
+            model: selectedModel,
+            revision: sourceSaved.revision,
+            local_step: true,
+            login: nextLogin.headers['x-rdws-edit-session'],
+          },
+        ]);
+      expect(
+        (
+          await lab.owner.query(
+            'select revision from session_model_selection where native_session_id=$1',
+            [healthyChild],
+          )
+        ).rowCount,
+      ).toBe(0);
+      const submitFromOldLogin = await promptFrom(nextLogin);
+      const loggedOut = await nextLogin.context.request.post(
+        '/api/auth/sign-out',
+        { headers: nextLogin.headers, data: {} },
+      );
+      expect(loggedOut.ok()).toBe(true);
+      const staleRead = await nextLogin.context.request.get(
+        sessionsPath + '/' + healthyChild + '/model-selection',
+        { headers: nextLogin.headers },
+      );
+      expect(staleRead.status()).toBe(401);
+      expect((await submitFromOldLogin(healthyChild)).status()).toBe(401);
+      expect(received).toHaveLength(7);
       expect(
         await ui.evaluate(() => document.documentElement.scrollWidth),
       ).toBeLessThanOrEqual(390);

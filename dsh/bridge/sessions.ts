@@ -114,6 +114,7 @@ export async function sessionRpc(
   action: string,
   request: Record<string, unknown> | undefined,
   signal?: AbortSignal,
+  budget?: { remainingBytes: number },
 ) {
   const rpcId = randomUUID();
   const response = await host.fetch('/api/' + action, grant, {
@@ -127,7 +128,25 @@ export async function sessionRpc(
       payload: { args: request === undefined ? {} : { request } },
     }),
   });
-  const value: unknown = await response.json();
+  const limited =
+    budget && response.body
+      ? new Response(
+          response.body.pipeThrough(
+            new TransformStream<Uint8Array, Uint8Array>({
+              transform(chunk, controller) {
+                budget.remainingBytes -= chunk.byteLength;
+                if (budget.remainingBytes < 0)
+                  throw new RangeError(
+                    'Native history exceeds its evidence budget',
+                  );
+                controller.enqueue(chunk);
+              },
+            }),
+            { signal },
+          ),
+        )
+      : response;
+  const value: unknown = await limited.json();
   if (
     !response.ok ||
     !isRecord(value) ||
@@ -159,13 +178,22 @@ export async function sessionPage(
   throughSeq?: number,
   beforeSeq?: number,
   maxMessages = 20,
+  signal?: AbortSignal,
+  budget?: { remainingBytes: number },
 ): Promise<NativePage> {
-  const value = await sessionRpc(host, grant, 'session/events', {
-    address: { kind: 'session', sessionId },
-    maxMessages,
-    ...(throughSeq === undefined ? {} : { throughSeq }),
-    ...(beforeSeq === undefined ? {} : { beforeSeq }),
-  });
+  const value = await sessionRpc(
+    host,
+    grant,
+    'session/events',
+    {
+      address: { kind: 'session', sessionId },
+      maxMessages,
+      ...(throughSeq === undefined ? {} : { throughSeq }),
+      ...(beforeSeq === undefined ? {} : { beforeSeq }),
+    },
+    signal,
+    budget,
+  );
   if (
     !isRecord(value) ||
     !Number.isSafeInteger(value.cursor) ||

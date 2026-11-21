@@ -200,7 +200,7 @@
   - 已本地交付子项：[需求背景维护](02-directory-and-engineering-design.html#t12-background-evidence-20261120)。当前有权编辑者在上下文页单独保存，Native 下一步读取当前背景，旧冻结快照保持原样。双面复审、真实 PostgreSQL 旧行迁移和整仓 309 项通过；浏览器 46 项首轮通过，两项超时复跑通过，另有 Native 拒绝及超时用例 2 项通过。
   - 来源：I3-CONTEXT、D21；已有上下文同步契约。
 
-- [ ] **T13 · 模型与供应商管理**（进行中：本人选模、明确改选和未知来源子会话手动发送已在隔离工作台验证，待已生效来源对照、分层配置、附件和具名部署）
+- [ ] **T13 · 模型与供应商管理**（进行中：本人选模、明确改选和未知来源子会话手动发送已在隔离工作台验证，已验证可唯一归因的来源直接手发，待分层配置、附件和具名部署）
   - 说明：适配 DSH 原生配置界面和授权作用域，支持平台、项目和个人的分层选择。
   - 可验收目标：配置使用原生 Provider／Profile／Credentials；项目只使用允许集合；个人只在允许范围选择本次会话模型；平台锁定项不能被下级覆盖；普通 DTO、日志与页面不暴露凭据；不另建模型调用权威。
   - 已确认的选模验收：本人可在同一会话反复选择允许的模型，在下次本人有权发送时重验并应用。已选模型被停用或移出允许集合时，保留待发送输入，提示重新选择可用模型，由用户再次发送，无自动默认回退。验收分别核对保存、实际 Native 生效、撤权和其他会话隔离。详见[时点和验收](02-directory-and-engineering-design.html#t13-send-time-acceptance-20261118)。
@@ -208,9 +208,10 @@
   - 已确认的 D1、D2：A 保存失答可明确改选 B，服务端确认 B 后迟到的 A 不能覆盖，确认前保留草稿、确认后手动发送。父选择生效未知时允许派生和查看历史，子会话首次发送前由本人明确选择当前可用模型（可同值），再手动发送。[决策台账](00-decision-ledger.html#t13-choice-recovery-20261121) · [验收场景与 DSH 复用边界](02-directory-and-engineering-design.html#t13-choice-recovery-acceptance)
   - 已本地验证 D1 服务端：[明确替代未确认保存](02-directory-and-engineering-design.html#t13-superseded-save-plan)。同一事务保存新修订并登记原键终态，迟到请求无法覆盖。既有成功原键仍读回历史修订。草稿保留、手动发送与 D2 另验。
   - D2 已本地验证[正式接口派生和回放](02-directory-and-engineering-design.html#t13-pilot-native-fork-read)。同值修订生效未知时可派生、读取继承历史和重查原键。
-  - D2 已本地验证[子会话明确选择后发送](02-directory-and-engineering-design.html#t13-explicit-child-model-plan)。子本人同值保存取得独立修订，保存零推理。冷启后显式发送在冻结后再改选时仍命中原子修订，本地步和 Note 均在继承历史之后。父模型已用且无待生效选择的直接发送对照另验。
-  - [隔离试点工作台的选模、改选与手动发送](02-directory-and-engineering-design.html#t13-model-workbench-choice)已接入本人操作区。真实浏览器覆盖迟到 A、丢回执后刷新与纯读核对、未入箱后显式按原键提交、目录缺项后重选、子会话同值选择。普通及旁观会话沿原显示。正式分层配置、父模型已用的直接发送对照与产品走查继续单列。
+  - D2 已本地验证[子会话明确选择后发送](02-directory-and-engineering-design.html#t13-explicit-child-model-plan)。子本人同值保存取得独立修订，保存零推理。冷启后显式发送在冻结后再改选时仍命中原子修订，本地步和 Note 均在继承历史之后。下文记录已生效来源的直接发送对照。
+  - [隔离试点工作台的选模、改选与手动发送](02-directory-and-engineering-design.html#t13-model-workbench-choice)已接入本人操作区。真实浏览器覆盖迟到 A、丢回执后刷新与纯读核对、未入箱后显式按原键提交、目录缺项后重选、子会话同值选择。普通及旁观会话沿原显示。正式分层配置和产品走查继续单列。
   - [二次派生切点取证](02-directory-and-engineering-design.html#t13-nested-fork-evidence)已覆盖真实父、子、孙。未明确选模的孙会话可读祖先消息，主动发送得到 409，派发和持久首写均零行。两代继承标记和完整前缀与各自来源、截止核对。
+  - [已生效来源直接发送](02-directory-and-engineering-design.html#t13-proven-fork-send)在本机试点验证。父确切修订已有成功推理、固定前缀可完整核对时，子无需重新保存即可手动发送；同源兄弟遇父同值新修订时仍需显选。正式配置和具名部署按原判据。
   - 已确认的历史图片规则（T13-A2）：同一本人会话默认只发送文字。可一键「沿用上一张图」，输入框显示可移除缩略图，选择仅随本条消息生效。发送时重新核对当前登录、本人会话和适用模型外发权限。[产品决定](02-directory-and-engineering-design.html#t13-history-image-rule-20261120)。
   - 前置：T03；已核实所需原生公开配置接口。
   - 来源：D2、D19；台账模型配置权威。

@@ -134,7 +134,7 @@ export function createProjectRuntimes(
         models: pilot?.models ?? new Set([policy.model]),
       },
       modelPilot: pilot,
-      sessions: createSessionOperations(db, business, native),
+      sessions: createSessionOperations(db, business, native, !!pilot),
       runs: new ContextRuns(
         native.contextGeneration,
         (token) => native.verifyContext(token),

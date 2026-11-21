@@ -25,6 +25,8 @@ export const platformAccountAuditPath =
 export const sessionForkPath = '/api/requirements/:id/sessions/:sessionId/fork';
 export const sessionModelSelectionPath =
   '/api/requirements/:id/sessions/:sessionId/model-selection';
+export const promptReceiptPath =
+  '/api/requirements/:id/sessions/:sessionId/prompt-receipt';
 export const nativeBootstrapPath = '/api/dsh/:id/bootstrap';
 export const nativeTransportPath = '/api/dsh/:id/native/*';
 export const nativeMuxPath = '/api/dsh/:id/native/api/remote.mux';
@@ -73,5 +75,6 @@ export const isSessionWrite = (request: FastifyRequest) =>
   (request.routeOptions.url === sessionsPath ||
     request.routeOptions.url === sessionForkPath);
 export const isModelSelectionRequest = (request: FastifyRequest) =>
-  request.routeOptions.url === sessionModelSelectionPath &&
-  (request.method === 'GET' || request.method === 'POST');
+  (request.routeOptions.url === sessionModelSelectionPath &&
+    (request.method === 'GET' || request.method === 'POST')) ||
+  (request.routeOptions.url === promptReceiptPath && request.method === 'POST');

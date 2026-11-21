@@ -976,6 +976,7 @@ test.skipIf(process.platform !== 'darwin')(
       failingCatalogProvider = provider;
       const catalogPrompt = await prompt(firstPrompt, firstText);
       expect(catalogPrompt.status).toBe(503);
+      expect(catalogPrompt.headers.has('x-rdws-unsent-prompt')).toBe(false);
       expect(await catalogPrompt.json()).toEqual({
         error: '会话模型目录暂不可用',
       });
@@ -1481,15 +1482,62 @@ test.skipIf(process.platform !== 'darwin')(
           accepted_message_id: inserted[0]?.id,
         },
       ]);
+      const receipt = (text: string, loginHeaders = fresh) =>
+        fetch(
+          address +
+            '/api/requirements/' +
+            requirementId +
+            '/sessions/' +
+            encodeURIComponent(sessionId) +
+            '/prompt-receipt',
+          {
+            method: 'POST',
+            headers: loginHeaders,
+            body: JSON.stringify({
+              sessionId,
+              requestId: lostPrompt,
+              mode: 'queue',
+              content: [{ type: 'text', text }],
+            }),
+          },
+        );
+      const known = await receipt(lostText);
+      expect(known.status).toBe(200);
+      expect(await known.json()).toEqual({
+        requestId: lostPrompt,
+        state: 'accepted',
+      });
+      for (const [response, code] of [
+        [await receipt(lostText + '!'), 409],
+        [await receipt(lostText, otherHeaders), 403],
+        [
+          await receipt(lostText, {
+            ...fresh,
+            'x-rdws-edit-session': headers['x-rdws-edit-session'],
+          }),
+          401,
+        ],
+      ] as const) {
+        expect(response.status).toBe(code);
+        expect(await response.json()).not.toHaveProperty('state');
+      }
       const stillUnknown = await prompt(freezeKey, freezeText, coldWire);
       expect(stillUnknown.status).toBe(409);
+      expect(stillUnknown.headers.has('x-rdws-unsent-prompt')).toBe(false);
       await stillUnknown.text();
+      const unavailableKey = randomUUID();
       const notAllowed = await prompt(
-        randomUUID(),
+        unavailableKey,
         'Synthetic pending draft with a removed model',
         coldWire,
       );
       expect(notAllowed.status).toBe(409);
+      expect(notAllowed.headers.get('x-rdws-unsent-prompt')).toBe(
+        unavailableKey,
+      );
+      expect(notAllowed.headers.get('x-rdws-rejected-model-revision')).toBe(
+        newest.selection.revision,
+      );
       expect(await notAllowed.json()).toEqual({
         error: '已选模型当前不可用，请重新选择后发送',
       });

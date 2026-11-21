@@ -16,6 +16,7 @@ import { basename, join } from 'node:path';
 import { getCACertificates, setDefaultCACertificates } from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { buildApp } from '@rdws/server';
+import { NativeWebHost } from '@rdws/dsh/web';
 import { hashPassword } from 'better-auth/crypto';
 import { authorityDatabase } from '../helpers/authority-database.ts';
 import { journal } from '../helpers/native-journal.ts';
@@ -173,6 +174,7 @@ test('the model pilot browser opens cold sessions without activation and receive
   const finalPart = ' and finished';
   const received: { model: string; wrotePrompt: boolean }[] = [];
   let tlsConnections = 0;
+  let releaseDelayedSave: (() => void) | undefined;
   let releaseReply!: () => void;
   const replyGate = new Promise<void>((resolve) => {
     releaseReply = resolve;
@@ -576,14 +578,71 @@ test('the model pilot browser opens cold sessions without activation and receive
     await expect.poll(() => forSession(sessionId).length).toBeGreaterThan(0);
     await expect(page.getByTestId('active-session-model')).toBeVisible();
     const modelPath = `${sessionsPath}/${sessionId}/model-selection`;
-    const save = await current.context.request.post(modelPath, {
-      headers: current.headers,
-      data: { commandId: randomUUID(), provider, model: selectedModel },
+    await expect(
+      page.getByRole('button', { name: '选择会话模型' }),
+    ).toBeVisible();
+    const composerText = page.getByLabel('消息', { exact: true });
+    const sendButton = page.getByRole('button', {
+      name: '发送消息',
+      exact: true,
     });
-    expect(save.status()).toBe(200);
-    const selection = (await save.json()).selection;
+    await composerText.fill(livePromptText);
+    let delayedId = '';
+    const delayedSave = new Promise<void>((resolve) => {
+      releaseDelayedSave = resolve;
+    });
+    await page.route('**' + modelPath, async (route) => {
+      const req = route.request();
+      if (
+        req.method() === 'POST' &&
+        req.postDataJSON().model === firstModel &&
+        !delayedId
+      ) {
+        delayedId = req.postDataJSON().commandId;
+        await delayedSave;
+      }
+      await route.continue();
+    });
+    await page.getByRole('button', { name: '选择会话模型' }).click();
+    const modelSelect = page.getByLabel('可用模型');
+    await modelSelect.selectOption(JSON.stringify([provider, firstModel]));
+    await page.getByRole('button', { name: '保存选择', exact: true }).click();
+    await expect.poll(() => !!delayedId).toBe(true);
+    await expect(sendButton).toBeDisabled();
+    await page
+      .locator('form.composer')
+      .evaluate((element) => (element as HTMLFormElement).requestSubmit());
     expect(tlsConnections).toBe(0);
-    await page.getByLabel('消息', { exact: true }).fill(livePromptText);
+    await modelSelect.selectOption(JSON.stringify([provider, selectedModel]));
+    const confirmation = page.waitForResponse(
+      (r) =>
+        r.url().endsWith(modelPath) &&
+        r.request().method() === 'POST' &&
+        r.request().postDataJSON().model === selectedModel,
+    );
+    await page.getByRole('button', { name: '明确改选并保存' }).click();
+    const confirmed = await confirmation;
+    expect(confirmed.status()).toBe(200);
+    expect(confirmed.request().postDataJSON().supersedes).toEqual([delayedId]);
+    const selection = (await confirmed.json()).selection;
+    await expect(sendButton).toBeEnabled();
+    const late = page.waitForResponse(
+      (r) =>
+        r.url().endsWith(modelPath) &&
+        r.request().method() === 'POST' &&
+        r.request().postDataJSON().commandId === delayedId,
+    );
+    releaseDelayedSave!();
+    expect((await late).status()).toBe(409);
+    await expect(composerText).toHaveValue(livePromptText);
+    expect(
+      (
+        await current.context.request.get(modelPath, {
+          headers: current.headers,
+        })
+      ).status(),
+    ).toBe(200);
+    expect(tlsConnections).toBe(0);
     await page.getByRole('button', { name: '发送消息', exact: true }).click();
     await expect(page.getByText(replyPart, { exact: true })).toBeVisible();
     expect(received).toEqual([{ model: selectedModel, wrotePrompt: true }]);
@@ -650,6 +709,9 @@ test('the model pilot browser opens cold sessions without activation and receive
     ).toBeLessThanOrEqual(390);
     await expect(page.locator('html')).toHaveAttribute('theme-mode', 'light');
 
+    await expect(
+      view.getByRole('button', { name: '选择会话模型' }),
+    ).toHaveCount(0);
     const neighborPage = await current.context.newPage();
     neighborPage.setDefaultTimeout(8000);
     const neighborFollows = observeFollows(neighborPage);
@@ -689,6 +751,9 @@ test('the model pilot browser opens cold sessions without activation and receive
       neighborPage.getByRole('button', { name: '发送消息', exact: true }),
     ).toBeEnabled();
 
+    await expect(
+      neighborPage.getByRole('button', { name: '选择会话模型' }),
+    ).toHaveCount(0);
     const original = reconnected.frame.payload.args.request;
     const ordinary = structuredClone(
       neighborFollows.find(
@@ -788,8 +853,313 @@ test('the model pilot browser opens cold sessions without activation and receive
     ).toEqual([]);
     expect(received).toHaveLength(1);
     expect(tlsConnections).toBe(1);
+    const recovery = await login('pilot_browser_owner', origin);
+    const ui = await recovery.context.newPage();
+    ui.setDefaultTimeout(8000);
+    const openSession = async (id: string) => {
+      await ui.goto(url);
+      const reply = await recovery.context.request.get(sessionsPath, {
+        headers: recovery.headers,
+      });
+      const { sessions: directory } = (await reply.json()) as {
+        sessions: { id: string; sourceSessionId?: string }[];
+      };
+      const offset = directory.findIndex((row) => row.id === id);
+      expect(offset).toBeGreaterThanOrEqual(0);
+      await ui
+        .getByRole('button', {
+          name:
+            '会话 ' +
+            (offset + 1) +
+            ' · 本人' +
+            (directory[offset]!.sourceSessionId ? ' · 派生' : ''),
+          exact: true,
+        })
+        .click();
+      await expect(ui.getByTestId('active-session-model')).toBeVisible();
+    };
+    await openSession(sessionId);
+    await ui.setViewportSize({ width: 390, height: 850 });
+    await ui.emulateMedia({ colorScheme: 'dark' });
+    await expect(ui.locator('html')).toHaveAttribute('theme-mode', 'dark');
+    const draft = ui.getByLabel('消息', { exact: true });
+    const send = ui.getByRole('button', { name: '发送消息', exact: true });
+    const pick = async (model: string) => {
+      const trigger = ui.getByRole('button', { name: '选择会话模型' });
+      if ((await trigger.getAttribute('aria-expanded')) !== 'true')
+        await trigger.click();
+      await ui
+        .getByLabel('可用模型')
+        .selectOption(JSON.stringify([provider, model]));
+    };
+    await draft.fill('Synthetic draft after a lost save');
+    await pick(selectedModel);
+    await ui.getByLabel('可用模型').press('Escape');
+    await expect(
+      ui.getByRole('button', { name: '选择会话模型' }),
+    ).toBeFocused();
+    await pick(selectedModel);
+    let lostSaveId = '';
+    let holdSavedReply = false;
+    let delayedSuccessId = '';
+    let releaseSuccess: (() => void) | undefined;
+    await ui.route('**' + modelPath, async (route) => {
+      if (route.request().method() === 'POST' && !lostSaveId) {
+        lostSaveId = route.request().postDataJSON().commandId;
+        const reply = await route.fetch();
+        expect(reply.status()).toBe(200);
+        return route.abort('failed');
+      }
+      if (route.request().method() === 'POST' && holdSavedReply) {
+        holdSavedReply = false;
+        const reply = await route.fetch();
+        expect(reply.status()).toBe(200);
+        delayedSuccessId = route.request().postDataJSON().commandId;
+        await new Promise<void>((resolve) => {
+          releaseSuccess = resolve;
+        });
+        return route.fulfill({ response: reply });
+      }
+      await route.continue();
+    });
+    await ui.getByRole('button', { name: '保存选择', exact: true }).click();
+    await expect(
+      ui.getByRole('button', { name: '按原键重试保存' }),
+    ).toBeEnabled();
+    await openSession(sessionId);
+    await expect(draft).toHaveValue('Synthetic draft after a lost save');
+    await expect(send).toBeDisabled();
+    const ack = ui.waitForResponse(
+      (r) => r.url().endsWith(modelPath) && r.request().method() === 'POST',
+    );
+    await ui.getByRole('button', { name: '按原键重试保存' }).click();
+    expect((await ack).request().postDataJSON().commandId).toBe(lostSaveId);
+    await expect(send).toBeEnabled();
+    expect(received).toHaveLength(1);
+    holdSavedReply = true;
+    await pick(firstModel);
+    await ui.getByRole('button', { name: '保存选择', exact: true }).click();
+    try {
+      await expect.poll(() => delayedSuccessId).not.toBe('');
+      await pick(selectedModel);
+      await ui.getByRole('button', { name: '明确改选并保存' }).click();
+      await expect(send).toBeEnabled();
+      const delayedSuccess = ui.waitForResponse(
+        (r) =>
+          r.url().endsWith(modelPath) &&
+          r.request().method() === 'POST' &&
+          r.request().postDataJSON().commandId === delayedSuccessId,
+      );
+      releaseSuccess!();
+      expect((await delayedSuccess).status()).toBe(200);
+      await expect(
+        ui.getByText('已保存 ' + provider + ' / ' + selectedModel, {
+          exact: false,
+        }),
+      ).toBeVisible();
+      await expect(draft).toHaveValue('Synthetic draft after a lost save');
+      expect(received).toHaveLength(1);
+    } finally {
+      releaseSuccess?.();
+    }
+    let nextFault:
+      'accepted-lost' | 'not-arrived' | 'missing' | 'outage' | undefined;
+    let catalogState: 'missing' | 'outage' | undefined;
+    const posted: {
+      requestId: string;
+      content: unknown;
+      clientTimeZone?: string;
+    }[] = [];
+    const originalFetch = NativeWebHost.prototype.fetch;
+    NativeWebHost.prototype.fetch = async function (path, ...args) {
+      const reply = await originalFetch.call(this, path, ...args);
+      if (
+        !catalogState ||
+        path !== '/api/session/modelCatalog' ||
+        this.projectId !== project
+      )
+        return reply;
+      const envelope = await reply.json();
+      const catalog = envelope.result.value;
+      catalog.groups = catalog.groups.map(
+        (g: { id: string; models: { id: string }[] }) =>
+          g.id === provider
+            ? { ...g, models: g.models.filter((m) => m.id !== selectedModel) }
+            : g,
+      );
+      if (catalogState === 'outage')
+        catalog.failures.push({
+          id: provider,
+          name: 'Fixture',
+          message: 'Synthetic catalog outage',
+        });
+      return Response.json(envelope);
+    };
+    const promptRoute = rootApi + '/native/api/session/prompt';
+    await ui.route('**' + promptRoute, async (route) => {
+      const original = route.request().postDataJSON().payload.args.request;
+      posted.push(original);
+      const cause = nextFault;
+      nextFault = undefined;
+      if (cause === 'accepted-lost') {
+        const reply = await route.fetch();
+        expect(reply.status()).toBe(200);
+        expect((await reply.json()).result.value.accepted).toBe(true);
+        return route.abort('failed');
+      }
+      if (cause === 'not-arrived') return route.abort('failed');
+      if (cause === 'missing' || cause === 'outage') catalogState = cause;
+      await route.continue();
+    });
+    const rows = async (key: string) =>
+      (
+        await lab.owner.query(
+          'select state from session_prompt_dispatch where native_session_id=$1 and request_id=$2',
+          [sessionId, key],
+        )
+      ).rows;
+    const check = ui.getByRole('button', { name: '核对原消息', exact: true });
+    try {
+      nextFault = 'accepted-lost';
+      await draft.fill('Synthetic accepted message with lost response');
+      await send.click();
+      await expect(check).toBeEnabled();
+      await expect.poll(() => received.length).toBe(2);
+      await openSession(sessionId);
+      await expect(draft).toHaveValue(
+        'Synthetic accepted message with lost response',
+      );
+      await expect(send).toBeDisabled();
+      await ui
+        .locator('form.composer')
+        .evaluate((el) => (el as HTMLFormElement).requestSubmit());
+      await check.click();
+      await expect(check).toHaveCount(0);
+      expect(posted).toHaveLength(1);
+      expect(await rows(posted[0]!.requestId)).toEqual([{ state: 'accepted' }]);
+      expect(received).toHaveLength(2);
+      nextFault = 'not-arrived';
+      await draft.fill('Synthetic message originally not delivered');
+      await send.click();
+      await expect(check).toBeEnabled();
+      await check.click();
+      await expect(
+        ui.getByText('原消息接纳状态尚待核对。', { exact: true }),
+      ).toBeVisible();
+      expect(posted).toHaveLength(2);
+      expect(await rows(posted[1]!.requestId)).toEqual([]);
+      expect(received).toHaveLength(2);
+      await ui.getByRole('button', { name: '按原键继续提交原消息' }).click();
+      await expect.poll(() => received.length).toBe(3);
+      await expect(check).toHaveCount(0);
+      expect(posted[2]).toEqual(posted[1]);
+      expect(await rows(posted[1]!.requestId)).toEqual([{ state: 'accepted' }]);
+      nextFault = 'missing';
+      await draft.fill('Synthetic explicit reselect after healthy removal');
+      const missingReply = ui.waitForResponse((r) =>
+        r.url().endsWith(promptRoute),
+      );
+      await send.click();
+      const refused = await missingReply;
+      expect(refused.status()).toBe(409);
+      expect(refused.headers()['x-rdws-unsent-prompt']).toBe(
+        posted[3]!.requestId,
+      );
+      expect(await rows(posted[3]!.requestId)).toEqual([]);
+      expect(
+        (await journal(root, sessionId)).events.some(
+          ({ type, data }) =>
+            type === 'agent/inbox/spliced' &&
+            data.inserted?.some(
+              ({ source }: { source?: { rpcId?: string } }) =>
+                source?.rpcId === posted[3]!.requestId,
+            ),
+        ),
+      ).toBe(false);
+      await expect(
+        ui.getByText('已选模型当前不可用，请重新选择后发送。', { exact: true }),
+      ).toBeVisible();
+      await expect(send).toBeDisabled();
+      await expect(draft).toHaveValue(
+        'Synthetic explicit reselect after healthy removal',
+      );
+      await pick(firstModel);
+      await ui.getByRole('button', { name: '保存选择', exact: true }).click();
+      await expect(send).toBeEnabled();
+      expect(received).toHaveLength(3);
+      await send.click();
+      await expect.poll(() => received.at(-1)?.model).toBe(firstModel);
+      expect(received).toHaveLength(4);
+      await expect(draft).toHaveValue('');
+      catalogState = undefined;
+      nextFault = 'outage';
+      await draft.fill('Synthetic temporarily unavailable catalog');
+      const outageReply = ui.waitForResponse((r) =>
+        r.url().endsWith(promptRoute),
+      );
+      await send.click();
+      const outage = await outageReply;
+      expect(outage.status()).toBe(503);
+      expect(outage.headers()['x-rdws-unsent-prompt']).toBeUndefined();
+      await expect(check).toBeVisible();
+      await expect(draft).toHaveValue(
+        'Synthetic temporarily unavailable catalog',
+      );
+      expect(received).toHaveLength(4);
+      expect(await rows(posted.at(-1)!.requestId)).toEqual([]);
+      catalogState = undefined;
+      await pick(firstModel);
+      const sameValueSave = ui.waitForResponse(
+        (r) => r.url().endsWith(modelPath) && r.request().method() === 'POST',
+      );
+      await ui.getByRole('button', { name: '保存选择', exact: true }).click();
+      const parentSelection = (await (await sameValueSave).json()).selection;
+      expect(parentSelection.model).toBe(firstModel);
+      expect(
+        await (
+          await recovery.context.request.get(modelPath, {
+            headers: recovery.headers,
+          })
+        ).json(),
+      ).toEqual({ selection: parentSelection, firstWrite: null });
+      const parentPosts = posted.length;
+      const forkResponse = ui.waitForResponse(
+        (r) => r.request().method() === 'POST' && r.url().endsWith('/fork'),
+      );
+      await ui
+        .getByRole('button', { name: '派生当前会话', exact: true })
+        .click();
+      const forked = await forkResponse;
+      expect(forked.status()).toBe(200);
+      const childId = (await forked.json()).sessionId;
+      await openSession(childId);
+      await expect(
+        ui
+          .getByText('Synthetic explicit reselect after healthy removal', {
+            exact: true,
+          })
+          .first(),
+      ).toBeVisible();
+      expect(posted).toHaveLength(parentPosts);
+      expect(received).toHaveLength(4);
+      await draft.fill('Synthetic first explicit child choice');
+      await expect(send).toBeDisabled();
+      await pick(firstModel);
+      await ui.getByRole('button', { name: '保存选择', exact: true }).click();
+      await expect(send).toBeEnabled();
+      expect(received).toHaveLength(4);
+      await send.click();
+      await expect.poll(() => received.length).toBe(5);
+      expect(received.at(-1)?.model).toBe(firstModel);
+      expect(
+        await ui.evaluate(() => document.documentElement.scrollWidth),
+      ).toBeLessThanOrEqual(390);
+    } finally {
+      NativeWebHost.prototype.fetch = originalFetch;
+    }
     expect(errors).toEqual([]);
   } finally {
+    releaseDelayedSave?.();
     releaseReply();
     const browserCleanup = await Promise.allSettled(
       contexts.map((context) => context.close()),

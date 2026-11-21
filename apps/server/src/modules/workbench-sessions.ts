@@ -22,7 +22,9 @@ import {
   sessionAnchorsPath,
   sessionExecutionPath,
   sessionModelSelectionPath,
+  promptReceiptPath,
 } from './workbench-paths.ts';
+import { digestOf } from './business.ts';
 import { fail, type WorkbenchRuntime } from './workbench-runtime.ts';
 import { isMicrosecondTimestamp } from './workbench-audit.ts';
 
@@ -98,6 +100,44 @@ export function registerSessions(
         return result;
       },
     );
+    app.post(promptReceiptPath, async (request, reply) => {
+      const { original, current, scope } = await selectionScope(request);
+      const input = request.body;
+      if (
+        !isRecord(input) ||
+        !onlyKeys(input, [
+          'requestId',
+          'sessionId',
+          'content',
+          'mode',
+          'clientTimeZone',
+        ]) ||
+        input.sessionId !== scope.sessionId ||
+        typeof input.requestId !== 'string' ||
+        !input.requestId ||
+        input.requestId.length > 128 ||
+        input.mode !== 'queue' ||
+        !Array.isArray(input.content) ||
+        input.content.length !== 1 ||
+        !isRecord(input.content[0]) ||
+        !onlyKeys(input.content[0], ['type', 'text']) ||
+        input.content[0].type !== 'text' ||
+        typeof input.content[0].text !== 'string' ||
+        (input.clientTimeZone !== undefined &&
+          typeof input.clientTimeZone !== 'string')
+      )
+        fail(400, '原消息核对参数无效');
+      const row = await store.lookupPrompt(
+        scope,
+        { requestId: input.requestId, inputDigest: digestOf(input) },
+        current,
+      );
+      await confirmAccess(request.headers, original);
+      return reply.header('cache-control', 'no-store').send({
+        requestId: input.requestId,
+        state: row?.state === 'accepted' ? 'accepted' : 'unknown',
+      });
+    });
     app.post(sessionModelSelectionPath, async (request, reply) => {
       reply.header('cache-control', 'no-store');
       const data = request.body;
@@ -133,7 +173,9 @@ export function registerSessions(
         },
       );
       await confirmAccess(request.headers, original);
-      return { selection: saved };
+      return reply
+        .header('x-rdws-model-command', data.commandId)
+        .send({ selection: saved });
     });
   }
 

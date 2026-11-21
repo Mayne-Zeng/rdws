@@ -1396,6 +1396,34 @@ input[type='checkbox'] {
 .composer .t-button {
   align-self: flex-end;
 }
+.model-composer-actions,
+.session-model-choices {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+}
+.model-composer-actions > button:not(.t-button),
+.session-model-choices select {
+  color: var(--ink);
+  background-color: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  min-height: var(--control-h);
+}
+.model-composer-actions > button:not(.t-button) {
+  padding: 0 10px;
+  cursor: pointer;
+}
+.session-model-choices label,
+.session-model-choices select {
+  max-width: 100%;
+}
+.session-model-choices label {
+  display: grid;
+  gap: 4px;
+}
 .mobile-menu,
 .rail-scrim,
 .rail-close {

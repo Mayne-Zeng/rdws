@@ -16,6 +16,7 @@ import type {
   SessionBinding,
 } from '@deepseek-ai/dsh-api-session-controller/client';
 import type {} from '@deepseek-ai/dsh-api-session-controller/remote';
+import type { SessionPromptRequest } from '@deepseek-ai/dsh-api-session-controller/types';
 import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import { passiveModelFollow } from './passive-follow.ts';
 declare module '@deepseek-ai/dsh-api-session-controller/client' {
@@ -24,6 +25,13 @@ declare module '@deepseek-ai/dsh-api-session-controller/client' {
   }
 }
 export type { SessionBinding };
+export type PilotPrompt = {
+  sessionId: string;
+  requestId: string;
+  mode: 'queue';
+  content: [{ type: 'text'; text: string }];
+  clientTimeZone?: string;
+};
 let serial: Promise<unknown> = Promise.resolve();
 let active: { dispose: () => Promise<void> } | undefined;
 export async function readSessionHistory(
@@ -105,9 +113,10 @@ export function connectNative(
       let modelEgressPaused = payload.modelEgressPaused === true;
       let promptSequence = 0;
       let observedSequence = 0;
+      const captures = new Map<string, (input: PilotPrompt) => void>();
       const promptAttempts = new Map<
         string,
-        { sequence: number; paused: boolean }
+        { sequence: number; paused: boolean; unavailable?: string }
       >();
       let disposed = false;
       let generation = crypto.randomUUID();
@@ -148,7 +157,9 @@ export function connectNative(
           fetch: async (input: string | URL, init: RequestInit) => {
             const headers = new Headers(init.headers);
             const path = String(input).replace(/^\//, '');
-            let attempt: { sequence: number; paused: boolean } | undefined;
+            let attempt:
+              | { sequence: number; paused: boolean; unavailable?: string }
+              | undefined;
             if (init.method?.toUpperCase() === 'POST') {
               headers.set('x-rdws-client-generation', generation);
               headers.set('x-rdws-native-login', loginBinding);
@@ -161,6 +172,7 @@ export function connectNative(
                 if (typeof id === 'string') {
                   attempt = { sequence: ++promptSequence, paused: false };
                   promptAttempts.set(id, attempt);
+                  captures.get(id)?.(envelope.payload.args.request);
                 }
               }
             }
@@ -177,6 +189,28 @@ export function connectNative(
               if (attempt.sequence > observedSequence) {
                 observedSequence = attempt.sequence;
                 modelEgressPaused = true;
+              }
+            }
+            if (
+              attempt &&
+              response.status === 409 &&
+              typeof init.body === 'string'
+            ) {
+              const id = JSON.parse(init.body).payload.args.request.requestId;
+              const revision = response.headers.get(
+                'x-rdws-rejected-model-revision',
+              );
+              if (
+                response.headers.get('x-rdws-unsent-prompt') === id &&
+                revision &&
+                /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(revision)
+              ) {
+                const result = await response
+                  .clone()
+                  .json()
+                  .catch(() => undefined);
+                if (result?.error === '已选模型当前不可用，请重新选择后发送')
+                  attempt.unavailable = revision;
               }
             }
             return response;
@@ -247,6 +281,35 @@ export function connectNative(
           root,
           get modelEgressPaused() {
             return modelEgressPaused;
+          },
+          sessionModelPilot: payload.sessionModelPilot === true,
+          unavailablePromptRevision(id: string) {
+            return promptAttempts.get(id)?.unavailable;
+          },
+          async sendPilotText(
+            binding: SessionBinding,
+            id: string,
+            text: string,
+            before: (input: PilotPrompt) => void,
+            original?: PilotPrompt,
+          ) {
+            if (!payload.sessionModelPilot || captures.has(id))
+              throw new Error('消息提交状态待核对');
+            captures.set(id, before);
+            try {
+              if (original)
+                return await root
+                  .get('remote')!
+                  .session.prompt(original as unknown as SessionPromptRequest);
+              return await binding.session.prompt(
+                [{ type: 'text', text }],
+                'queue',
+                undefined,
+                id as NonNullable<SessionPromptRequest['requestId']>,
+              );
+            } finally {
+              captures.delete(id);
+            }
           },
           finishPrompt(requestId: string, accepted: boolean) {
             const attempt = promptAttempts.get(requestId);

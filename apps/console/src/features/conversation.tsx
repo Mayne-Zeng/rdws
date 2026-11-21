@@ -16,6 +16,7 @@ import {
   type SessionBinding,
 } from '../lib/native.ts';
 import { Icon } from '../lib/ui.tsx';
+import { SessionModelComposer } from './session-model-composer.tsx';
 import { SessionModelStatus } from './session-model.tsx';
 import type { SessionOperationResult } from '@rdws/contracts';
 import { SessionHistory } from './session-history.tsx';
@@ -118,6 +119,8 @@ function SessionPanel({
   runtime,
   id,
   own,
+  isFork,
+  login,
   projectId,
   requirementId,
   draft,
@@ -126,6 +129,8 @@ function SessionPanel({
   runtime: NativeRuntime;
   id: string;
   own: boolean;
+  isFork: boolean;
+  login: NativeTab['login'];
   projectId: string;
   requirementId: string;
   draft: NativeTab['draft'];
@@ -215,12 +220,8 @@ function SessionPanel({
       ref?.release();
     };
   }, [runtime, id]);
-  async function send(event: FormEvent) {
-    event.preventDefault();
-    if (!binding || !input.trim()) return;
-    setBusy(true);
-    setError('');
-    const value = input;
+  function begin(value: string) {
+    if (!binding) return;
     submissionState.current = {
       text: value,
       seq: Math.max(
@@ -233,6 +234,18 @@ function SessionPanel({
       failed: false,
     };
     setRetryMessage('');
+  }
+  function accepted(value: string) {
+    if (!submissionState.current?.failed)
+      setInput((current) => (current === value ? '' : current));
+  }
+  async function send(event: FormEvent) {
+    event.preventDefault();
+    if (!binding || !input.trim()) return;
+    setBusy(true);
+    setError('');
+    const value = input;
+    begin(value);
     const submission = binding.session.beginSubmission({
       mode: 'queue',
       text: value,
@@ -247,8 +260,7 @@ function SessionPanel({
       );
       if (!result.ok) throw new Error();
       runtime.finishPrompt(submission.requestId, true);
-      if (!submissionState.current.failed)
-        setInput((current) => (current === value ? '' : current));
+      accepted(value);
     } catch {
       if (!runtime.finishPrompt(submission.requestId, false))
         setError('消息发送失败，请检查权限或重新连接');
@@ -287,7 +299,24 @@ function SessionPanel({
           <Loading text="正在读取会话" />
         )}
       </div>
-      {own && (
+      {own && runtime.sessionModelPilot && (
+        <SessionModelComposer
+          runtime={runtime}
+          binding={binding}
+          id={id}
+          isFork={isFork}
+          loginId={login.sessionId}
+          userId={login.userId}
+          projectId={projectId}
+          requirementId={requirementId}
+          input={input}
+          setInput={setInput}
+          generating={generating}
+          begin={begin}
+          accepted={accepted}
+        />
+      )}
+      {own && !runtime.sessionModelPilot && (
         <form className="composer" onSubmit={send}>
           <label htmlFor="prompt">消息</label>
           <textarea
@@ -626,7 +655,14 @@ function ConnectedConversation({
               />
             ) : (
               <SessionPanel
-                key={selected}
+                key={JSON.stringify([
+                  login.sessionId,
+                  projectId,
+                  requirementId,
+                  selected,
+                ])}
+                isFork={!!selectedSession.sourceSessionId}
+                login={login}
                 runtime={runtime}
                 id={selected}
                 projectId={projectId}

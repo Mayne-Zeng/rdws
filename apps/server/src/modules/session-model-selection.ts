@@ -91,13 +91,24 @@ export type NativePromptTicket = {
   expiresAt: number;
 };
 
+export class PromptModelUnavailable extends Error {
+  readonly statusCode = 409;
+  readonly publicMessage = '已选模型当前不可用，请重新选择后发送';
+  constructor(readonly revision: string) {
+    super('已选模型当前不可用，请重新选择后发送');
+  }
+}
+
 function available(
   options: SessionModelOptions,
   model: Pick<SavedSessionModel, 'provider' | 'model'>,
+  promptRevision?: string,
 ) {
   if (!options.isCurrent()) businessError(503, '会话模型目录暂不可用');
-  if (options.provider !== model.provider || !options.models.has(model.model))
+  if (options.provider !== model.provider || !options.models.has(model.model)) {
+    if (promptRevision) throw new PromptModelUnavailable(promptRevision);
     businessError(409, '已选模型当前不可用，请重新选择后发送');
+  }
 }
 
 function dispatchKey(scope: ModelSessionScope, requestId: string) {
@@ -356,7 +367,7 @@ export function createSessionModelSelection(
           saved,
         );
       const selected = saved ?? defaultModel;
-      available(options, selected);
+      available(options, selected, saved?.revision);
       const [reserved] = await tx
         .insert(dispatches)
         .values({
@@ -465,5 +476,20 @@ export function createSessionModelSelection(
     });
   }
 
-  return { read, save, readPrompt, reservePrompt, freezePrompt, confirmPrompt };
+  function lookupPrompt(
+    scope: ModelSessionScope,
+    input: { requestId: string; inputDigest: string },
+    current: () => void,
+  ) {
+    return scoped(scope, current, (tx) => promptRecord(tx, scope, input));
+  }
+  return {
+    read,
+    save,
+    lookupPrompt,
+    readPrompt,
+    reservePrompt,
+    freezePrompt,
+    confirmPrompt,
+  };
 }

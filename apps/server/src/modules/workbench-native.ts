@@ -6,6 +6,7 @@ import {
   readPilotModelOptions,
   type ProjectRuntime,
 } from './native-projects.ts';
+import { PromptModelUnavailable } from './session-model-selection.ts';
 import type {
   PromptDispatch,
   SessionModelOptions,
@@ -299,17 +300,28 @@ export async function registerNativeTransport(
           runtime,
           grant({ ...original, runtime }),
         ));
-      const intent = await mode.store.reservePrompt(
-        actionScope,
-        promptKey,
-        current,
-        readOptions,
-        {
+      const intent = await mode.store
+        .reservePrompt(actionScope, promptKey, current, readOptions, {
           provider: mode.policy.provider,
           model: mode.policy.defaultModel,
           revision: native.contextGeneration,
-        },
-      );
+        })
+        .catch(async (error: unknown) => {
+          if (
+            error instanceof PromptModelUnavailable &&
+            !prior &&
+            /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(requestId) &&
+            !(await mode.store.lookupPrompt(actionScope, promptKey, current))
+          ) {
+            await confirmAccess(request.headers, original);
+            canSend();
+            if (!transfer.revoked)
+              reply
+                .header('x-rdws-unsent-prompt', requestId)
+                .header('x-rdws-rejected-model-revision', error.revision);
+          }
+          throw error;
+        });
       if (intent.state !== 'reserved') {
         if (intent.state !== 'accepted' && !(await observe(intent)))
           fail(409, '原消息接纳状态尚待核对');

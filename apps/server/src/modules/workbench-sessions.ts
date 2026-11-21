@@ -366,11 +366,6 @@ export function registerSessions(
   ) {
     const requirementId = (request.params as { id: string }).id;
     const scope = await access(request.headers, requirementId);
-    if (
-      sourceSessionId &&
-      modelSelection?.policy.projectId === scope.item.projectId
-    )
-      fail(403, '隔离选模暂不支持派生会话');
     const assertOpen = () => {
       if (stale(scope)) fail(401, '授权已变化');
     };

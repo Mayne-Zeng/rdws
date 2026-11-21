@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { getCACertificates, setDefaultCACertificates } from 'node:tls';
 import { zstdCompressSync } from 'node:zlib';
 import { bodyHash, isRecord } from '@rdws/dsh/access';
-import { forkBoundary, sessionPage, sessionRpc } from '@rdws/dsh/sessions';
+import { forkBoundary, sessionPage } from '@rdws/dsh/sessions';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { buildApp } from '@rdws/server';
 import { hashPassword } from 'better-auth/crypto';
@@ -652,20 +652,78 @@ test.skipIf(process.platform !== 'darwin')(
       expect(modelsReceived).toEqual([alpha]);
       const stableCut = await forkBoundary(original, browser, sessionId);
       expect(stableCut).toBe(currentEvents.at(-1)?.seq);
-      const { sessionId: child } = (await sessionRpc(
-        original,
-        {
-          ...browser,
-          purpose: 'fork',
-          sourceSessionId: sessionId,
-          atSeq: stableCut!,
-        },
-        'session/fork',
-        { sessionId, atSeq: stableCut, allowMigration: false },
-      )) as { sessionId: string };
+      const forkCommand = randomUUID();
+      const forkFromWorkbench = async () => {
+        const reply = await bff.inject({
+          method: 'POST',
+          url: sessions + '/' + sessionId + '/fork',
+          headers,
+          payload: { commandId: forkCommand },
+        });
+        expect(reply.statusCode).toBe(200);
+        expect(reply.json().status).toBe('mapped');
+        return reply.json<{ sessionId: string }>().sessionId;
+      };
+      const child = await forkFromWorkbench();
       expect(child).not.toBe(sessionId);
+      const history = async (id: string) => {
+        const result = await bff.inject({
+          url:
+            sessions +
+            '/' +
+            id +
+            '/history?throughSeq=' +
+            stableCut +
+            '&pageSize=50',
+          headers,
+        });
+        expect(result.statusCode).toBe(200);
+        return result.json<{ events: { type: string; seq: number }[] }>()
+          .events;
+      };
+      const parentHistory = await history(sessionId);
+      expect(
+        parentHistory.some(({ type }) => type === 'assistant/message'),
+      ).toBe(true);
+      expect(bodyHash(await history(child))).toBe(bodyHash(parentHistory));
+      wire['x-rdws-client-generation'] = randomUUID();
+      const childAttempt = await bff.inject({
+        method: 'POST',
+        url: '/api/dsh/' + requirement + '/native/api/session/prompt',
+        headers: wire,
+        payload: {
+          type: 'client-request',
+          method: 'session/prompt',
+          rpcId: randomUUID(),
+          payload: {
+            args: {
+              request: {
+                sessionId: child,
+                requestId: randomUUID(),
+                mode: 'queue',
+                content: [{ type: 'text', text: 'Synthetic unselected child' }],
+              },
+            },
+          },
+        },
+      });
+      expect(childAttempt.statusCode).toBe(403);
+      expect(childAttempt.json()).toEqual({
+        error: '隔离选模暂不支持派生会话',
+      });
+      expect(connections).toBe(1);
       await send(later);
       const finalEvents = await finish(4);
+      expect(await forkFromWorkbench()).toBe(child);
+      expect(
+        (
+          await lab.owner.query(
+            'select id,owner_id,source_through_seq::int as cut from native_session where requirement_id=$1 and source_session_id=$2',
+            [requirement, sessionId],
+          )
+        ).rows,
+      ).toEqual([{ id: child, owner_id: owner, cut: stableCut }]);
+
       expect(modelsReceived).toEqual([alpha, beta]);
       expect(connections).toBe(2);
       await bff.close();

@@ -809,7 +809,14 @@ test.skipIf(process.platform !== 'darwin')(
           body: JSON.stringify({ commandId: randomUUID() }),
         },
       );
-      expect(forked.status).toBe(403);
+      expect(forked.status).toBe(409);
+      const deniedFork = await fetch(sessionsPath + '/' + sessionId + '/fork', {
+        method: 'POST',
+        headers: otherHeaders,
+        body: JSON.stringify({ commandId: randomUUID() }),
+      });
+      expect(deniedFork.status).toBe(403);
+      await deniedFork.text();
       await forked.text();
       expect(supplierRequests).toBe(0);
       expect(

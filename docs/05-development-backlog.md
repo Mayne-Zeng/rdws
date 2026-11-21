@@ -210,6 +210,7 @@
   - D2 已本地验证[正式接口派生和回放](02-directory-and-engineering-design.html#t13-pilot-native-fork-read)。同值修订生效未知时可派生、读取继承历史和重查原键。
   - D2 已本地验证[子会话明确选择后发送](02-directory-and-engineering-design.html#t13-explicit-child-model-plan)。子本人同值保存取得独立修订，保存零推理。冷启后显式发送在冻结后再改选时仍命中原子修订，本地步和 Note 均在继承历史之后。父模型已用且无待生效选择的直接发送对照另验。
   - [隔离试点工作台的选模、改选与手动发送](02-directory-and-engineering-design.html#t13-model-workbench-choice)已接入本人操作区。真实浏览器覆盖迟到 A、丢回执后刷新与纯读核对、未入箱后显式按原键提交、目录缺项后重选、子会话同值选择。普通及旁观会话沿原显示。正式分层配置、父模型已用的直接发送对照与产品走查继续单列。
+  - [二次派生切点取证](02-directory-and-engineering-design.html#t13-nested-fork-evidence)已覆盖真实父、子、孙。未明确选模的孙会话可读祖先消息，主动发送得到 409，派发和持久首写均零行。两代继承标记和完整前缀与各自来源、截止核对。
   - 已确认的历史图片规则（T13-A2）：同一本人会话默认只发送文字。可一键「沿用上一张图」，输入框显示可移除缩略图，选择仅随本条消息生效。发送时重新核对当前登录、本人会话和适用模型外发权限。[产品决定](02-directory-and-engineering-design.html#t13-history-image-rule-20261120)。
   - 前置：T03；已核实所需原生公开配置接口。
   - 来源：D2、D19；台账模型配置权威。

@@ -1,5 +1,6 @@
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 import { basename, join, sep } from 'node:path';
 import { constants as zstdConstants, zstdDecompressSync } from 'node:zlib';
 import { isRecord } from '@rdws/dsh/access';
@@ -100,7 +101,11 @@ export async function readFixedForkJournal(root: string, sessionId: string) {
 export function decodeFixedForkJournal(
   bytes: Buffer,
   compressed: boolean,
-  expected: { sessionId: string; cwd: string },
+  expected: {
+    sessionId: string;
+    cwd: string;
+    source?: { sessionId: string; parent: Snapshot; throughSeq: number };
+  },
 ): Snapshot {
   if (!bytes.length || bytes.length > maxPhysicalBytes) throw invalid();
   let header: unknown;
@@ -175,10 +180,25 @@ export function decodeFixedForkJournal(
   const markers = events.filter(
     ({ type, data }) => type === 'session/end-seed' && data.inherited === true,
   );
-  if (markers.length !== Number(header.isSeeded)) throw invalid();
+  const source = expected.source;
+  if (source) {
+    if (
+      !header.isSeeded ||
+      source.sessionId === expected.sessionId ||
+      source.parent.sessionId !== source.sessionId ||
+      !position(source.throughSeq) ||
+      source.throughSeq >= source.parent.events.length ||
+      markers.at(-1)?.seq !== source.throughSeq + 1 ||
+      !isDeepStrictEqual(
+        events.slice(0, source.throughSeq + 1),
+        source.parent.events.slice(0, source.throughSeq + 1),
+      )
+    )
+      throw invalid();
+  } else if (markers.length !== Number(header.isSeeded)) throw invalid();
   return {
     sessionId: expected.sessionId,
-    inheritedLength: markers[0]?.seq ?? 0,
+    inheritedLength: markers.at(-1)?.seq ?? 0,
     events,
   };
 }

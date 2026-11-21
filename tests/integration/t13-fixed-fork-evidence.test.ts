@@ -102,6 +102,48 @@ function rawJournal(
   );
 }
 
+test('nested seed markers require the matching direct source and exact inherited prefix', () => {
+  const marker = { type: 'session/end-seed', data: { inherited: true } };
+  const ordinary = { type: 'session/end-seed', data: {} };
+  const first = [turn, marker, ordinary];
+  const parent = decodeFixedForkJournal(
+    rawJournal(first, { isSeeded: true }),
+    false,
+    expected,
+  );
+  const child = { sessionId: 'session-grandchild', cwd: expected.cwd };
+  const source = { sessionId: expected.sessionId, parent, throughSeq: 2 };
+  const bytes = rawJournal([...first, marker], {
+    id: child.sessionId,
+    isSeeded: true,
+  });
+  const decode = (data: Buffer, ref = source) =>
+    decodeFixedForkJournal(data, false, { ...child, source: ref });
+  expect(decode(bytes).inheritedLength).toBe(3);
+  expect(() => decodeFixedForkJournal(bytes, false, child)).toThrow();
+  for (const ref of [
+    { ...source, sessionId: 'session-neighbor' },
+    { ...source, throughSeq: 1 },
+    { ...source, throughSeq: 5 },
+    {
+      ...source,
+      sessionId: child.sessionId,
+      parent: { ...parent, sessionId: child.sessionId },
+    },
+  ]) {
+    expect(() => decode(bytes, ref)).toThrow();
+  }
+  for (const events of [
+    [turn, ordinary, ordinary, marker],
+    [turn, marker, step, marker],
+    [...first, marker, marker],
+  ]) {
+    expect(() =>
+      decode(rawJournal(events, { id: child.sessionId, isSeeded: true })),
+    ).toThrow();
+  }
+});
+
 test('physical evidence rejects old journals, corrupt frames, torn lines and unavailable inclusive cutoffs', () => {
   const raw = rawJournal([turn, step]);
   const split = raw.indexOf(10) + 1;
@@ -710,30 +752,78 @@ test.skipIf(process.platform !== 'darwin')(
       ).toBe(true);
       expect(bodyHash(await history(child))).toBe(bodyHash(parentHistory));
       wire['x-rdws-client-generation'] = randomUUID();
-      const childAttempt = await bff.inject({
-        method: 'POST',
-        url: '/api/dsh/' + requirement + '/native/api/session/prompt',
-        headers: wire,
-        payload: {
-          type: 'client-request',
-          method: 'session/prompt',
-          rpcId: randomUUID(),
+      async function expectUnselected(id: string) {
+        const childAttempt = await bff.inject({
+          method: 'POST',
+          url: '/api/dsh/' + requirement + '/native/api/session/prompt',
+          headers: wire,
           payload: {
-            args: {
-              request: {
-                sessionId: child,
-                requestId: randomUUID(),
-                mode: 'queue',
-                content: [{ type: 'text', text: 'Synthetic unselected child' }],
+            type: 'client-request',
+            method: 'session/prompt',
+            rpcId: randomUUID(),
+            payload: {
+              args: {
+                request: {
+                  sessionId: id,
+                  requestId: randomUUID(),
+                  mode: 'queue',
+                  content: [
+                    { type: 'text', text: 'Synthetic unselected descendant' },
+                  ],
+                },
               },
             },
           },
-        },
+        });
+        expect(childAttempt.statusCode).toBe(409);
+        expect(childAttempt.json()).toEqual({
+          error: '请先为派生会话明确选择当前可用模型',
+        });
+      }
+      await expectUnselected(child);
+      const nestedCut = await forkBoundary(
+        original,
+        { ...browser, ownSessionIds: [child], readSessionIds: [child] },
+        child,
+      );
+      expect(nestedCut).toBeGreaterThan(stableCut!);
+      const nestedFork = await bff.inject({
+        method: 'POST',
+        url: sessions + '/' + child + '/fork',
+        headers,
+        payload: { commandId: randomUUID() },
       });
-      expect(childAttempt.statusCode).toBe(409);
-      expect(childAttempt.json()).toEqual({
-        error: '请先为派生会话明确选择当前可用模型',
-      });
+      expect(nestedFork.statusCode, nestedFork.body).toBe(200);
+      const grandchild = nestedFork.json<{ sessionId: string }>().sessionId;
+      expect(
+        (
+          await lab.owner.query(
+            'select source_session_id, source_through_seq::int as cut, owner_id from native_session where id=$1 and requirement_id=$2',
+            [grandchild, requirement],
+          )
+        ).rows,
+      ).toEqual([
+        { source_session_id: child, cut: nestedCut, owner_id: owner },
+      ]);
+      expect(bodyHash(await history(grandchild))).toBe(bodyHash(parentHistory));
+      await expectUnselected(grandchild);
+      expect(
+        (
+          await lab.owner.query(
+            'select attempt_id from session_model_first_write where native_session_id=$1',
+            [grandchild],
+          )
+        ).rowCount,
+      ).toBe(0);
+      expect(
+        (
+          await lab.owner.query(
+            'select request_id from session_prompt_dispatch where native_session_id=$1',
+            [grandchild],
+          )
+        ).rowCount,
+      ).toBe(0);
+      expect(connections).toBe(1);
       const childModelPath = sessions + '/' + child + '/model-selection';
       const saveChild = async (runtime: typeof bff, model: string) => {
         const response = await runtime.inject({
@@ -836,8 +926,41 @@ test.skipIf(process.platform !== 'darwin')(
       const fork = decodeFixedForkJournal(
         childFile.bytes,
         childFile.compressed,
-        { sessionId: child, cwd },
+        {
+          sessionId: child,
+          cwd,
+          source: { sessionId, throughSeq: stableCut!, parent },
+        },
       );
+      const nestedFile = await readFixedForkJournal(root, grandchild);
+      const nested = decodeFixedForkJournal(
+        nestedFile.bytes,
+        nestedFile.compressed,
+        {
+          sessionId: grandchild,
+          cwd,
+          source: { sessionId: child, parent: fork, throughSeq: nestedCut! },
+        },
+      );
+      expect(nested.inheritedLength).toBe(nestedCut! + 1);
+      expect(
+        nested.events
+          .filter(
+            (e) => e.type === 'session/end-seed' && e.data.inherited === true,
+          )
+          .map((e) => e.seq),
+      ).toEqual([stableCut! + 1, nestedCut! + 1]);
+      expect(bodyHash(nested.events.slice(0, nested.inheritedLength))).toBe(
+        bodyHash(fork.events.slice(0, nestedCut! + 1)),
+      );
+      expect(
+        fixedForkFirstWrites(
+          nested,
+          nested.events.length - 1,
+          { ...alphaDispatch, native_session_id: grandchild },
+          writes.map((row) => ({ ...row, native_session_id: grandchild })),
+        ),
+      ).toEqual([]);
       const firstCut = initialEvents.at(-1)!.seq;
       const changedCut = changedEvents.at(-1)!.seq;
       const end = parent.events.length - 1;
@@ -941,6 +1064,7 @@ test.skipIf(process.platform !== 'darwin')(
       for (const [id, artifact] of [
         [sessionId, parentFile],
         [child, childFile],
+        [grandchild, nestedFile],
       ] as const)
         expect(
           (await readFixedForkJournal(root, id)).bytes.equals(artifact.bytes),

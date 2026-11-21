@@ -170,7 +170,7 @@ export function createProjectRuntimes(
               destination: policy.destination,
               isCurrent: () => !closing && !native.signal.aborted,
               firstWrites: firstWrites!,
-              lock: (rows, write) => {
+              lock: (rows, write, sourceThroughSeq) => {
                 const [first, ...related] = rows;
                 if (!first) businessError(403, '原消息的模型派发绑定已失效');
                 const who = (row: typeof first) => ({
@@ -185,7 +185,11 @@ export function createProjectRuntimes(
                   related.map(who),
                   write,
                   undefined,
-                  { checked: pilotTransaction!, dispatches: rows },
+                  {
+                    checked: pilotTransaction!,
+                    dispatches: rows,
+                    sourceThroughSeq,
+                  },
                 );
               },
             }

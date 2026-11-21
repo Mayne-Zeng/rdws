@@ -207,7 +207,8 @@
   - 已确认的出口及派生验收：统一受信出口须让实际发出与撤权同序，逐次校验主请求、重试、上传和后台标题。遇到派生前缀中的未外发模型选择，子会话须由本人明确选模后才能首次发送。历史前缀及快捷新建规则继续适用。部署方须确认瞬时处理正文和认证头的边界。DSH 统计与计量后续对接。见[决定台账](00-decision-ledger.html#t13-egress-fork-decisions-20261119)和[验收判据](02-directory-and-engineering-design.html#t13-egress-fork-acceptance-20261119)。
   - 已确认待实现的 D1、D2：A 保存失答可明确改选 B，服务端确认 B 后迟到的 A 不能覆盖，确认前保留草稿、确认后手动发送。父选择生效未知时允许派生和查看历史，子会话首次发送前由本人明确选择当前可用模型（可同值），再手动发送。[决策台账](00-decision-ledger.html#t13-choice-recovery-20261121) · [验收场景与 DSH 复用边界](02-directory-and-engineering-design.html#t13-choice-recovery-acceptance)
   - 已本地验证 D1 服务端：[明确替代未确认保存](02-directory-and-engineering-design.html#t13-superseded-save-plan)。同一事务保存新修订并登记原键终态，迟到请求无法覆盖。既有成功原键仍读回历史修订。草稿保留、手动发送与 D2 另验。
-  - D2 已本地验证[正式接口派生和回放](02-directory-and-engineering-design.html#t13-pilot-native-fork-read)。同值修订生效未知时可派生、读取继承历史和重查原键。子会话明确选模后发送及已生效对照仍待接入。
+  - D2 已本地验证[正式接口派生和回放](02-directory-and-engineering-design.html#t13-pilot-native-fork-read)。同值修订生效未知时可派生、读取继承历史和重查原键。
+  - D2 已本地验证[子会话明确选择后发送](02-directory-and-engineering-design.html#t13-explicit-child-model-plan)。子本人同值保存取得独立修订，保存零推理。冷启后显式发送在冻结后再改选时仍命中原子修订，本地步和 Note 均在继承历史之后。父模型已用且无待生效选择的直接发送对照另验。
   - 已确认的历史图片规则（T13-A2）：同一本人会话默认只发送文字。可一键「沿用上一张图」，输入框显示可移除缩略图，选择仅随本条消息生效。发送时重新核对当前登录、本人会话和适用模型外发权限。[产品决定](02-directory-and-engineering-design.html#t13-history-image-rule-20261120)。
   - 前置：T03；已核实所需原生公开配置接口。
   - 来源：D2、D19；台账模型配置权威。

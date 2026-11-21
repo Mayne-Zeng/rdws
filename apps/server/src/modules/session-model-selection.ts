@@ -4,6 +4,7 @@ import { isRecord } from '@rdws/dsh/access';
 import { and, eq, sql } from 'drizzle-orm';
 import {
   businessError,
+  requireSavedChildModel,
   digestOf,
   type Actor,
   type createBusiness,
@@ -116,13 +117,13 @@ export function createSessionModelSelection(
   function scoped<T>(
     scope: ModelSessionScope,
     current: () => void,
-    work: (tx: WriteTransaction, expiry: number) => Promise<T>,
+    work: (tx: WriteTransaction, expiry: number, isFork: boolean) => Promise<T>,
   ) {
     return checked(async (tx, assertConnection) => {
       await tx.execute(
         sql`set local transaction_timeout='2400ms'; set local lock_timeout='650ms'; set local statement_timeout='950ms'; set local synchronous_commit='on'`,
       );
-      const expiry = await business.lockModelSession(
+      const { expiry, isFork } = await business.lockModelSession(
         tx,
         scope.who,
         scope.projectId,
@@ -135,7 +136,7 @@ export function createSessionModelSelection(
         if (expiry <= Date.now()) businessError(401, '登录已失效，请重新登录');
       };
       assert();
-      const result = await work(tx, expiry);
+      const result = await work(tx, expiry, isFork);
       assert();
       return result;
     });
@@ -321,7 +322,17 @@ export function createSessionModelSelection(
     input: { requestId: string; inputDigest: string },
     current: () => void,
   ) {
-    return scoped(scope, current, (tx) => promptRecord(tx, scope, input));
+    return scoped(scope, current, async (tx, _expiry, isFork) => {
+      const prior = await promptRecord(tx, scope, input);
+      if (!prior && isFork)
+        await requireSavedChildModel(
+          tx,
+          scope.who.userId,
+          scope.sessionId,
+          await readSelection(tx, scope.sessionId),
+        );
+      return prior;
+    });
   }
   async function reservePrompt(
     scope: ModelSessionScope,
@@ -333,11 +344,18 @@ export function createSessionModelSelection(
     const row = await readPrompt(scope, input, current);
     if (row) return row;
     const options = await readOptions();
-    return scoped(scope, current, async (tx) => {
+    return scoped(scope, current, async (tx, _expiry, isFork) => {
       const prior = await promptRecord(tx, scope, input);
       if (prior) return prior;
-      const selected =
-        (await readSelection(tx, scope.sessionId)) ?? defaultModel;
+      const saved = await readSelection(tx, scope.sessionId);
+      if (isFork)
+        await requireSavedChildModel(
+          tx,
+          scope.who.userId,
+          scope.sessionId,
+          saved,
+        );
+      const selected = saved ?? defaultModel;
       available(options, selected);
       const [reserved] = await tx
         .insert(dispatches)
@@ -365,7 +383,7 @@ export function createSessionModelSelection(
     options: SessionModelOptions,
     current: () => void,
   ) {
-    return scoped(scope, current, async (tx, expiry) => {
+    return scoped(scope, current, async (tx, expiry, isFork) => {
       const condition = and(
         dispatchKey(scope, requestId),
         eq(dispatches.authSessionId, scope.who.authSessionId),
@@ -373,6 +391,12 @@ export function createSessionModelSelection(
       );
       const [reserved] = await tx.select().from(dispatches).where(condition);
       if (!reserved) businessError(409, '原消息只能核对，不能再次派发');
+      if (isFork)
+        await requireSavedChildModel(tx, scope.who.userId, scope.sessionId, {
+          provider: reserved.provider,
+          model: reserved.model,
+          revision: reserved.selectionRevision,
+        });
       available(options, reserved);
       if (ticket.expiresAt <= Date.now() || ticket.expiresAt > expiry)
         businessError(409, '原生派发票据已失效');

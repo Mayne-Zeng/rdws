@@ -12,6 +12,7 @@ import {
 } from '../../apps/server/src/modules/business.ts';
 import { checkedWriteTransaction } from '../../apps/server/src/modules/checked-write-transaction.ts';
 import { createSessionModelSelection } from '../../apps/server/src/modules/session-model-selection.ts';
+import { createModelFirstWriteReceipts } from '../../apps/server/src/modules/model-first-write.ts';
 import { authorityDatabase } from '../helpers/authority-database.ts';
 
 function barrier() {
@@ -506,6 +507,169 @@ test('managed model selection and dispatch records survive permission refresh an
       model: 'model-a',
       revision: expect.any(String),
     });
+    const childScope = { ...scope, sessionId: 'session-' + randomUUID() };
+    const cut = 7;
+    await owner.pool.query(
+      'insert into native_session(id,owner_id,requirement_id,source_session_id,source_through_seq) values($1,$2,$3,$4,$5)',
+      [childScope.sessionId, actorId, requirementId, sessionId, cut],
+    );
+    await owner.pool.query(
+      'insert into session_model_selection(native_session_id,provider,model,revision) values($1,$2,$3,$4)',
+      [childScope.sessionId, chosen.provider, chosen.model, chosen.revision],
+    );
+    const childPrompt = {
+      requestId: randomUUID(),
+      inputDigest: digestOf('Synthetic child input'),
+    };
+    await expect(
+      store.reservePrompt(
+        childScope,
+        childPrompt,
+        current,
+        skipOptions,
+        chosen,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    const orphan = {
+      requestId: randomUUID(),
+      inputDigest: digestOf('Unproven child record'),
+    };
+    const oldHost = randomUUID();
+    await owner.pool.query(
+      'insert into session_prompt_dispatch(native_session_id,request_id,project_id,requirement_id,actor_id,auth_session_id,input_digest,provider,model,selection_revision) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+      [
+        childScope.sessionId,
+        orphan.requestId,
+        projectId,
+        requirementId,
+        actorId,
+        reopenedLoginId,
+        orphan.inputDigest,
+        chosen.provider,
+        chosen.model,
+        chosen.revision,
+      ],
+    );
+    await expect(
+      store.freezePrompt(
+        childScope,
+        orphan.requestId,
+        {
+          hostGeneration: oldHost,
+          peerNonce: 'fixture-orphan',
+          expiresAt: Date.now() + 10000,
+        },
+        await readOptions(),
+        current,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect((await store.readPrompt(childScope, orphan, current))?.state).toBe(
+      'reserved',
+    );
+    await owner.pool.query(
+      "update session_prompt_dispatch set state='pending',host_generation=$1,peer_nonce='fixture-orphan',lease_expires_at=date_trunc('milliseconds',now())+interval '1 minute' where native_session_id=$2 and request_id=$3",
+      [oldHost, childScope.sessionId, orphan.requestId],
+    );
+    const unproven = (await store.readPrompt(childScope, orphan, current))!;
+    let writesWithoutChoice = 0;
+    await expect(
+      createBusiness(owner.db).withModelAuthority(
+        scope.who,
+        projectId,
+        requirementId,
+        childScope.sessionId,
+        [],
+        () => ++writesWithoutChoice,
+        undefined,
+        {
+          checked: checkedWriteTransaction(owner.pool),
+          dispatches: [unproven],
+          sourceThroughSeq: cut,
+        },
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(writesWithoutChoice).toBe(0);
+    const childChoice = await store.save(
+      childScope,
+      { ...saveInput, commandId: randomUUID() },
+      current,
+      readOptions,
+    );
+    const childRow = await store.reservePrompt(
+      childScope,
+      childPrompt,
+      current,
+      readOptions,
+      chosen,
+    );
+    const checkedChild = checkedWriteTransaction(owner.pool);
+    const childReceipts = createModelFirstWriteReceipts(checkedChild);
+    const childHost = randomUUID();
+    const frozenChild = await store.freezePrompt(
+      childScope,
+      childPrompt.requestId,
+      {
+        hostGeneration: childHost,
+        peerNonce: randomUUID(),
+        expiresAt: Date.now() + 10000,
+      },
+      await readOptions(),
+      current,
+    );
+    const proof = {
+      projectId,
+      requirementId,
+      nativeSessionId: childScope.sessionId,
+      selectionRequestId: childPrompt.requestId,
+      selectionRevision: childChoice.revision,
+      provider: childRow.provider,
+      model: childRow.model,
+      hostGeneration: childHost,
+      agentGeneration: randomUUID(),
+      bindingId: randomUUID(),
+      callId: randomUUID(),
+      attemptId: randomUUID(),
+      turn: 1,
+      step: 1,
+      stepSeq: cut + 1,
+      noteSeq: cut + 2,
+    };
+    for (const invalid of [
+      { ...proof },
+      { ...proof, sourceThroughSeq: cut - 1 },
+      { ...proof, sourceThroughSeq: cut, stepSeq: cut },
+    ]) {
+      await expect(childReceipts.prepare(invalid)).rejects.toMatchObject({
+        statusCode: 403,
+      });
+    }
+    expect(
+      (
+        await owner.pool.query(
+          'select attempt_id from session_model_first_write where native_session_id=$1',
+          [childScope.sessionId],
+        )
+      ).rows,
+    ).toEqual([]);
+    const write = () => {
+      throw new Error('Unconfirmed fixture choice reached the write callback');
+    };
+    await expect(
+      createBusiness(owner.db).withModelAuthority(
+        scope.who,
+        projectId,
+        requirementId,
+        childScope.sessionId,
+        [],
+        write,
+        undefined,
+        {
+          checked: checkedChild,
+          dispatches: [frozenChild],
+          sourceThroughSeq: cut - 1,
+        },
+      ),
+    ).rejects.toMatchObject({ statusCode: 403 });
     const prompt = {
       requestId: randomUUID(),
       inputDigest: digestOf({ content: 'new synthetic prompt' }),

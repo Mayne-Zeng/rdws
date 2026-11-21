@@ -906,9 +906,9 @@ test.skipIf(process.platform !== 'darwin')(
         'queue',
         existingFork,
       );
-      expect(forkPrompt.status).toBe(403);
+      expect(forkPrompt.status).toBe(409);
       expect(await forkPrompt.json()).toEqual({
-        error: '隔离选模暂不支持派生会话',
+        error: '请先为派生会话明确选择当前可用模型',
       });
       for (const [endpoint, request] of [
         ['session/follow', { ...follow, activate: true }],

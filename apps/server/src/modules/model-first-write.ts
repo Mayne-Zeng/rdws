@@ -1,6 +1,6 @@
 import { schema } from '@rdws/db';
 import { and, eq, sql } from 'drizzle-orm';
-import { businessError } from './business.ts';
+import { assertModelSourceCut, businessError } from './business.ts';
 import type {
   CheckedWriteTransaction,
   WriteTransaction,
@@ -11,7 +11,7 @@ const table = schema.sessionModelFirstWrite;
 export type ModelFirstWrite = Omit<
   typeof table.$inferSelect,
   'state' | 'createdAt' | 'submittedAt'
->;
+> & { sourceThroughSeq?: number | null };
 
 export function createModelFirstWriteReceipts(
   checked: CheckedWriteTransaction,
@@ -25,6 +25,23 @@ export function createModelFirstWriteReceipts(
   async function prepare(write: ModelFirstWrite) {
     await checked(async (tx, assertCurrent) => {
       await limits(tx);
+      const [session] = await tx
+        .select({
+          sourceSessionId: schema.nativeSession.sourceSessionId,
+          sourceThroughSeq: schema.nativeSession.sourceThroughSeq,
+        })
+        .from(schema.nativeSession)
+        .where(
+          and(
+            eq(schema.nativeSession.id, write.nativeSessionId),
+            eq(schema.nativeSession.requirementId, write.requirementId),
+          ),
+        )
+        .for('share');
+      const cut = write.sourceThroughSeq ?? null;
+      assertModelSourceCut(session, cut);
+      if (cut !== null && write.stepSeq <= cut)
+        businessError(403, '原生步骤不属于当前子会话');
       const inserted = await tx.execute(sql`
         insert into ${table}
           (project_id, requirement_id, native_session_id, selection_request_id, selection_revision,

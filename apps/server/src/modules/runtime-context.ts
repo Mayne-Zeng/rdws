@@ -149,6 +149,7 @@ type PilotAuthority = SessionModelPilot & {
   lock<T>(
     dispatch: readonly PromptDispatch[],
     write: (validBefore: number) => T,
+    sourceThroughSeq: number | null,
   ): Promise<T>;
 };
 type StepMarker = {
@@ -158,7 +159,11 @@ type StepMarker = {
   provider: string;
   model: string;
 };
-type FirstWriteCoordinates = { stepSeq: number; noteSeq: number };
+type FirstWriteCoordinates = {
+  stepSeq: number;
+  noteSeq: number;
+  sourceThroughSeq: number | null;
+};
 type ModelStep = {
   id: string;
   stamp: StepMarker;
@@ -969,6 +974,7 @@ export class ContextRuns {
       return this.modelPilot.lock(
         step.batch.map(({ dispatch }) => dispatch!),
         finalize,
+        step.firstWriteCoordinates?.get(call.id)?.sourceThroughSeq ?? null,
       );
     if (this.lockModelAuthority)
       return this.lockModelAuthority(
@@ -1055,7 +1061,7 @@ export class ContextRuns {
         ? this.modelSteps.get(input.sessionId)
         : undefined;
     const run = step?.batch[0];
-    const { callId, stepSeq, noteSeq } = input;
+    const { callId, stepSeq, noteSeq, sourceThroughSeq = null } = input;
     const validBefore = Math.min(step?.validBefore ?? 0, cap.expiresAt);
     if (
       !this.modelPilot ||
@@ -1081,6 +1087,11 @@ export class ContextRuns {
       !Number.isSafeInteger(stepSeq) ||
       !Number.isSafeInteger(noteSeq) ||
       stepSeq < 0 ||
+      (sourceThroughSeq !== null &&
+        (typeof sourceThroughSeq !== 'number' ||
+          !Number.isSafeInteger(sourceThroughSeq) ||
+          sourceThroughSeq < -1 ||
+          stepSeq <= sourceThroughSeq)) ||
       noteSeq <= stepSeq ||
       noteSeq - stepSeq > 64
     )
@@ -1088,13 +1099,22 @@ export class ContextRuns {
     const coordinates = (step.firstWriteCoordinates ??= new Map());
     const prior = coordinates.values().next().value;
     if (
-      (prior && (prior.stepSeq !== stepSeq || prior.noteSeq !== noteSeq)) ||
+      (prior &&
+        (prior.stepSeq !== stepSeq ||
+          prior.noteSeq !== noteSeq ||
+          prior.sourceThroughSeq !== sourceThroughSeq)) ||
       (!coordinates.has(callId) && coordinates.size >= 128)
     )
       return invalidModel();
-    coordinates.set(callId, { stepSeq, noteSeq });
+    coordinates.set(callId, { stepSeq, noteSeq, sourceThroughSeq });
     return {
-      result: { bindingId: step.id, callId, stepSeq, noteSeq },
+      result: {
+        bindingId: step.id,
+        callId,
+        stepSeq,
+        noteSeq,
+        ...(sourceThroughSeq !== null && { sourceThroughSeq }),
+      },
       validBefore,
     };
   }

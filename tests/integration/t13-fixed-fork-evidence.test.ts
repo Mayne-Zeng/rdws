@@ -346,6 +346,12 @@ test.skipIf(process.platform !== 'darwin')(
     const rejected: { requestId: string; model: unknown }[] = [];
     const modelsReceived: string[] = [];
     let connections = 0;
+    const childRequest = randomUUID();
+    let childStepEntered = false;
+    let releaseChild!: () => void;
+    const childGate = new Promise<void>((resolve) => {
+      releaseChild = resolve;
+    });
     const configuredHosts = new Set<NativeWebHost>();
     const configure = NativeWebHost.prototype.configureContext;
     const probe = vi
@@ -354,6 +360,17 @@ test.skipIf(process.platform !== 'darwin')(
         configuredHosts.add(this);
         configure.call(this, (input, token, reply) => {
           const cap = this.verifyContext(token);
+          if (
+            cap?.operation === 'context-read' &&
+            cap.hostGeneration === this.contextGeneration &&
+            isRecord(input) &&
+            cap.bodyHash === bodyHash(input) &&
+            input.requestId === childRequest &&
+            isRecord(input.modelStep)
+          ) {
+            childStepEntered = true;
+            return childGate.then(() => handler(input, token, reply));
+          }
           if (
             cap?.operation === 'context-read' &&
             cap.hostGeneration === this.contextGeneration &&
@@ -501,7 +518,7 @@ test.skipIf(process.platform !== 'darwin')(
       );
       vi.stubEnv('RDWS_MODE', 'test');
       vi.stubEnv('RDWS_NATIVE_MODEL_EGRESS', 'mediated');
-      const bff = (app = buildApp({
+      const options: Parameters<typeof buildApp>[0] = {
         databaseUrl: lab.databaseUrl,
         origin,
         secret: lab.childEnv.BETTER_AUTH_SECRET!,
@@ -518,7 +535,8 @@ test.skipIf(process.platform !== 'darwin')(
           alternateModel: beta,
           databaseFixture: fixture!.name,
         },
-      }));
+      };
+      const bff = (app = buildApp(options));
       const login = await bff.inject({
         method: 'POST',
         url: '/api/auth/sign-in/username',
@@ -602,11 +620,16 @@ test.skipIf(process.platform !== 'darwin')(
           selection: { provider: string; model: string; revision: string };
         }>().selection;
       }
-      async function send(requestId: string) {
-        const sent = await bff.inject({
+      async function send(
+        requestId: string,
+        target = sessionId,
+        runtime = bff,
+        carrier = wire,
+      ) {
+        const sent = await runtime.inject({
           method: 'POST',
           url: `/api/dsh/${requirement}/native/api/session/prompt`,
-          headers: wire,
+          headers: carrier,
           payload: {
             type: 'client-request',
             method: 'session/prompt',
@@ -614,7 +637,7 @@ test.skipIf(process.platform !== 'darwin')(
             payload: {
               args: {
                 request: {
-                  sessionId,
+                  sessionId: target,
                   requestId,
                   mode: 'queue',
                   content: [
@@ -707,10 +730,26 @@ test.skipIf(process.platform !== 'darwin')(
           },
         },
       });
-      expect(childAttempt.statusCode).toBe(403);
+      expect(childAttempt.statusCode).toBe(409);
       expect(childAttempt.json()).toEqual({
-        error: '隔离选模暂不支持派生会话',
+        error: '请先为派生会话明确选择当前可用模型',
       });
+      const childModelPath = sessions + '/' + child + '/model-selection';
+      const saveChild = async (runtime: typeof bff, model: string) => {
+        const response = await runtime.inject({
+          method: 'POST',
+          url: childModelPath,
+          headers,
+          payload: { commandId: randomUUID(), provider, model },
+        });
+        expect(response.statusCode).toBe(200);
+        return response.json<{
+          selection: { provider: string; model: string; revision: string };
+        }>().selection;
+      };
+      const chosenChild = await saveChild(bff, beta);
+      expect(chosenChild.model).toBe(repeated.model);
+      expect(chosenChild.revision).not.toBe(repeated.revision);
       expect(connections).toBe(1);
       await send(later);
       const finalEvents = await finish(4);
@@ -908,7 +947,72 @@ test.skipIf(process.platform !== 'darwin')(
         ).toBe(true);
       expect(connections).toBe(2);
       expect(modelsReceived).toEqual([alpha, beta]);
+      const nextTicket = randomBytes(32).toString('hex');
+      expect(
+        (
+          await lab.owner.query(
+            'update rdws_authority.owner set ticket_digest=$1 where singleton and managed and generation is null and proof_digest is null and ticket_digest is null',
+            [createHash('sha256').update(nextTicket).digest('hex')],
+          )
+        ).rowCount,
+      ).toBe(1);
+      const cold = (app = buildApp({
+        ...options,
+        authorityTicket: nextTicket,
+      }));
+      const readChild = await cold.inject({ url: childModelPath, headers });
+      expect(readChild.statusCode).toBe(200);
+      expect(readChild.json()).toEqual({
+        selection: chosenChild,
+        firstWrite: null,
+      });
+      const freshWire = {
+        ...wire,
+        'x-rdws-native-login': await bootstrapNative(cold, cookie, requirement),
+        'x-rdws-client-generation': randomUUID(),
+      };
+      expect(connections).toBe(2);
+      const sending = send(childRequest, child, cold, freshWire);
+      void sending.catch(() => {});
+      try {
+        await expect.poll(() => childStepEntered).toBe(true);
+        const newerChild = await saveChild(cold, alpha);
+        expect(newerChild.revision).not.toBe(chosenChild.revision);
+        expect(connections).toBe(2);
+        releaseChild();
+        await sending;
+        await expect.poll(() => modelsReceived).toEqual([alpha, beta, beta]);
+        const evidence = await vi.waitFor(async () => {
+          const rows = (
+            await lab.owner.query(
+              'select model,selection_revision,state,step_seq::int as seq from session_model_first_write where native_session_id=$1 and selection_request_id=$2',
+              [child, childRequest],
+            )
+          ).rows;
+          expect(rows).toHaveLength(1);
+          expect(rows[0].state).toBe('submitted');
+          return rows[0];
+        });
+        expect(evidence.model).toBe(beta);
+        expect(evidence.selection_revision).toBe(chosenChild.revision);
+        expect(evidence.seq).toBeGreaterThan(stableCut!);
+        expect(
+          (await cold.inject({ url: childModelPath, headers })).json(),
+        ).toEqual({ selection: newerChild, firstWrite: null });
+        expect(
+          (
+            await cold.inject({
+              url: sessions + '/' + sessionId + '/model-selection',
+              headers,
+            })
+          ).json(),
+        ).toEqual({ selection: repeated, firstWrite: 'submitted' });
+      } finally {
+        releaseChild();
+        await sending.catch(() => {});
+      }
     } finally {
+      releaseChild();
       probe.mockRestore();
       vi.unstubAllEnvs();
       try {

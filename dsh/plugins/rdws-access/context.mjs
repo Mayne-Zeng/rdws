@@ -958,7 +958,10 @@ export function installContext(ctx, config, key, route, requestContext) {
       if (
         reader.header.id !== session.header.id ||
         reader.header.cwd !== session.header.cwd ||
-        reader.header.isSeeded ||
+        reader.header.isSeeded !== session.header.isSeeded ||
+        !Number.isSafeInteger(reader.inheritedEventCount) ||
+        reader.inheritedEventCount < 0 ||
+        reader.inheritedEventCount !== session.inheritedEventCount ||
         stepSeq < reader.inheritedEventCount
       )
         throw unavailable();
@@ -981,6 +984,9 @@ export function installContext(ctx, config, key, route, requestContext) {
     const proof = {
       bindingId: call.bindingId,
       callId: call.id,
+      ...(session.header.isSeeded && {
+        sourceThroughSeq: session.inheritedEventCount - 1,
+      }),
       stepSeq,
       noteSeq,
     };

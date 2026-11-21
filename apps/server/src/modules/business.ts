@@ -37,6 +37,45 @@ type Database = ReturnType<typeof connectDatabase>['db'];
 type Transaction = WriteTransaction;
 type Reads = Pick<Transaction, 'select'>;
 export type Actor = { userId: string; authSessionId: string };
+export function assertModelSourceCut(
+  session:
+    | { sourceSessionId: string | null; sourceThroughSeq: number | null }
+    | undefined,
+  signedCut: number | null,
+) {
+  if (
+    !session ||
+    (session.sourceSessionId !== null) !== (signedCut !== null) ||
+    session.sourceThroughSeq !== signedCut
+  )
+    businessError(403, '原生会话继承截止未获确认');
+}
+
+export async function requireSavedChildModel(
+  tx: Reads,
+  actorId: string,
+  sessionId: string,
+  choice: { provider: string; model: string; revision: string } | null,
+) {
+  if (choice) {
+    const table = schema.commandReceipt;
+    const [receipt] = await tx
+      .select({ id: table.commandId })
+      .from(table)
+      .where(
+        and(
+          eq(table.actorId, actorId),
+          eq(table.scope, 'session:' + sessionId),
+          eq(table.operation, 'model.select'),
+          sql`${table.result} = ${JSON.stringify(choice)}::jsonb`,
+        ),
+      )
+      .limit(1);
+    if (receipt) return;
+  }
+  businessError(409, '请先为派生会话明确选择当前可用模型');
+}
+
 type WriteMutation = {
   lock: bigint;
   receipt: () => typeof schema.commandReceipt.$inferInsert;
@@ -1474,6 +1513,7 @@ export function createBusiness(db: Database) {
     pilot?: {
       checked: CheckedWriteTransaction;
       dispatches: readonly PromptDispatch[];
+      sourceThroughSeq?: number | null;
     },
   ): Promise<T> {
     const deadline = Date.now() + 1800;
@@ -1536,6 +1576,7 @@ export function createBusiness(db: Database) {
         .select({
           id: schema.nativeSession.id,
           sourceSessionId: schema.nativeSession.sourceSessionId,
+          sourceThroughSeq: schema.nativeSession.sourceThroughSeq,
         })
         .from(schema.nativeSession)
         .where(
@@ -1549,10 +1590,8 @@ export function createBusiness(db: Database) {
       if (!owned || validBefore <= Date.now())
         businessError(403, '当前运行身份无效');
       if (pilot) {
-        if (
-          owned.sourceSessionId !== null ||
-          pilot.dispatches.length !== actors.length
-        )
+        assertModelSourceCut(owned, pilot.sourceThroughSeq ?? null);
+        if (pilot.dispatches.length !== actors.length)
           businessError(403, '原消息的模型派发绑定已失效');
         const ledger = schema.sessionPromptDispatch;
         for (const dispatch of pilot.dispatches) {
@@ -1592,6 +1631,12 @@ export function createBusiness(db: Database) {
             .for('share');
           if (row?.state !== 'pending' && row?.state !== 'accepted')
             businessError(403, '原消息的模型派发绑定已失效');
+          if (owned.sourceSessionId !== null)
+            await requireSavedChildModel(tx, who.userId, sessionId, {
+              provider: dispatch.provider,
+              model: dispatch.model,
+              revision: dispatch.selectionRevision,
+            });
         }
         if (validBefore <= Date.now()) businessError(403, '当前运行身份无效');
         assertConnection();
@@ -1896,9 +1941,10 @@ export function createBusiness(db: Database) {
       )
       .for('share');
     if (!owned) businessError(403, '只能管理本人在当前需求中的会话模型');
-    if (owned.sourceSessionId !== null)
-      businessError(403, '隔离选模暂不支持派生会话');
-    return session.expiresAt.getTime();
+    return {
+      expiry: session.expiresAt.getTime(),
+      isFork: owned.sourceSessionId !== null,
+    };
   }
   async function authorizeRequirement(
     who: Actor,

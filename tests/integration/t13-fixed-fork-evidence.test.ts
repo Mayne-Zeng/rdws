@@ -13,6 +13,7 @@ import { buildApp } from '@rdws/server';
 import { intactForkReceipt } from '../../apps/server/src/modules/fork-model-receipt.ts';
 import { usedForkModels } from '../../apps/server/src/modules/fork-model-evidence.ts';
 import { hashPassword } from 'better-auth/crypto';
+import { Pool, type PoolClient } from 'pg';
 import { expect, test, vi } from 'vitest';
 import { authorityDatabase } from '../helpers/authority-database.ts';
 import {
@@ -1248,4 +1249,1001 @@ test.skipIf(process.platform !== 'darwin')(
     }
   },
   60_000,
+);
+
+test.skipIf(process.platform !== 'darwin')(
+  'a completed parent turn whose only first-write proof stays prepared leaves a real fork child refused',
+  async () => {
+    const dockerContext = execFileSync(
+      'docker',
+      [
+        'context',
+        'inspect',
+        '--format',
+        '{{(index .Endpoints "docker").Host}}',
+      ],
+      { encoding: 'utf8' },
+    ).trim();
+    const lab = await authorityDatabase(
+      process.env.DOCKER_CONTEXT
+        ? dockerContext
+        : process.env.DOCKER_HOST || dockerContext,
+    );
+    const defaultCAs = getCACertificates('default');
+    let supplier: ReturnType<typeof createServer> | undefined;
+    let app: ReturnType<typeof buildApp> | undefined;
+    const project = 'poc';
+    const owner = randomUUID();
+    const requirement = randomUUID();
+    const root = join(lab.root, 'native');
+    const origin = lab.childEnv.RDWS_ORIGIN!;
+    const provider = 'rdws-glm';
+    const alpha = 'prepared-cut-a';
+    const beta = 'prepared-cut-b';
+    const first = randomUUID();
+    const modelsReceived: string[] = [];
+    let connections = 0;
+    let firstWriteFault:
+      | {
+          requestId: string;
+          phase: 'prepare' | 'authorize' | 'settle';
+          outcome: 'commit' | 'rollback' | 'hold' | 'confirm';
+          attemptId?: string;
+          completion?: string;
+        }
+      | undefined;
+    const connect = Pool.prototype.connect;
+    vi.spyOn(Pool.prototype, 'connect').mockImplementation(function (
+      this: Pool,
+      ...args: unknown[]
+    ) {
+      const connection = Reflect.apply(connect, this, args);
+      const fault = firstWriteFault;
+      if (args.length || !fault) return connection;
+      return connection.then((client: PoolClient) => {
+        const query = client.query;
+        let phase: 'prepare' | 'authorize' | 'settle' | undefined;
+        client.query = ((...parameters: unknown[]) => {
+          const input = parameters[0] as
+            string | { text: string; values?: unknown[] };
+          const sql = (typeof input === 'string' ? input : input.text).trim();
+          const values = Array.isArray(parameters[1])
+            ? parameters[1]
+            : typeof input === 'string'
+              ? undefined
+              : input.values;
+          if (fault) {
+            if (
+              sql.startsWith('insert into "session_model_first_write"') &&
+              values?.[3] === fault.requestId
+            ) {
+              fault.attemptId ??= String(values[11]);
+              phase = 'prepare';
+            } else if (
+              sql.startsWith('select ') &&
+              sql.includes('from "session_prompt_dispatch"') &&
+              sql.endsWith('for share') &&
+              values?.includes(fault.requestId)
+            ) {
+              phase = 'authorize';
+            } else if (
+              fault.attemptId &&
+              values?.includes(fault.attemptId) &&
+              sql.startsWith('update "session_model_first_write"')
+            ) {
+              phase = 'settle';
+            }
+            if (
+              sql === 'commit' &&
+              phase === fault.phase &&
+              !fault.completion
+            ) {
+              client.query = query;
+              const statement =
+                fault.outcome === 'rollback' ? 'rollback' : 'commit';
+              return Reflect.apply(query, client, [statement]).then(
+                async (value: { command: string }) => {
+                  fault.completion = value.command;
+                  if (
+                    fault.outcome !== 'rollback' &&
+                    fault.outcome !== 'commit'
+                  )
+                    return value;
+                  throw new Error('Synthetic first-write commit reply lost');
+                },
+              );
+            }
+          }
+          const result = Reflect.apply(query, client, parameters);
+          if (sql === 'commit' || sql === 'rollback') client.query = query;
+          return result;
+        }) as typeof client.query;
+        return client;
+      });
+    });
+    const configuredHosts = new Set<NativeWebHost>();
+    const configure = NativeWebHost.prototype.configureContext;
+    const probe = vi
+      .spyOn(NativeWebHost.prototype, 'configureContext')
+      .mockImplementation(function (this: NativeWebHost, handler) {
+        configuredHosts.add(this);
+        configure.call(this, handler);
+      });
+    try {
+      const keys = await modelTlsCertificate(lab.root);
+      setDefaultCACertificates([...defaultCAs, keys.cert.toString()]);
+      supplier = createServer(
+        { ...keys, minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3' },
+        async (request, response) => {
+          try {
+            if (
+              request.method !== 'POST' ||
+              request.url !== '/v1/chat/completions'
+            ) {
+              response.writeHead(404).end();
+              return;
+            }
+            const chunks: Buffer[] = [];
+            for await (const chunk of request) chunks.push(Buffer.from(chunk));
+            const { model } = JSON.parse(Buffer.concat(chunks).toString()) as {
+              model: string;
+            };
+            modelsReceived.push(model);
+            const frame = {
+              id: 'prepared-cut-fixture',
+              object: 'chat.completion.chunk',
+              created: 1,
+              model,
+            };
+            const choices = [
+              {
+                index: 0,
+                delta: {
+                  role: 'assistant',
+                  content: 'Synthetic fork gate response',
+                },
+                finish_reason: null,
+              },
+              { index: 0, delta: {}, finish_reason: 'stop' },
+            ];
+            response
+              .writeHead(200, { 'content-type': 'text/event-stream' })
+              .end(
+                choices
+                  .map(
+                    (choice) =>
+                      `data: ${JSON.stringify({ ...frame, choices: [choice] })}\n\n`,
+                  )
+                  .join('') + 'data: [DONE]\n\n',
+              );
+          } catch {
+            response.destroy();
+          }
+        },
+      );
+      supplier.on('connection', () => connections++);
+      supplier.listen(0, '127.0.0.1');
+      await once(supplier, 'listening');
+      const base =
+        'https://127.0.0.1:' +
+        (supplier.address() as { port: number }).port +
+        '/v1';
+      const configuration = join(root, 'config/projects', project, 'dsh');
+      const profile = join(configuration, 'profiles/rdws');
+      await mkdir(profile, { recursive: true, mode: 0o700 });
+      await writeFile(
+        join(configuration, '.credentials.yaml'),
+        JSON.stringify({
+          version: 1,
+          refs: { FIXTURE_MODEL: randomBytes(24).toString('hex') },
+        }),
+        { mode: 0o600 },
+      );
+      await writeFile(
+        join(profile, 'cordis.patch.yml'),
+        JSON.stringify([
+          { id: 'session-title-llm', disabled: true },
+          {
+            id: 'llm-pi-ai',
+            config: {
+              providers: {
+                [provider]: {
+                  api: 'openai-completions',
+                  baseURL: base,
+                  apiKeyEnv: 'FIXTURE_MODEL',
+                  models: [{ id: alpha }, { id: beta }],
+                  retryPolicy: { mode: 'normal', maxRetries: 0 },
+                },
+              },
+            },
+          },
+        ]),
+        { mode: 0o600 },
+      );
+      await lab.owner.query(
+        "insert into project(id,name) values('poc','Synthetic fork gate')",
+      );
+      await lab.owner.query(
+        "insert into auth_user(id,name,email,username,active) values($1,'Fixture','gate@fixture.invalid','fixture_gate',true)",
+        [owner],
+      );
+      const password = randomBytes(18).toString('hex');
+      await lab.owner.query(
+        "insert into auth_account(id,account_id,provider_id,user_id,password) values($1,$2,'credential',$2,$3)",
+        [randomUUID(), owner, await hashPassword(password)],
+      );
+      await lab.owner.query(
+        "insert into project_member values('poc',$1,'developer')",
+        [owner],
+      );
+      await lab.owner.query(
+        "insert into requirement(id,project_id,title,description,acceptance,lead_id,created_by) values($1,'poc','Synthetic fork gate demand','','',$2,$2)",
+        [requirement, owner],
+      );
+      await lab.owner.query(
+        "insert into requirement_participant values($1,$2,'developer')",
+        [requirement, owner],
+      );
+      const ticket = randomBytes(32).toString('hex');
+      await lab.owner.query(
+        'update rdws_authority.owner set managed=true,ticket_digest=$1 where singleton',
+        [createHash('sha256').update(ticket).digest('hex')],
+      );
+      const {
+        rows: [fixture],
+      } = await lab.owner.query<{ name: string }>(
+        "select current_setting('rdws.fixture_instance') as name",
+      );
+      vi.stubEnv('RDWS_MODE', 'test');
+      vi.stubEnv('RDWS_NATIVE_MODEL_EGRESS', 'mediated');
+      const options: Parameters<typeof buildApp>[0] = {
+        databaseUrl: lab.databaseUrl,
+        origin,
+        secret: lab.childEnv.BETTER_AUTH_SECRET!,
+        nativeRuntimeRoot: root,
+        repositoryHome: root,
+        authorityTicket: ticket,
+        mainModelPolicy: {
+          projectId: project,
+          provider,
+          model: alpha,
+          destination: base + '/chat/completions',
+        },
+        sessionModelPilot: {
+          alternateModel: beta,
+          databaseFixture: fixture!.name,
+        },
+      };
+      const bff = (app = buildApp(options));
+      const login = await bff.inject({
+        method: 'POST',
+        url: '/api/auth/sign-in/username',
+        headers: { origin },
+        payload: { username: 'fixture_gate', password },
+      });
+      expect(login.statusCode).toBe(200);
+      const cookie = login.cookies
+        .map(({ name, value }) => `${name}=${value}`)
+        .join('; ');
+      const loginId = await observedLogin(bff, cookie);
+      const headers = { cookie, origin, 'x-rdws-edit-session': loginId };
+      const sessions = `/api/requirements/${requirement}/sessions`;
+      const created = await bff.inject({
+        method: 'POST',
+        url: sessions,
+        headers,
+        payload: { commandId: randomUUID() },
+      });
+      expect(created.statusCode).toBe(200);
+      const { sessionId } = created.json<{ sessionId: string }>();
+      expect(configuredHosts.size).toBe(1);
+      const original = [...configuredHosts][0]!;
+      const { pid } = await nativeReady(root);
+      const binding = await bootstrapNative(bff, cookie, requirement);
+      const cwd = await realpath(
+        join(root, 'projects', project, 'demands', requirement),
+      );
+      const {
+        rows: [scope],
+      } = await lab.owner.query<{ native_workspace_id: string }>(
+        'select r.native_workspace_id from requirement r join native_session n on n.requirement_id=r.id where n.id=$1 and r.id=$2 and r.project_id=$3 and n.owner_id=$4 and n.source_session_id is null',
+        [sessionId, requirement, project, owner],
+      );
+      expect(scope?.native_workspace_id).toEqual(expect.any(String));
+      const browser = {
+        purpose: 'browser' as const,
+        userId: owner,
+        authSessionId: loginId,
+        requirementId: requirement,
+        cwd,
+        workspaceId: scope!.native_workspace_id,
+        readSessionIds: [sessionId],
+        ownSessionIds: [sessionId],
+      };
+      const wire = {
+        cookie,
+        origin,
+        'x-rdws-native-login': binding,
+        'x-rdws-client-generation': randomUUID(),
+      };
+      const finish = async (expectedTurns: number) => {
+        const page = await vi.waitFor(
+          async () => {
+            const page = await sessionPage(
+              original,
+              browser,
+              sessionId,
+              undefined,
+              undefined,
+              100,
+            );
+            expect(
+              page.records.filter(({ event }) => event.type === 'turn/end'),
+            ).toHaveLength(expectedTurns);
+            return page;
+          },
+          { timeout: 10_000 },
+        );
+        return page.records.map(({ event }) => event);
+      };
+      const select = async () => {
+        const selected = await bff.inject({
+          method: 'POST',
+          url: `${sessions}/${sessionId}/model-selection`,
+          headers,
+          payload: { commandId: randomUUID(), provider, model: alpha },
+        });
+        expect(selected.statusCode).toBe(200);
+        return selected.json<{
+          selection: { provider: string; model: string; revision: string };
+        }>().selection;
+      };
+      const send = async (requestId: string, target = sessionId) => {
+        const sent = await bff.inject({
+          method: 'POST',
+          url: `/api/dsh/${requirement}/native/api/session/prompt`,
+          headers: wire,
+          payload: {
+            type: 'client-request',
+            method: 'session/prompt',
+            rpcId: randomUUID(),
+            payload: {
+              args: {
+                request: {
+                  sessionId: target,
+                  requestId,
+                  mode: 'queue',
+                  content: [
+                    { type: 'text', text: 'Synthetic fork gate prompt' },
+                  ],
+                },
+              },
+            },
+          },
+        });
+        expect(sent.statusCode, sent.json().error).toBe(200);
+        expect(sent.json().result).toEqual({
+          ok: true,
+          value: { accepted: true },
+        });
+      };
+      const refuseChild = async (child: string, text: string) => {
+        wire['x-rdws-client-generation'] = randomUUID();
+        const refused = await bff.inject({
+          method: 'POST',
+          url: `/api/dsh/${requirement}/native/api/session/prompt`,
+          headers: wire,
+          payload: {
+            type: 'client-request',
+            method: 'session/prompt',
+            rpcId: randomUUID(),
+            payload: {
+              args: {
+                request: {
+                  sessionId: child,
+                  requestId: randomUUID(),
+                  mode: 'queue',
+                  content: [{ type: 'text', text }],
+                },
+              },
+            },
+          },
+        });
+        expect(refused.statusCode).toBe(409);
+        expect(refused.json()).toEqual({
+          error: '请先为派生会话明确选择当前可用模型',
+        });
+      };
+      const initial = await select();
+      firstWriteFault = {
+        requestId: first,
+        phase: 'settle',
+        outcome: 'rollback',
+      };
+      const planted = firstWriteFault;
+      await send(first);
+      await expect
+        .poll(() => planted.completion, { timeout: 10_000, interval: 200 })
+        .toBe('ROLLBACK');
+      const events = await finish(1);
+      firstWriteFault = undefined;
+      expect(modelsReceived).toEqual([alpha]);
+      expect(connections).toBe(1);
+      expect(
+        events.filter(({ type }) => type === 'assistant/message'),
+      ).toHaveLength(1);
+      expect(usedForkModels(events, owner, requirement)).toMatchObject([
+        { requestId: first, provider, model: alpha },
+      ]);
+      expect(
+        (
+          await lab.owner.query(
+            'select state, selection_revision from session_model_first_write where native_session_id=$1 and selection_request_id=$2',
+            [sessionId, first],
+          )
+        ).rows,
+      ).toEqual([{ state: 'prepared', selection_revision: initial.revision }]);
+      expect(
+        (
+          await lab.owner.query(
+            'select state, accepted_seq::int as seq from session_prompt_dispatch where native_session_id=$1 and request_id=$2',
+            [sessionId, first],
+          )
+        ).rows,
+      ).toEqual([{ state: 'accepted', seq: expect.any(Number) }]);
+      const cut = await forkBoundary(original, browser, sessionId);
+      const forked = await bff.inject({
+        method: 'POST',
+        url: sessions + '/' + sessionId + '/fork',
+        headers,
+        payload: { commandId: randomUUID() },
+      });
+      expect(forked.statusCode, forked.body).toBe(200);
+      const child = forked.json<{ sessionId: string }>().sessionId;
+      expect(child).not.toBe(sessionId);
+      expect(
+        (
+          await lab.owner.query(
+            'select source_session_id, source_through_seq::int as cut, owner_id from native_session where id=$1 and requirement_id=$2',
+            [child, requirement],
+          )
+        ).rows,
+      ).toEqual([{ source_session_id: sessionId, cut, owner_id: owner }]);
+      const history = async (id: string) => {
+        const result = await bff.inject({
+          url:
+            sessions + '/' + id + '/history?throughSeq=' + cut + '&pageSize=50',
+          headers,
+        });
+        expect(result.statusCode).toBe(200);
+        return result.json<{ events: { type: string; seq: number }[] }>()
+          .events;
+      };
+      const parentHistory = await history(sessionId);
+      expect(
+        parentHistory.some(({ type }) => type === 'assistant/message'),
+      ).toBe(true);
+      expect(bodyHash(await history(child))).toBe(bodyHash(parentHistory));
+      expect(
+        (
+          await lab.owner.query(
+            "select command_id from command_receipt where operation='model.fork-source'",
+          )
+        ).rows,
+      ).toEqual([]);
+      expect(
+        (
+          await bff.inject({
+            url: sessions + '/' + child + '/model-selection',
+            headers,
+          })
+        ).json(),
+      ).toEqual({ selection: null, firstWrite: null });
+      await refuseChild(child, 'Synthetic prepared-only descendant');
+      expect(modelsReceived).toEqual([alpha]);
+      expect(connections).toBe(1);
+      await bff.close();
+      app = undefined;
+      expect(() => process.kill(pid, 0)).toThrow(
+        expect.objectContaining({ code: 'ESRCH' }),
+      );
+    } finally {
+      probe.mockRestore();
+      vi.unstubAllEnvs();
+      try {
+        await app?.close();
+      } finally {
+        setDefaultCACertificates(defaultCAs);
+        supplier?.closeAllConnections();
+        if (supplier)
+          await new Promise<void>((resolve) =>
+            supplier!.close(() => resolve()),
+          );
+        await lab.close();
+      }
+    }
+  },
+  90_000,
+);
+
+test.skipIf(process.platform !== 'darwin')(
+  'an accepted dispatch that never forms a step leaves a real fork child refused',
+  async () => {
+    const dockerContext = execFileSync(
+      'docker',
+      [
+        'context',
+        'inspect',
+        '--format',
+        '{{(index .Endpoints "docker").Host}}',
+      ],
+      { encoding: 'utf8' },
+    ).trim();
+    const lab = await authorityDatabase(
+      process.env.DOCKER_CONTEXT
+        ? dockerContext
+        : process.env.DOCKER_HOST || dockerContext,
+    );
+    const defaultCAs = getCACertificates('default');
+    let supplier: ReturnType<typeof createServer> | undefined;
+    let app: ReturnType<typeof buildApp> | undefined;
+    const project = 'poc';
+    const owner = randomUUID();
+    const requirement = randomUUID();
+    const root = join(lab.root, 'native');
+    const origin = lab.childEnv.RDWS_ORIGIN!;
+    const provider = 'rdws-glm';
+    const alpha = 'stepless-cut-a';
+    const beta = 'stepless-cut-b';
+    const first = randomUUID();
+    const modelsReceived: string[] = [];
+    let connections = 0;
+    const second = randomUUID();
+    const held = new Set<string>([second]);
+    const rejected: { requestId: string; model: unknown }[] = [];
+    const configuredHosts = new Set<NativeWebHost>();
+    const configure = NativeWebHost.prototype.configureContext;
+    const probe = vi
+      .spyOn(NativeWebHost.prototype, 'configureContext')
+      .mockImplementation(function (this: NativeWebHost, handler) {
+        configuredHosts.add(this);
+        configure.call(this, (input, token, reply) => {
+          const cap = this.verifyContext(token);
+          if (
+            cap?.operation === 'context-read' &&
+            cap.hostGeneration === this.contextGeneration &&
+            isRecord(input) &&
+            cap.bodyHash === bodyHash(input) &&
+            typeof input.requestId === 'string' &&
+            held.has(input.requestId) &&
+            isRecord(input.modelStep)
+          ) {
+            rejected.push({
+              requestId: input.requestId,
+              model: input.modelStep.model,
+            });
+            return Promise.reject(
+              new Error('Synthetic stop before step start'),
+            );
+          }
+          return handler(input, token, reply);
+        });
+      });
+    try {
+      const keys = await modelTlsCertificate(lab.root);
+      setDefaultCACertificates([...defaultCAs, keys.cert.toString()]);
+      supplier = createServer(
+        { ...keys, minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3' },
+        async (request, response) => {
+          try {
+            if (
+              request.method !== 'POST' ||
+              request.url !== '/v1/chat/completions'
+            ) {
+              response.writeHead(404).end();
+              return;
+            }
+            const chunks: Buffer[] = [];
+            for await (const chunk of request) chunks.push(Buffer.from(chunk));
+            const { model } = JSON.parse(Buffer.concat(chunks).toString()) as {
+              model: string;
+            };
+            modelsReceived.push(model);
+            const frame = {
+              id: 'stepless-cut-fixture',
+              object: 'chat.completion.chunk',
+              created: 1,
+              model,
+            };
+            const choices = [
+              {
+                index: 0,
+                delta: {
+                  role: 'assistant',
+                  content: 'Synthetic fork gate response',
+                },
+                finish_reason: null,
+              },
+              { index: 0, delta: {}, finish_reason: 'stop' },
+            ];
+            response
+              .writeHead(200, { 'content-type': 'text/event-stream' })
+              .end(
+                choices
+                  .map(
+                    (choice) =>
+                      `data: ${JSON.stringify({ ...frame, choices: [choice] })}\n\n`,
+                  )
+                  .join('') + 'data: [DONE]\n\n',
+              );
+          } catch {
+            response.destroy();
+          }
+        },
+      );
+      supplier.on('connection', () => connections++);
+      supplier.listen(0, '127.0.0.1');
+      await once(supplier, 'listening');
+      const base =
+        'https://127.0.0.1:' +
+        (supplier.address() as { port: number }).port +
+        '/v1';
+      const configuration = join(root, 'config/projects', project, 'dsh');
+      const profile = join(configuration, 'profiles/rdws');
+      await mkdir(profile, { recursive: true, mode: 0o700 });
+      await writeFile(
+        join(configuration, '.credentials.yaml'),
+        JSON.stringify({
+          version: 1,
+          refs: { FIXTURE_MODEL: randomBytes(24).toString('hex') },
+        }),
+        { mode: 0o600 },
+      );
+      await writeFile(
+        join(profile, 'cordis.patch.yml'),
+        JSON.stringify([
+          { id: 'session-title-llm', disabled: true },
+          {
+            id: 'llm-pi-ai',
+            config: {
+              providers: {
+                [provider]: {
+                  api: 'openai-completions',
+                  baseURL: base,
+                  apiKeyEnv: 'FIXTURE_MODEL',
+                  models: [{ id: alpha }, { id: beta }],
+                  retryPolicy: { mode: 'normal', maxRetries: 0 },
+                },
+              },
+            },
+          },
+        ]),
+        { mode: 0o600 },
+      );
+      await lab.owner.query(
+        "insert into project(id,name) values('poc','Synthetic fork gate')",
+      );
+      await lab.owner.query(
+        "insert into auth_user(id,name,email,username,active) values($1,'Fixture','gate@fixture.invalid','fixture_gate',true)",
+        [owner],
+      );
+      const password = randomBytes(18).toString('hex');
+      await lab.owner.query(
+        "insert into auth_account(id,account_id,provider_id,user_id,password) values($1,$2,'credential',$2,$3)",
+        [randomUUID(), owner, await hashPassword(password)],
+      );
+      await lab.owner.query(
+        "insert into project_member values('poc',$1,'developer')",
+        [owner],
+      );
+      await lab.owner.query(
+        "insert into requirement(id,project_id,title,description,acceptance,lead_id,created_by) values($1,'poc','Synthetic fork gate demand','','',$2,$2)",
+        [requirement, owner],
+      );
+      await lab.owner.query(
+        "insert into requirement_participant values($1,$2,'developer')",
+        [requirement, owner],
+      );
+      const ticket = randomBytes(32).toString('hex');
+      await lab.owner.query(
+        'update rdws_authority.owner set managed=true,ticket_digest=$1 where singleton',
+        [createHash('sha256').update(ticket).digest('hex')],
+      );
+      const {
+        rows: [fixture],
+      } = await lab.owner.query<{ name: string }>(
+        "select current_setting('rdws.fixture_instance') as name",
+      );
+      vi.stubEnv('RDWS_MODE', 'test');
+      vi.stubEnv('RDWS_NATIVE_MODEL_EGRESS', 'mediated');
+      const options: Parameters<typeof buildApp>[0] = {
+        databaseUrl: lab.databaseUrl,
+        origin,
+        secret: lab.childEnv.BETTER_AUTH_SECRET!,
+        nativeRuntimeRoot: root,
+        repositoryHome: root,
+        authorityTicket: ticket,
+        mainModelPolicy: {
+          projectId: project,
+          provider,
+          model: alpha,
+          destination: base + '/chat/completions',
+        },
+        sessionModelPilot: {
+          alternateModel: beta,
+          databaseFixture: fixture!.name,
+        },
+      };
+      const bff = (app = buildApp(options));
+      const login = await bff.inject({
+        method: 'POST',
+        url: '/api/auth/sign-in/username',
+        headers: { origin },
+        payload: { username: 'fixture_gate', password },
+      });
+      expect(login.statusCode).toBe(200);
+      const cookie = login.cookies
+        .map(({ name, value }) => `${name}=${value}`)
+        .join('; ');
+      const loginId = await observedLogin(bff, cookie);
+      const headers = { cookie, origin, 'x-rdws-edit-session': loginId };
+      const sessions = `/api/requirements/${requirement}/sessions`;
+      const created = await bff.inject({
+        method: 'POST',
+        url: sessions,
+        headers,
+        payload: { commandId: randomUUID() },
+      });
+      expect(created.statusCode).toBe(200);
+      const { sessionId } = created.json<{ sessionId: string }>();
+      expect(configuredHosts.size).toBe(1);
+      const original = [...configuredHosts][0]!;
+      const { pid } = await nativeReady(root);
+      const binding = await bootstrapNative(bff, cookie, requirement);
+      const cwd = await realpath(
+        join(root, 'projects', project, 'demands', requirement),
+      );
+      const {
+        rows: [scope],
+      } = await lab.owner.query<{ native_workspace_id: string }>(
+        'select r.native_workspace_id from requirement r join native_session n on n.requirement_id=r.id where n.id=$1 and r.id=$2 and r.project_id=$3 and n.owner_id=$4 and n.source_session_id is null',
+        [sessionId, requirement, project, owner],
+      );
+      expect(scope?.native_workspace_id).toEqual(expect.any(String));
+      const browser = {
+        purpose: 'browser' as const,
+        userId: owner,
+        authSessionId: loginId,
+        requirementId: requirement,
+        cwd,
+        workspaceId: scope!.native_workspace_id,
+        readSessionIds: [sessionId],
+        ownSessionIds: [sessionId],
+      };
+      const wire = {
+        cookie,
+        origin,
+        'x-rdws-native-login': binding,
+        'x-rdws-client-generation': randomUUID(),
+      };
+      const finish = async (expectedTurns: number) => {
+        const page = await vi.waitFor(
+          async () => {
+            const page = await sessionPage(
+              original,
+              browser,
+              sessionId,
+              undefined,
+              undefined,
+              100,
+            );
+            expect(
+              page.records.filter(({ event }) => event.type === 'turn/end'),
+            ).toHaveLength(expectedTurns);
+            return page;
+          },
+          { timeout: 10_000 },
+        );
+        return page.records.map(({ event }) => event);
+      };
+      const select = async () => {
+        const selected = await bff.inject({
+          method: 'POST',
+          url: `${sessions}/${sessionId}/model-selection`,
+          headers,
+          payload: { commandId: randomUUID(), provider, model: alpha },
+        });
+        expect(selected.statusCode).toBe(200);
+        return selected.json<{
+          selection: { provider: string; model: string; revision: string };
+        }>().selection;
+      };
+      const send = async (requestId: string, target = sessionId) => {
+        const sent = await bff.inject({
+          method: 'POST',
+          url: `/api/dsh/${requirement}/native/api/session/prompt`,
+          headers: wire,
+          payload: {
+            type: 'client-request',
+            method: 'session/prompt',
+            rpcId: randomUUID(),
+            payload: {
+              args: {
+                request: {
+                  sessionId: target,
+                  requestId,
+                  mode: 'queue',
+                  content: [
+                    { type: 'text', text: 'Synthetic fork gate prompt' },
+                  ],
+                },
+              },
+            },
+          },
+        });
+        expect(sent.statusCode, sent.json().error).toBe(200);
+        expect(sent.json().result).toEqual({
+          ok: true,
+          value: { accepted: true },
+        });
+      };
+      const refuseChild = async (child: string, text: string) => {
+        wire['x-rdws-client-generation'] = randomUUID();
+        const refused = await bff.inject({
+          method: 'POST',
+          url: `/api/dsh/${requirement}/native/api/session/prompt`,
+          headers: wire,
+          payload: {
+            type: 'client-request',
+            method: 'session/prompt',
+            rpcId: randomUUID(),
+            payload: {
+              args: {
+                request: {
+                  sessionId: child,
+                  requestId: randomUUID(),
+                  mode: 'queue',
+                  content: [{ type: 'text', text }],
+                },
+              },
+            },
+          },
+        });
+        expect(refused.statusCode).toBe(409);
+        expect(refused.json()).toEqual({
+          error: '请先为派生会话明确选择当前可用模型',
+        });
+      };
+      await select();
+      await send(first);
+      const firstEvents = await finish(1);
+      expect(modelsReceived).toEqual([alpha]);
+      expect(connections).toBe(1);
+      expect(usedForkModels(firstEvents, owner, requirement)).toMatchObject([
+        { requestId: first, provider, model: alpha },
+      ]);
+      expect(
+        (
+          await lab.owner.query(
+            'select state from session_model_first_write where native_session_id=$1 and selection_request_id=$2',
+            [sessionId, first],
+          )
+        ).rows,
+      ).toEqual([{ state: 'submitted' }]);
+      held.add(second);
+      await send(second);
+      const events = await finish(2);
+      expect(rejected).toEqual([{ requestId: second, model: alpha }]);
+      held.delete(second);
+      expect(modelsReceived).toEqual([alpha]);
+      expect(connections).toBe(1);
+      expect(
+        (
+          await lab.owner.query(
+            'select state, accepted_seq::int as seq, accepted_message_id from session_prompt_dispatch where native_session_id=$1 and request_id=$2',
+            [sessionId, second],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          state: 'accepted',
+          seq: expect.any(Number),
+          accepted_message_id: expect.any(String),
+        },
+      ]);
+      expect(
+        (
+          await lab.owner.query(
+            'select attempt_id from session_model_first_write where native_session_id=$1 and selection_request_id=$2',
+            [sessionId, second],
+          )
+        ).rowCount,
+      ).toBe(0);
+      const starts = events.filter(({ type }) => type === 'step/start');
+      expect(starts).toHaveLength(1);
+      expect(starts[0]!.data.turn).toBe(1);
+      const ends = events.filter(({ type }) => type === 'turn/end');
+      expect(ends).toHaveLength(2);
+      const secondEnd = ends[1]!;
+      expect(secondEnd.data.turn).toBe(2);
+      expect(isRecord(secondEnd.data.reason)).toBe(true);
+      expect(
+        isRecord(secondEnd.data.reason)
+          ? secondEnd.data.reason.kind
+          : undefined,
+      ).not.toBe('completed');
+      expect(usedForkModels(events, owner, requirement)).toBeUndefined();
+      const cut = await forkBoundary(original, browser, sessionId);
+      const forked = await bff.inject({
+        method: 'POST',
+        url: sessions + '/' + sessionId + '/fork',
+        headers,
+        payload: { commandId: randomUUID() },
+      });
+      expect(forked.statusCode, forked.body).toBe(200);
+      const child = forked.json<{ sessionId: string }>().sessionId;
+      expect(child).not.toBe(sessionId);
+      expect(
+        (
+          await lab.owner.query(
+            'select source_session_id, source_through_seq::int as cut, owner_id from native_session where id=$1 and requirement_id=$2',
+            [child, requirement],
+          )
+        ).rows,
+      ).toEqual([{ source_session_id: sessionId, cut, owner_id: owner }]);
+      const history = async (id: string) => {
+        const result = await bff.inject({
+          url:
+            sessions + '/' + id + '/history?throughSeq=' + cut + '&pageSize=50',
+          headers,
+        });
+        expect(result.statusCode).toBe(200);
+        return result.json<{ events: { type: string; seq: number }[] }>()
+          .events;
+      };
+      const parentHistory = await history(sessionId);
+      expect(
+        parentHistory.some(({ type }) => type === 'assistant/message'),
+      ).toBe(true);
+      expect(bodyHash(await history(child))).toBe(bodyHash(parentHistory));
+      expect(
+        (
+          await lab.owner.query(
+            "select command_id from command_receipt where operation='model.fork-source'",
+          )
+        ).rows,
+      ).toEqual([]);
+      expect(
+        (
+          await bff.inject({
+            url: sessions + '/' + child + '/model-selection',
+            headers,
+          })
+        ).json(),
+      ).toEqual({ selection: null, firstWrite: null });
+      await refuseChild(child, 'Synthetic stepless descendant');
+      expect(modelsReceived).toEqual([alpha]);
+      expect(connections).toBe(1);
+      await bff.close();
+      app = undefined;
+      expect(() => process.kill(pid, 0)).toThrow(
+        expect.objectContaining({ code: 'ESRCH' }),
+      );
+    } finally {
+      probe.mockRestore();
+      vi.unstubAllEnvs();
+      try {
+        await app?.close();
+      } finally {
+        setDefaultCACertificates(defaultCAs);
+        supplier?.closeAllConnections();
+        if (supplier)
+          await new Promise<void>((resolve) =>
+            supplier!.close(() => resolve()),
+          );
+        await lab.close();
+      }
+    }
+  },
+  90_000,
 );

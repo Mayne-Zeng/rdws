@@ -60,6 +60,7 @@ export async function grantApplication(
     for (const table of [
       'session_model_selection',
       'session_prompt_dispatch',
+      'project_model_allowlist',
     ] as const) {
       const relation = await client.query<{ present: boolean }>(
         'select to_regclass($1) is not null as present',

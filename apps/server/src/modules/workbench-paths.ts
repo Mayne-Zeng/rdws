@@ -40,6 +40,9 @@ export const isImportRequest = (request: FastifyRequest) =>
   request.method === 'POST' &&
   (request.routeOptions.url === importPreviewPath ||
     request.routeOptions.url === importCommitPath);
+export const modelAllowlistPath = '/api/projects/:projectId/model-allowlist';
+export const isModelAllowlistRequest = (request: FastifyRequest) =>
+  request.method === 'POST' && request.routeOptions.url === modelAllowlistPath;
 export const isTemplateBindingRequest = (request: FastifyRequest) =>
   request.routeOptions.url === templateBindingPath &&
   (request.method === 'GET' || request.method === 'POST');

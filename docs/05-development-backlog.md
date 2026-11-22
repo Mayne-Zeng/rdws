@@ -212,7 +212,7 @@
   - D2 已本地验证[正式接口派生和回放](02-directory-and-engineering-design.html#t13-pilot-native-fork-read)。同值修订生效未知时可派生、读取继承历史和重查原键。
   - D2 已本地验证[子会话明确选择后发送](02-directory-and-engineering-design.html#t13-explicit-child-model-plan)。子本人同值保存取得独立修订，保存零推理。冷启后显式发送在冻结后再改选时仍命中原子修订，本地步和 Note 均在继承历史之后。下文记录已生效来源的直接发送对照。
   - [隔离试点工作台的选模、改选与手动发送](02-directory-and-engineering-design.html#t13-model-workbench-choice)已接入本人操作区。真实浏览器覆盖迟到 A、丢回执后刷新与纯读核对、未入箱后显式按原键提交、目录缺项后重选、子会话同值选择。普通及旁观会话沿原显示。正式分层配置和产品走查继续单列。
-  - 方案已交付：[项目级分层允许集合的试点方案](02-directory-and-engineering-design.html#t13-layered-allowset-plan-20261122)。限定既有隔离试点装配与平台层运行配置的单一 Provider 锁定项，新增项目允许集合表与最小权限迁移计划（`project_model_allowlist`），定义项目管理员维护授权面、「Native 目录 ∩ 冻结策略 ∩ 允许集合」投影和集合变化的生效边界。独立评审、实现与验收按该方案另行推进。
+  - 已实现：[项目级分层允许集合的试点方案](02-directory-and-engineering-design.html#t13-layered-allowset-plan-20261122)与[交付证据](02-directory-and-engineering-design.html#t13-layered-allowset-evidence-20261122)。0018 迁移新增 `project_model_allowlist` 及最小权限回收，项目管理员经既有项目配置授权面维护，`readPilotModelOptions` 投影改为「Native 目录 ∩ 冻结策略 ∩ 允许集合」并保留无集合回落与冻结生效边界。七条判据定点测试先红后绿全过；用户侧验收另行确认。
   - [二次派生切点取证](02-directory-and-engineering-design.html#t13-nested-fork-evidence)已覆盖真实父、子、孙。未明确选模的孙会话可读祖先消息，主动发送得到 409，派发和持久首写均零行。两代继承标记和完整前缀与各自来源、截止核对。
   - [已生效来源直接发送](02-directory-and-engineering-design.html#t13-proven-fork-send)在本机试点验证。父确切修订已有成功推理、固定前缀可完整核对时，子无需重新保存即可手动发送；同源兄弟遇父同值新修订时仍需显选。正式配置和具名部署按原判据。
   - 已确认的历史图片规则（T13-A2）：同一本人会话默认只发送文字。可一键「沿用上一张图」，输入框显示可移除缩略图，选择仅随本条消息生效。发送时重新核对当前登录、本人会话和适用模型外发权限。[产品决定](02-directory-and-engineering-design.html#t13-history-image-rule-20261120)。

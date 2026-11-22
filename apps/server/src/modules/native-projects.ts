@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { schema, type connectDatabase } from '@rdws/db';
+import { and, eq } from 'drizzle-orm';
 import { sessionRpc } from '@rdws/dsh/sessions';
 import { publicModelCatalogValue } from '@rdws/dsh/wire';
 import {
@@ -36,11 +38,33 @@ import {
 
 type Business = ReturnType<typeof createBusiness>;
 type Database = Parameters<typeof createSessionOperations>[0];
+type PilotDatabase = ReturnType<typeof connectDatabase>['db'];
 const MAX_CONTEXT_READS = 4;
+
+// The pilot allowlist only converges inside the frozen strategy provider; rows
+// for other providers never change the projection (platform lock stays intact).
+async function readEnabledAllowlistModels(
+  database: PilotDatabase,
+  projectId: string,
+  provider: string,
+): Promise<ReadonlySet<string>> {
+  const rows = await database
+    .select({ model: schema.projectModelAllowlist.model })
+    .from(schema.projectModelAllowlist)
+    .where(
+      and(
+        eq(schema.projectModelAllowlist.projectId, projectId),
+        eq(schema.projectModelAllowlist.provider, provider),
+        eq(schema.projectModelAllowlist.state, 'enabled'),
+      ),
+    );
+  return new Set(rows.map(({ model }) => model));
+}
 
 export async function readPilotModelOptions(
   runtime: ProjectRuntime,
   grant: Parameters<typeof sessionRpc>[1],
+  database?: PilotDatabase,
 ): Promise<SessionModelOptions> {
   const { native, modelPilot: policy } = runtime;
   if (!policy || native.signal.aborted)
@@ -56,12 +80,22 @@ export async function readPilotModelOptions(
     .catch(() => undefined);
   if (!catalog || catalog.failures.some(({ id }) => id === policy.provider))
     businessError(503, '会话模型目录暂不可用');
-  const models = catalog.routableProviders.includes(policy.provider)
+  let models = catalog.routableProviders.includes(policy.provider)
     ? (catalog.groups
         .find(({ id }) => id === policy.provider)
         ?.models.filter(({ id }) => policy.models.has(id))
         .map(({ id }) => id) ?? [])
     : [];
+  if (database) {
+    // Without enabled rows the projection falls back to the accepted
+    // 「Native 目录 ∩ 冻结策略」 behavior; enabled rows only converge it.
+    const allowed = await readEnabledAllowlistModels(
+      database,
+      policy.projectId,
+      policy.provider,
+    );
+    if (allowed.size) models = models.filter((id) => allowed.has(id));
+  }
   return {
     provider: policy.provider,
     models: new Set(models),

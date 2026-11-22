@@ -103,6 +103,30 @@ export const projectMember = pgTable(
   },
   (t) => [primaryKey({ columns: [t.projectId, t.userId, t.role] })],
 );
+export const projectModelAllowlist = pgTable(
+  'project_model_allowlist',
+  {
+    projectId: text('project_id')
+      .notNull()
+      .references(() => project.id),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    state: text('state', { enum: ['enabled', 'disabled'] }).notNull(),
+    revision: uuid('revision').notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    primaryKey({ columns: [t.projectId, t.provider, t.model] }),
+    check(
+      'project_model_allowlist_reference',
+      sql`char_length(${t.provider}) between 1 and 160 and char_length(${t.model}) between 1 and 160`,
+    ),
+    check(
+      'project_model_allowlist_state',
+      sql`${t.state} in ('enabled', 'disabled')`,
+    ),
+  ],
+);
 
 export const requirement = pgTable(
   'requirement',

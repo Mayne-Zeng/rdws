@@ -36,11 +36,11 @@ export async function validateSessionModelStorage(
     select current_user = 'rdws_test_app' and current_database() = 'rdws_test'
       and current_setting('rdws.fixture_instance', true) = $1
       and current_setting('fsync') = 'on' and not pg_is_in_recovery()
-      and (select count(distinct c.oid) = 2 from pg_catalog.pg_class c
+      and (select count(distinct c.oid) = 3 from pg_catalog.pg_class c
         join pg_catalog.pg_namespace n on n.oid=c.relnamespace
         join pg_catalog.pg_trigger t on t.tgrelid=c.oid
         where n.nspname='public' and c.relkind='r'
-          and c.relname in ('session_model_selection','session_prompt_dispatch')
+          and c.relname in ('session_model_selection','session_prompt_dispatch','project_model_allowlist')
           and t.tgname='rdws_authority_writer' and t.tgtype=62 and t.tgenabled='A'
           and t.tgfoid=pg_catalog.to_regprocedure('rdws_authority.check_writer()')
           and pg_catalog.has_table_privilege(current_user,c.oid,'SELECT')

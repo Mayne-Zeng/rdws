@@ -21,6 +21,7 @@ const protectedTables = [
   'auth_verification',
   'project',
   'project_member',
+  'project_model_allowlist',
   'requirement',
   'requirement_participant',
   'native_session',

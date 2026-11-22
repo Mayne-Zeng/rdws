@@ -169,6 +169,7 @@ export function registerSessions(
           return readPilotModelOptions(
             preparedScope.runtime,
             grant(preparedScope),
+            db,
           );
         },
       );

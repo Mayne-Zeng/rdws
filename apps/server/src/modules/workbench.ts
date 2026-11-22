@@ -1,5 +1,6 @@
 import { createWorkbenchRuntime } from './workbench-runtime.ts';
 import { registerAdministration } from './workbench-administration.ts';
+import { registerModelAllowlist } from './model-allowlist.ts';
 import { registerRepositories } from './workbench-repositories.ts';
 import {
   registerRequirementList,
@@ -20,6 +21,7 @@ export async function registerWorkbench(
   const [app] = args;
   const runtime = createWorkbenchRuntime(...args);
   registerAdministration(app, runtime);
+  registerModelAllowlist(app, runtime);
   registerRepositories(app, runtime);
   registerRequirementList(app, runtime);
   registerRequirementImport(app, runtime);

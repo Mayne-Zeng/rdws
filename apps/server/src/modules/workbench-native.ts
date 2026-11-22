@@ -299,6 +299,7 @@ export async function registerNativeTransport(
         (options ??= await readPilotModelOptions(
           runtime,
           grant({ ...original, runtime }),
+          workbench.db,
         ));
       const intent = await mode.store
         .reservePrompt(actionScope, promptKey, current, readOptions, {

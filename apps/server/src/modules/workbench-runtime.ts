@@ -42,6 +42,7 @@ import {
   nativeGenerationHeader,
   isImportRequest,
   isModelSelectionRequest,
+  isModelAllowlistRequest,
   isTemplateBindingRequest,
   isPassiveRequirementRead,
   isWriteAuthorityStatus,
@@ -671,6 +672,7 @@ export function createWorkbenchRuntime(
             key === OBSERVED_LOGIN_HEADER &&
             (isTemplateBindingRequest(request) ||
               isImportRequest(request) ||
+              isModelAllowlistRequest(request) ||
               passiveRead ||
               auditRead ||
               sessionWrite ||
@@ -761,6 +763,7 @@ export function createWorkbenchRuntime(
       const templateBinding = isTemplateBindingRequest(request);
       const passiveRead = isPassiveRequirementRead(request);
       const modelRoute = !!modelSelection && isModelSelectionRequest(request);
+      const allowlistRoute = isModelAllowlistRequest(request);
       const writeRoute =
         isWriteAuthorityStatus(request) || isWriteAuthorityCommand(request);
       const exactSessionRead =
@@ -783,7 +786,8 @@ export function createWorkbenchRuntime(
         accessAudit ||
         exactSessionRead ||
         writeRoute ||
-        modelRoute
+        modelRoute ||
+        allowlistRoute
       )
         verifyEditLogin(request, who.authSessionId, true);
       if ((passiveRead && !exactSessionRead) || isSessionWrite(request))

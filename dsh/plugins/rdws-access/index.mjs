@@ -190,6 +190,7 @@ export function apply(ctx, config) {
     key,
     route,
     context.request,
+    sessionWorkspace,
   );
   if (config.modelRoutes) {
     const installCarrier = (scope) =>
@@ -408,6 +409,7 @@ export function apply(ctx, config) {
             ? presets.ensure(preset, requirementId)
             : undefined,
         bindIntake: contextBinding.bindIntake,
+        validateStage: contextBinding.validateImageStage,
       })
     : undefined;
   if (imageIntake) route('image.status', imageIntake.accepted);

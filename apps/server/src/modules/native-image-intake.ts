@@ -5,6 +5,7 @@ import {
   imageStageHash,
   isRecord,
   nativeImageType,
+  matchesNativeImageType,
   type NativeImageType,
 } from '@rdws/dsh/access';
 import { sessionRpc } from '@rdws/dsh/sessions';
@@ -27,6 +28,17 @@ export function prepareNativeImagePrompt(
   scope: Scope,
   input: { text: string; mediaType: NativeImageType; bytes: Uint8Array },
 ) {
+  return prepareImage(native, runs, scope, input, randomUUID());
+}
+
+function prepareImage(
+  native: NativeWebHost,
+  runs: ContextRuns,
+  scope: Scope,
+  input: { text: string; mediaType: NativeImageType; bytes: Uint8Array },
+  key: string,
+  expected?: string,
+) {
   if (
     !native.imageIntake ||
     native.contextGeneration !== runs.generation ||
@@ -39,7 +51,7 @@ export function prepareNativeImagePrompt(
   )
     throw unavailable();
 
-  const binding = { ...scope, requestId: randomUUID() };
+  const binding = { ...scope, requestId: key };
   const { sessionId, requirementId, requestId, ...actor } = binding;
   const delegation = {
     ...actor,
@@ -79,6 +91,7 @@ export function prepareNativeImagePrompt(
         ...delegation,
         purpose: 'service',
         operation: 'image.stage',
+        ...(expected && { previousImage: true as const }),
         bodyHash: imageStageHash(mediaType, bytes),
       },
       await authorize(signal),
@@ -101,7 +114,11 @@ export function prepareNativeImagePrompt(
         receipt.receiptId,
       ) ||
       typeof receipt.attachmentId !== 'string' ||
-      !/^sha256:[a-f0-9]{64}$/.test(receipt.attachmentId)
+      !/^sha256:[a-f0-9]{64}$/.test(receipt.attachmentId) ||
+      (expected &&
+        (receipt.attachmentId !== expected ||
+          receipt.mediaType !== mediaType ||
+          receipt.bytes !== bytes.byteLength))
     )
       throw unavailable();
 
@@ -118,6 +135,7 @@ export function prepareNativeImagePrompt(
       {
         ...delegation,
         purpose: 'image-prompt',
+        ...(expected && { previousImage: true as const }),
         bodyHash: imagePromptHash(request),
       },
       await authorize(signal),
@@ -168,6 +186,171 @@ export function prepareNativeImagePrompt(
       const result = await submission;
       await authorize(signal);
       return result;
+    },
+  };
+}
+
+export async function selectPreviousNativeImage(
+  native: NativeWebHost,
+  runs: ContextRuns,
+  selected: Scope,
+) {
+  const scoped = { ...selected };
+  let until = Date.now() + LEASE_MS;
+  let target:
+    | Awaited<ReturnType<ContextRuns['authorizePreviousImage']>>['target']
+    | undefined;
+  function identity(actor: Scope) {
+    if (
+      actor.userId !== scoped.userId ||
+      actor.authSessionId !== scoped.authSessionId ||
+      actor.requirementId !== scoped.requirementId ||
+      actor.sessionId !== scoped.sessionId ||
+      actor.workspaceId !== scoped.workspaceId ||
+      actor.cwd !== scoped.cwd ||
+      !native.imageIntake ||
+      native.contextGeneration !== runs.generation ||
+      native.signal.aborted ||
+      Date.now() >= until
+    )
+      throw unavailable();
+  }
+  async function authorize(actor: Scope) {
+    identity(actor);
+    const policy = await runs.authorizePreviousImage(
+      actor,
+      native.projectId,
+      actor.requirementId,
+      actor.sessionId,
+    );
+    identity(actor);
+    if (target && JSON.stringify(target) !== JSON.stringify(policy.target))
+      throw unavailable();
+    target ??= policy.target;
+    const deadline = Math.min(until, policy.validBefore);
+    if (deadline <= Date.now()) throw unavailable();
+    return deadline;
+  }
+  const deadline = await authorize(scoped);
+  until = deadline;
+  const result = await native.control('image.history.select', {
+    scope: scoped,
+    target,
+    deadline,
+  });
+  const requestId =
+    typeof result.requestId === 'string' ? result.requestId : '';
+  if (
+    typeof requestId !== 'string' ||
+    !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(requestId)
+  )
+    throw unavailable();
+  await authorize(scoped);
+  let removed = false;
+  let submitted:
+    Promise<{ requestId: string; attachmentId: string }> | undefined;
+  let frozenText: string | undefined;
+  async function control(op: string, actor: Scope) {
+    const limit = await authorize(actor);
+    const reply = await native.control('image.history.' + op, {
+      scope: scoped,
+      target,
+      requestId,
+      deadline: limit,
+    });
+    await authorize(actor);
+    return reply;
+  }
+  async function send(actor: Scope, text: string, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    const original = await control('take', actor);
+    signal?.throwIfAborted();
+    if (
+      typeof original.data !== 'string' ||
+      original.data.length > 4 * Math.ceil((1024 * 1024) / 3) ||
+      !nativeImageType(original.mediaType) ||
+      typeof original.attachmentId !== 'string'
+    )
+      throw unavailable();
+    const bytes = Buffer.from(original.data, 'base64');
+    if (
+      !bytes.length ||
+      bytes.byteLength !== original.bytes ||
+      bytes.toString('base64') !== original.data ||
+      !matchesNativeImageType(original.mediaType, bytes)
+    )
+      throw unavailable();
+    return prepareImage(
+      native,
+      runs,
+      scoped,
+      { text, mediaType: original.mediaType, bytes },
+      requestId,
+      original.attachmentId,
+    ).submit(signal);
+  }
+  return {
+    requestId,
+    async preview(actor: Scope) {
+      identity(actor);
+      if (removed || submitted) throw unavailable();
+      const r = await control('preview', actor);
+      if (
+        removed ||
+        submitted ||
+        typeof r.data !== 'string' ||
+        r.data.length > 4 * Math.ceil(65536 / 3) ||
+        !nativeImageType(r.mediaType) ||
+        typeof r.width !== 'number' ||
+        typeof r.height !== 'number' ||
+        !Number.isSafeInteger(r.width) ||
+        !Number.isSafeInteger(r.height) ||
+        r.width < 1 ||
+        r.height < 1 ||
+        r.width > 128 ||
+        r.height > 128
+      )
+        throw unavailable();
+      const bytes = Buffer.from(r.data, 'base64');
+      if (
+        !bytes.length ||
+        bytes.byteLength > 65536 ||
+        bytes.toString('base64') !== r.data ||
+        !matchesNativeImageType(r.mediaType, bytes)
+      )
+        throw unavailable();
+      return {
+        bytes,
+        mediaType: r.mediaType,
+        width: r.width,
+        height: r.height,
+      };
+    },
+    async remove(actor: Scope) {
+      identity(actor);
+      if (submitted) throw unavailable();
+      removed = true;
+      await control('remove', actor);
+    },
+    async submit(actor: Scope, text: string, signal?: AbortSignal) {
+      identity(actor);
+      if (
+        removed ||
+        !text.trim() ||
+        text.trimStart().startsWith('/') ||
+        text.length > 8000 ||
+        (submitted && text !== frozenText)
+      )
+        throw unavailable();
+      if (!submitted) {
+        frozenText = text;
+        submitted = send({ ...actor }, text, signal);
+        void submitted.catch(() => {});
+      }
+      await authorize(actor);
+      const sent = await submitted;
+      await authorize(actor);
+      return sent;
     },
   };
 }

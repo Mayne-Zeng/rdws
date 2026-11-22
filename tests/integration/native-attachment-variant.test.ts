@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { once } from 'node:events';
+import { once, EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
 import { existsSync } from 'node:fs';
 import {
   mkdir,
@@ -16,7 +17,7 @@ import { join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { acquireAuthority, connectDatabase, releaseAuthority } from '@rdws/db';
-import { imagePromptHash, isRecord } from '@rdws/dsh/access';
+import { imagePromptHash, imageStageHash, isRecord } from '@rdws/dsh/access';
 import { sessionRpc } from '@rdws/dsh/sessions';
 import { NativeWebHost } from '@rdws/dsh/web';
 import { expect, test, vi } from 'vitest';
@@ -27,7 +28,10 @@ import {
 import { createBusiness } from '../../apps/server/src/modules/business.ts';
 import { createProjectContextReader } from '../../apps/server/src/modules/native-projects.ts';
 import { ContextRuns } from '../../apps/server/src/modules/runtime-context.ts';
-import { prepareNativeImagePrompt } from '../../apps/server/src/modules/native-image-intake.ts';
+import {
+  prepareNativeImagePrompt,
+  selectPreviousNativeImage,
+} from '../../apps/server/src/modules/native-image-intake.ts';
 import {
   readDeepSeekFilesEvidence,
   readDeepSeekMessagesEvidence,
@@ -314,6 +318,132 @@ test('a default history projection requires the same unique current text and a l
   expect(execute).not.toHaveBeenCalled();
 });
 
+test('only the exact retained occurrence can read a selected image', async () => {
+  const { uniqueImageReference, withHistoryText, readImageForCall } =
+    await import('../../dsh/plugins/rdws-access/history-text.mjs');
+  const first = { attachmentId: 'same' };
+  const next = { attachmentId: 'same' };
+  const msg = (ref: typeof first) => ({
+    content: [{ type: 'image', attachment: ref }],
+  });
+  expect(uniqueImageReference([msg(first), msg(first)], first)).toBe(false);
+  expect(uniqueImageReference([msg(first), msg(next)], next)).toBe(true);
+  const read = vi.fn(() => 7);
+  const plan = {
+    active: true,
+    used: false,
+    current: () => true,
+    retainedRef: next,
+  };
+  withHistoryText(plan, () => {
+    expect(() => readImageForCall(read, null, next, [])).toThrow();
+    plan.used = true;
+    expect(() => readImageForCall(read, null, first, [])).toThrow();
+    expect(readImageForCall(read, null, next, [])).toBe(7);
+  });
+  expect(read).toHaveBeenCalledTimes(1);
+});
+
+test('an image stage retires known failures at expiry and preserves an unresolved store', async () => {
+  const { installImageIntake } =
+    await import('../../dsh/plugins/rdws-access/image-intake.mjs');
+  const bytes = Buffer.from('synthetic staging-state sample');
+  for (const failure of ['before', 'returned', 'unknown']) {
+    let at = Date.now();
+    let mode = failure;
+    const cap = {
+      purpose: 'service',
+      operation: 'image.stage',
+      ownSessionIds: ['s'],
+      readSessionIds: ['s'],
+      requestId: randomUUID(),
+      userId: 'u',
+      authSessionId: 'a',
+      requirementId: 'r',
+      workspaceId: 'w',
+      cwd: '/fixture',
+      bodyHash: imageStageHash('image/png', bytes),
+      expiresAt: at + 1000,
+    };
+    const stored = vi.fn(async () => {
+      if (mode === 'unknown') throw Error('Synthetic unknown store');
+      return {
+        receiptId: randomUUID(),
+        image: {
+          attachmentId: 'sha256:' + sha(bytes),
+          bytes: bytes.length,
+          mediaType: 'image/png',
+        },
+      };
+    });
+    let handler!: (req: Readable, res: EventEmitter) => Promise<void>;
+    installImageIntake(
+      {
+        on: () => {},
+        get: (key: string) =>
+          key === 'attachments'
+            ? {
+                imageLimits: {
+                  mediaTypes: ['image/png'],
+                  maxImageBytes: 1024,
+                  maxMessageImageBytes: 1024,
+                },
+              }
+            : { uploadImageStream: stored },
+      },
+      {
+        authenticate: () => ({
+          cap,
+          peer: { signal: new AbortController().signal },
+        }),
+        register: (r: { handler: typeof handler }) => {
+          handler = r.handler;
+        },
+        inspectSession: async () => ({ workspaceId: 'w', cwd: '/fixture' }),
+        assertActivation: () => {},
+        ensurePreset: async () => {},
+        bindIntake: () => {},
+        validateStage: (_cap: unknown, _id: string, image?: unknown) => {
+          if (mode === 'before' || (mode === 'returned' && image))
+            throw Error('Synthetic unavailable selection');
+        },
+      },
+    );
+    async function stage() {
+      let status = 0;
+      const req = Object.assign(Readable.from([bytes]), {
+        method: 'POST',
+        url: '/_rdws/image.stage',
+        headers: {
+          host: '127.0.0.1:1234',
+          origin: 'http://127.0.0.1:1234',
+          'content-type': 'image/png',
+        },
+      });
+      const res = Object.assign(new EventEmitter(), {
+        writeHead: (code: number) => {
+          status = code;
+        },
+        end: () => {},
+      });
+      await handler(req, res);
+      return status;
+    }
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => at);
+    try {
+      expect(await stage()).toBe(503);
+      expect(stored).toHaveBeenCalledTimes(mode === 'before' ? 0 : 1);
+      expect(await stage()).toBe(409);
+      at += 1200;
+      cap.expiresAt = at + 1000;
+      mode = '';
+      expect(await stage()).toBe(failure === 'unknown' ? 409 : 200);
+    } finally {
+      clock.mockRestore();
+    }
+  }
+});
+
 test
   .skipIf(process.platform !== 'darwin')
   .each([
@@ -327,6 +457,11 @@ test
     'native offload all',
     'native text replay',
     'native uploaded',
+    'native upload reuse choice',
+    'native upload reuse changed variant',
+    'native upload reuse lost response',
+    'native upload reuse normalized',
+    'native upload reuse reply expiry',
     'native upload history text',
     'native upload history cold',
     'native upload history normalized',
@@ -391,6 +526,7 @@ test
     );
     const provider = 'deepseek-official';
     const model = 'fixture-vision';
+    let selectedModel = model;
     const accepted =
       (uploadIntake
         ? 'Synthetic uploaded image 🧪 at '
@@ -419,8 +555,12 @@ test
     const receivedTextBoundaries: boolean[] = [];
     const authoredFollowUpDigests: string[][] = [];
     const authoredHistory: string[][] = [];
+    const perMessageImages: { text: string; images: number }[][] = [];
     const readAttemptsPath = join(root, 'synthetic-variant-reads.jsonl');
+    const changedVariantPath = join(root, 'synthetic-variant-target-change');
     const historyBarrier = join(root, 'synthetic-history-barrier');
+    const replyDeadlines: number[] = [];
+    let exchangePolicies = false;
     const wireGrants = new Set<string>();
     const visibleGrants: boolean[] = [];
     const httpEntries: string[] = [];
@@ -588,6 +728,34 @@ test
                         t === accepted ||
                         t === 'Synthetic follow-up text at ' + authoredPath,
                     ),
+                  );
+                }
+                if (transport === 'native upload reuse choice') {
+                  const parsed = readDeepSeekMessagesEvidence(
+                    wire,
+                    'application/json',
+                    model,
+                  );
+                  expect(parsed).toBeDefined();
+                  perMessageImages.push(
+                    received.messages.flatMap((message, messageIndex) => {
+                      if (message.role !== 'user') return [];
+                      const authored = message.content.filter(
+                        (p) =>
+                          p.type === 'text' &&
+                          (p.text === accepted ||
+                            p.text?.startsWith('Synthetic follow-up text at') ||
+                            p.text?.startsWith(
+                              'Synthetic actively reused image at',
+                            )),
+                      );
+                      return authored.map((p) => ({
+                        text: p.text!,
+                        images: parsed!.images.filter(
+                          (image) => image.messageIndex === messageIndex,
+                        ).length,
+                      }));
+                    }),
                   );
                 }
                 const reminders = userTexts.filter((text) =>
@@ -881,9 +1049,11 @@ test
           () => false,
           async () => ({
             provider,
-            model,
+            model: selectedModel,
             revision: 'fixture',
-            routes,
+            routes: exchangePolicies
+              ? { files: routes.messages, messages: routes.files }
+              : routes,
             isCurrent: () => true,
           }),
           useTls
@@ -950,7 +1120,25 @@ test
             const result = await runs.handle(
               input,
               token,
-              (loseAck || revokeBeforeCarrier) && prepare ? undefined : reply,
+              (loseAck || revokeBeforeCarrier) && prepare
+                ? undefined
+                : prepare &&
+                    transport === 'native upload reuse reply expiry' &&
+                    typeof input.selectionDeadline === 'number'
+                  ? (value, deadline) => {
+                      expect(deadline).toBe(input.selectionDeadline);
+                      expect(deadline).toBeLessThan(capability!.expiresAt);
+                      replyDeadlines.push(deadline);
+                      const clock = vi
+                        .spyOn(Date, 'now')
+                        .mockReturnValue(deadline);
+                      try {
+                        reply(value, deadline);
+                      } finally {
+                        clock.mockRestore();
+                      }
+                    }
+                  : reply,
             );
             if (prepare && revokeBeforeCarrier) {
               const image = Array.isArray(input.images) && input.images[0];
@@ -1040,6 +1228,11 @@ test
                   accepted,
                   late,
                   evidencePath,
+                  normalizeSelectedInput:
+                    transport === 'native upload reuse normalized',
+                  ...(transport === 'native upload reuse changed variant' && {
+                    changedVariantPath,
+                  }),
                   ...(historyText && {
                     readAttemptsPath,
                     normalizeFollowUp:
@@ -1911,6 +2104,295 @@ test
         return;
       }
       const warm = await send(accepted, true);
+      if (
+        transport === 'native upload reuse changed variant' ||
+        [
+          'native upload reuse lost response',
+          'native upload reuse normalized',
+          'native upload reuse reply expiry',
+        ].includes(transport)
+      ) {
+        const actor = { ...warm.identity, sessionId: warm.sessionId };
+        if (transport === 'native upload reuse reply expiry') {
+          const readPolicy = runs.authorizePreviousImage.bind(runs);
+          const expiry = Date.now() + 1200;
+          vi.spyOn(runs, 'authorizePreviousImage').mockImplementation(
+            async (...args) => {
+              const policy = await readPolicy(...args);
+              return {
+                ...policy,
+                validBefore: Math.min(policy.validBefore, expiry),
+              };
+            },
+          );
+        }
+        const selected = await selectPreviousNativeImage(host, runs, actor);
+        await selected.preview(actor);
+        const timeline = async () =>
+          (
+            (await sessionRpc(
+              host,
+              {
+                ...actor,
+                purpose: 'browser',
+                readSessionIds: [actor.sessionId],
+                ownSessionIds: [actor.sessionId],
+              },
+              'session/events',
+              {
+                address: { kind: 'session', sessionId: actor.sessionId },
+                maxMessages: 50,
+              },
+            )) as {
+              records: {
+                event: { type: string; data: Record<string, unknown> };
+              }[];
+            }
+          ).records;
+        if (transport !== 'native upload reuse lost response') {
+          if (transport === 'native upload reuse changed variant')
+            await writeFile(changedVariantPath, 'use smaller fixture target');
+          await selected.submit(actor, 'Synthetic current image variant check');
+          await expect
+            .poll(
+              async () =>
+                (await timeline()).filter(
+                  ({ event }) => event.type === 'turn/end',
+                ).length,
+              { timeout: 12000 },
+            )
+            .toBe(2);
+          expect(
+            (await timeline())
+              .filter(({ event }) => event.type === 'turn/end')
+              .at(-1)?.event.data.reason,
+          ).toMatchObject({
+            kind:
+              transport === 'native upload reuse normalized'
+                ? 'blocked'
+                : 'error',
+          });
+          expect(httpEntries).toEqual(['/v1/files', '/v1/messages']);
+          if (transport === 'native upload reuse reply expiry')
+            expect(replyDeadlines).toHaveLength(1);
+          await expect(
+            selectPreviousNativeImage(host, runs, actor),
+          ).rejects.toThrow();
+        } else {
+          let attempts = 0;
+          const original = host.fetch.bind(host);
+          const fault = vi
+            .spyOn(host, 'fetch')
+            .mockImplementation(async (path, grant, init) => {
+              const result = await original(path, grant, init);
+              if (
+                path === '/api/session/prompt' &&
+                typeof init?.body === 'string' &&
+                JSON.parse(init.body)?.payload?.args?.request?.requestId ===
+                  selected.requestId
+              ) {
+                attempts++;
+                expect(result.ok).toBe(true);
+                await result.body?.cancel();
+                throw new Error('Synthetic lost image acceptance');
+              }
+              return result;
+            });
+          try {
+            const text = 'Synthetic original reuse result unknown';
+            await expect(selected.submit(actor, text)).rejects.toThrow();
+            await expect(selected.submit(actor, text)).rejects.toThrow();
+            await expect(
+              selected.submit(actor, text + ' changed'),
+            ).rejects.toThrow();
+            expect(attempts).toBe(1);
+            const inbox = (await timeline()).flatMap(({ event }) =>
+              event.type === 'agent/inbox/spliced' &&
+              Array.isArray(event.data.inserted)
+                ? event.data.inserted
+                : [],
+            );
+            expect(
+              inbox.filter((row) => row.source?.rpcId === selected.requestId),
+            ).toHaveLength(1);
+          } finally {
+            fault.mockRestore();
+          }
+        }
+        return;
+      }
+      if (transport === 'native upload reuse choice') {
+        const actor = { ...warm.identity, sessionId: warm.sessionId };
+        const choice = await selectPreviousNativeImage(host, runs, actor);
+        exchangePolicies = true;
+        await expect(choice.preview(actor)).rejects.toThrow();
+        await expect(
+          selectPreviousNativeImage(host, runs, actor),
+        ).rejects.toThrow();
+        exchangePolicies = false;
+        selectedModel = 'other-fixture-target';
+        await expect(choice.preview(actor)).rejects.toThrow();
+        await expect(
+          selectPreviousNativeImage(host, runs, actor),
+        ).rejects.toThrow();
+        selectedModel = model;
+        const otherLogin = { ...actor, authSessionId: randomUUID() };
+        await database!.pool.query(
+          "insert into auth_session(id,user_id,token,auth_epoch,expires_at) values($1,$2,$3,0,now()+interval '10 minutes')",
+          [otherLogin.authSessionId, actor.userId, randomUUID()],
+        );
+        expect(
+          await runs.authorizeImageIntake(
+            otherLogin,
+            project,
+            actor.requirementId,
+            actor.sessionId,
+          ),
+        ).toBeGreaterThan(Date.now());
+        for (const operation of [
+          () => choice.preview(otherLogin),
+          () => choice.remove(otherLogin),
+          () => choice.submit(otherLogin, 'Synthetic other login'),
+        ])
+          await expect(operation()).rejects.toThrow();
+        const separate = await selectPreviousNativeImage(
+          host,
+          runs,
+          otherLogin,
+        );
+        const originalControl = host.control.bind(host);
+        const gate = vi
+          .spyOn(host, 'control')
+          .mockImplementation(async (op, body) => {
+            const result = await originalControl(op, body);
+            if (
+              op === 'image.history.preview' &&
+              body.requestId === separate.requestId
+            )
+              await database!.pool.query(
+                'update auth_session set expires_at=now() where id=$1',
+                [otherLogin.authSessionId],
+              );
+            return result;
+          });
+        try {
+          await expect(separate.preview(otherLogin)).rejects.toThrow();
+        } finally {
+          gate.mockRestore();
+        }
+        const preview = await choice.preview(actor);
+        expect(preview.bytes.length).toBeGreaterThan(0);
+        expect(preview.bytes.byteLength).toBeLessThanOrEqual(65536);
+        expect(preview.mediaType).toBe('image/png');
+        expect([...preview.bytes.subarray(0, 8)]).toEqual([
+          137, 80, 78, 71, 13, 10, 26, 10,
+        ]);
+        expect(preview.bytes.readUInt32BE(16)).toBe(preview.width);
+        expect(preview.bytes.readUInt32BE(20)).toBe(preview.height);
+        expect(preview.width).toBeGreaterThan(0);
+        expect(preview.width).toBeLessThanOrEqual(128);
+        expect(preview.height).toBeLessThanOrEqual(128);
+        expect(httpEntries).toEqual(['/v1/files', '/v1/messages']);
+        await choice.remove(actor);
+        await expect(
+          choice.submit(actor, 'Synthetic removed selection'),
+        ).rejects.toThrow();
+        const cleared = await send(
+          'Synthetic follow-up text at ' + authoredPath,
+          true,
+          warm,
+        );
+        expect(cleared.sessionId).toBe(warm.sessionId);
+        expect(receivedImages.at(-1)).toEqual([]);
+        const selected = await selectPreviousNativeImage(host, runs, actor);
+        expect((await selected.preview(actor)).bytes).toEqual(preview.bytes);
+        const text = 'Synthetic actively reused image at ' + authoredPath;
+        const [first, duplicate] = await Promise.all([
+          selected.submit(actor, text),
+          selected.submit(actor, text),
+        ]);
+        expect(first).toEqual(duplicate);
+        expect(first.requestId).toBe(selected.requestId);
+        await expect(
+          selected.submit(actor, text + ' changed'),
+        ).rejects.toThrow();
+        await expect.poll(() => replies).toBe(3);
+        expect(receivedImages.map((images) => images.length)).toEqual([
+          1, 0, 1,
+        ]);
+        await send('Synthetic follow-up text at ' + authoredPath, true, warm);
+        expect(receivedImages.map((images) => images.length)).toEqual([
+          1, 0, 1, 0,
+        ]);
+        const follow = 'Synthetic follow-up text at ' + authoredPath;
+        expect(perMessageImages).toEqual([
+          [{ text: accepted, images: 1 }],
+          [
+            { text: accepted, images: 0 },
+            { text: follow, images: 0 },
+          ],
+          [
+            { text: accepted, images: 0 },
+            { text: follow, images: 0 },
+            { text, images: 1 },
+          ],
+          [
+            { text: accepted, images: 0 },
+            { text: follow, images: 0 },
+            { text, images: 0 },
+            { text: follow, images: 0 },
+          ],
+        ]);
+        const manifests = nativeAttempts
+          .filter((a) => a.route === 'messages')
+          .map((a) => a.manifest);
+        expect(manifests[2]?.images).toEqual(manifests[0]?.images);
+        expect(manifests[2]?.images).toHaveLength(1);
+        expect(manifests[2]?.credentialGeneration).toBe(
+          manifests[0]?.credentialGeneration,
+        );
+        expect(manifests[2]?.bindingId).not.toBe(manifests[0]?.bindingId);
+        const stored = (await sessionRpc(
+          host,
+          {
+            ...actor,
+            purpose: 'browser',
+            readSessionIds: [actor.sessionId],
+            ownSessionIds: [actor.sessionId],
+          },
+          'session/events',
+          {
+            address: { kind: 'session', sessionId: actor.sessionId },
+            maxMessages: 50,
+          },
+        )) as {
+          records: { event: { type: string; data: Record<string, unknown> } }[];
+        };
+        const userImages = stored.records.flatMap(({ event }) => {
+          const source = event.data.source;
+          if (
+            event.type !== 'user/message' ||
+            !isRecord(source) ||
+            source.kind !== 'user' ||
+            !Array.isArray(event.data.content)
+          )
+            return [];
+          return event.data.content.flatMap((p) =>
+            isRecord(p) && p.type === 'image' && isRecord(p.attachment)
+              ? [{ request: source.rpcId, asset: p.attachment.attachmentId }]
+              : [],
+          );
+        });
+        expect(userImages).toHaveLength(2);
+        expect(userImages[0]!.request).not.toBe(selected.requestId);
+        expect(userImages[1]).toEqual({
+          request: selected.requestId,
+          asset: userImages[0]!.asset,
+        });
+        await host.close();
+        await expect(selected.submit(actor, text)).rejects.toThrow();
+        return;
+      }
       if (historyText) {
         const authored = 'Synthetic follow-up text at ' + authoredPath;
         const readsBefore = await readFile(readAttemptsPath, 'utf8');

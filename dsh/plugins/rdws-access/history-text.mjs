@@ -8,7 +8,15 @@ export function withHistoryText(plan, work) {
 }
 
 export function readImageForCall(read, owner, ref, args) {
-  if (historyTextCalls.getStore())
+  const plan = historyTextCalls.getStore();
+  if (
+    plan &&
+    (!plan.active ||
+      !plan.used ||
+      !plan.current() ||
+      !plan.retainedRef ||
+      plan.retainedRef !== ref)
+  )
     throw new Error('Native attachment evidence unavailable');
   return read.call(owner, ref, ...args);
 }
@@ -49,13 +57,17 @@ export function matchesText(witness, message, identity) {
   );
 }
 
-export function currentTextPosition(messages, witness, sourceKey) {
+export function currentTextPosition(
+  messages,
+  witness,
+  sourceKey,
+  matches = matchesText,
+) {
   let position = -1;
   for (const [index, message] of messages.entries()) {
     const identity = sourceKey(message);
     if (message.id === witness.id || identity === witness.identity) {
-      if (position !== -1 || !matchesText(witness, message, identity))
-        return -1;
+      if (position !== -1 || !matches(witness, message, identity)) return -1;
       position = index;
     } else if (
       position !== -1 &&
@@ -81,4 +93,14 @@ export function requireImageScope(
     (!agentRequest || !call.bindingId || !origin || !origin.isCurrent())
   )
     throw new Error('Native attachment evidence unavailable');
+}
+
+export function uniqueImageReference(messages, ref) {
+  let count = 0;
+  for (const message of messages)
+    for (const part of message.content) {
+      if (part.type === 'image' && part.attachment === ref && ++count > 1)
+        return false;
+    }
+  return count === 1;
 }

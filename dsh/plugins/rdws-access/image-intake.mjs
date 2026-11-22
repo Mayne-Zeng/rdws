@@ -26,6 +26,7 @@ export function installImageIntake(
     assertActivation,
     ensurePreset,
     bindIntake,
+    validateStage,
   },
 ) {
   const slots = new Map();
@@ -92,15 +93,24 @@ export function installImageIntake(
 
       const now = Date.now();
       for (const [id, slot] of slots)
-        if (slot.retired && slot.expiresAt <= now) slots.delete(id);
+        if (
+          slot.expiresAt <= now &&
+          (slot.retired ||
+            (slot.previousImage && slot.receiptId && !slot.promptNonce))
+        )
+          slots.delete(id);
       const id = key(sessionId, cap.requestId);
       if (slots.has(id) || slots.size >= maxSlots) return answer(409);
-      const slot = { binding, expiresAt: cap.expiresAt };
+      const slot = {
+        previousImage: cap.previousImage === true,
+        binding,
+        expiresAt: cap.expiresAt,
+      };
       slots.set(id, slot);
 
       const controller = new AbortController();
       let reading = true;
-      let storing = false;
+      let storageState = 'not-started';
       const abort = () => {
         controller.abort();
         if (reading) request.destroy();
@@ -151,14 +161,14 @@ export function installImageIntake(
         )
           throw unavailable();
         assertActivation(record, controller.signal);
-        storing = true;
+        validateStage?.(cap, sessionId);
+        storageState = 'unknown';
         const { receiptId, image } = await upload.uploadImageStream({
           sessionId,
           mediaType,
           data: chunks,
           signal: controller.signal,
         });
-        assertActivation(record, controller.signal);
         if (
           typeof receiptId !== 'string' ||
           !uuid.test(receiptId) ||
@@ -170,15 +180,25 @@ export function installImageIntake(
           image.bytes < 1
         )
           throw unavailable();
+        storageState = 'stored';
+        assertActivation(record, controller.signal);
+        validateStage?.(cap, sessionId, image);
         slot.receiptId = receiptId;
         slot.image = {
           attachmentId: image.attachmentId,
           mediaType: image.mediaType,
           bytes: image.bytes,
         };
-        answer(200, { receiptId, attachmentId: image.attachmentId });
+        answer(200, {
+          receiptId,
+          attachmentId: image.attachmentId,
+          ...(cap.previousImage && {
+            mediaType: image.mediaType,
+            bytes: image.bytes,
+          }),
+        });
       } catch {
-        if (!storing) slot.retired = true;
+        if (storageState !== 'unknown') slot.retired = true;
         answer(503);
       } finally {
         clearTimeout(timer);

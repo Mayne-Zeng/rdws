@@ -187,6 +187,7 @@ type ModelStep = {
     grant: string;
     validBefore: number;
     manifest: AttachmentManifest;
+    previousRoutes?: { files: string; messages: string };
   };
 };
 type FixtureWire = {
@@ -449,6 +450,41 @@ export class ContextRuns {
       return invalidModel();
     return validBefore;
   }
+  async authorizePreviousImage(
+    who: Actor,
+    projectId: string,
+    requirementId: string,
+    sessionId: string,
+  ) {
+    const validBefore = await this.authorizeImageIntake(
+      who,
+      projectId,
+      requirementId,
+      sessionId,
+    );
+    const selection = await this.selectModel?.(who, requirementId, sessionId);
+    if (
+      !selection?.isCurrent() ||
+      !selection.routes.files ||
+      !selection.routes.messages ||
+      !this.attachmentPolicy?.credentialGeneration ||
+      validBefore <= Date.now() ||
+      this.closing(who.authSessionId, who.userId, requirementId)
+    )
+      return invalidModel();
+    return {
+      validBefore,
+      target: {
+        provider: selection.provider,
+        model: selection.model,
+        routes: {
+          files: selection.routes.files,
+          messages: selection.routes.messages,
+        },
+        credentialGeneration: this.attachmentPolicy.credentialGeneration,
+      },
+    };
+  }
   private current(batch: readonly Run[]) {
     const now = Date.now();
     return batch.every(
@@ -509,6 +545,8 @@ export class ContextRuns {
           ? []
           : [
               'images',
+              'selectionDeadline',
+              'previousRoutes',
               'userContentSha256',
               'workingDirectoryEdits',
               'projectedUserContentSha256',
@@ -625,12 +663,43 @@ export class ContextRuns {
         sha256: entry.sha256,
       });
     });
+    if (
+      input.selectionDeadline !== undefined &&
+      (typeof input.selectionDeadline !== 'number' ||
+        !Number.isSafeInteger(input.selectionDeadline) ||
+        input.selectionDeadline <= Date.now())
+    )
+      return invalidModel();
+    let previousRoutes;
+    if (
+      input.selectionDeadline !== undefined ||
+      input.previousRoutes !== undefined
+    ) {
+      const routes = input.previousRoutes;
+      if (
+        typeof input.selectionDeadline !== 'number' ||
+        !isRecord(routes) ||
+        !onlyKeys(routes, ['files', 'messages']) ||
+        typeof routes.files !== 'string' ||
+        typeof routes.messages !== 'string' ||
+        routes.files !== step.selection.routes.files ||
+        routes.messages !== step.selection.routes.messages
+      )
+        return invalidModel();
+      previousRoutes = { files: routes.files, messages: routes.messages };
+    }
     const grant = randomUUID();
     calls.add(callId);
     step.attachment = {
+      previousRoutes,
       callId,
       grant,
-      validBefore: cap.expiresAt,
+      validBefore: Math.min(
+        cap.expiresAt,
+        typeof input.selectionDeadline === 'number'
+          ? input.selectionDeadline
+          : Infinity,
+      ),
       manifest: Object.freeze({
         ...policy,
         requirementId: run.requirementId,
@@ -643,7 +712,12 @@ export class ContextRuns {
         projectedUserContentSha256: input.projectedUserContentSha256,
       }),
     };
-    return { bindingId: step.id, callId, grant };
+    return {
+      bindingId: step.id,
+      callId,
+      grant,
+      credentialGeneration: policy.credentialGeneration,
+    };
   }
   authorizeModelAttempt<T>(request: ModelAttempt, send: () => T) {
     return this.withAuthorizedAttempt(request, send);
@@ -949,6 +1023,11 @@ export class ContextRuns {
       );
       if (
         !fresh ||
+        (needsAttachment &&
+          step.attachment?.previousRoutes &&
+          (fresh.routes.files !== step.attachment.previousRoutes.files ||
+            fresh.routes.messages !==
+              step.attachment.previousRoutes.messages)) ||
         fresh.revision !== selection.revision ||
         fresh.provider !== selection.provider ||
         fresh.model !== selection.model ||
@@ -1196,7 +1275,12 @@ export class ContextRuns {
     }
     if (cap.operation?.startsWith('model-attachment-')) {
       const result = this.handleAttachment(input, cap);
-      reply?.(result, cap.expiresAt);
+      const deadline =
+        cap.operation === 'model-attachment-prepare' &&
+        typeof input.selectionDeadline === 'number'
+          ? Math.min(cap.expiresAt, input.selectionDeadline)
+          : cap.expiresAt;
+      reply?.(result, deadline);
       return result;
     }
     if (cap.operation?.startsWith('model-title-')) {

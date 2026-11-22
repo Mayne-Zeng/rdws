@@ -4,7 +4,7 @@ import {
   withHistoryText,
 } from './history-text.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { Socket } from 'node:net';
 import { titleCall } from './title-binding.mjs';
@@ -36,14 +36,14 @@ export function installModelCarrier(
   } = fromAgentLoop('@deepseek-ai/dsh-llm');
   if (typeof isAgentLoopRequest !== 'function')
     throw new Error('Native model identity unavailable');
-  const targets = new Map(
-    [...snapshotModelRoutes(configuredRoutes)].map(([id, url]) => [url, id]),
-  );
+  const routes = snapshotModelRoutes(configuredRoutes);
+  const targets = new Map([...routes].map(([id, url]) => [url, id]));
   const channel = openModelCarrier(
     new Socket({ fd: 4, readable: true, writable: true }),
     generation,
   );
   const calls = new AsyncLocalStorage();
+  const credentialKey = randomBytes(32);
   const attachmentRoutes =
     contextBinding.attachmentCallFor && new Set(['files', 'messages']);
   if (attachmentRoutes) {
@@ -95,7 +95,15 @@ export function installModelCarrier(
           mediaType: result.mediaType,
           width: result.width,
           height: result.height,
+          target: {
+            width: args[0]?.width,
+            height: args[0]?.height,
+            maxBytes: args[0]?.maxBytes,
+          },
         };
+        const committed = scope.projection?.expectedAsset?.variant;
+        if (committed && JSON.stringify(committed) !== JSON.stringify(variant))
+          throw unavailable();
         const previous = attachment.variants.get(id);
         if (
           previous &&
@@ -186,13 +194,35 @@ export function installModelCarrier(
       !uuid.test(ack.grant)
     )
       throw unavailable();
+    const recipient = {
+      provider: call.provider,
+      model: call.model,
+      routes: { files: routes.get('files'), messages: routes.get('messages') },
+      credentialGeneration: ack.credentialGeneration,
+      credential: createHmac('sha256', credentialKey)
+        .update(
+          JSON.stringify([
+            request.headers.get('authorization'),
+            request.headers.get('x-api-key'),
+          ]),
+        )
+        .digest('hex'),
+    };
+    const expectedRecipient =
+      calls.getStore()?.projection?.expectedAsset?.recipient;
+    if (
+      expectedRecipient &&
+      JSON.stringify(expectedRecipient) !== JSON.stringify(recipient)
+    )
+      throw unavailable();
     const response = await channel.fetch(
       route,
       { ...call, attachmentGrant: ack.grant },
       request,
       () => attachment.active && attachment.origin.isCurrent(),
     );
-    if (route === 'messages' && response.ok) attachment.origin.delivered?.();
+    if (route === 'messages' && response.ok)
+      attachment.origin.delivered?.(attachment.variants, recipient);
     return response;
   };
   globalThis.fetch = fetchModel;
@@ -227,6 +257,12 @@ export function installModelCarrier(
           projection ? projection.projected : options,
           call,
         );
+      if (
+        contextBinding.historyTextFor &&
+        agentRequest &&
+        (!call.bindingId || !origin)
+      )
+        throw unavailable();
       requireImageScope(
         !!contextBinding.historyTextFor,
         options,
@@ -234,6 +270,12 @@ export function installModelCarrier(
         call,
         origin,
       );
+      if (
+        projection?.expectedAsset &&
+        (origin?.expected.length !== 1 ||
+          origin.expected[0].reference !== projection.retainedRef)
+      )
+        throw unavailable();
       const attachment = origin && {
         origin,
         variants: new Map(),

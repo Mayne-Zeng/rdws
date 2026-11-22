@@ -1,7 +1,13 @@
 import {
+  installHistoryChoices,
+  localImagePosition,
+  sameImagePosition,
+} from './history-choice.mjs';
+import {
   textWitness,
   matchesText,
   currentTextPosition,
+  uniqueImageReference,
 } from './history-text.mjs';
 import { randomUUID, createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
@@ -107,7 +113,14 @@ export function workingDirectorySpan(message) {
   return { start, end };
 }
 
-export function installContext(ctx, config, key, route, requestContext) {
+export function installContext(
+  ctx,
+  config,
+  key,
+  route,
+  requestContext,
+  sessionWorkspace,
+) {
   const authorized = new Map(),
     agents = new WeakMap(),
     earlyInsertions = new WeakMap(),
@@ -117,6 +130,16 @@ export function installContext(ctx, config, key, route, requestContext) {
   const intakeImages = config.imageIntake ? new WeakMap() : undefined;
   const historyImages =
     intakeImages && imageOrigins ? new WeakMap() : undefined;
+  const choices =
+    historyImages &&
+    installHistoryChoices(
+      ctx,
+      route,
+      historyImages,
+      sessionWorkspace,
+      inputIdentity,
+    );
+  const choiceRuns = choices && new WeakMap();
   if (historyImages)
     ctx.on(
       'session/event',
@@ -698,6 +721,15 @@ export function installContext(ctx, config, key, route, requestContext) {
         : undefined;
       const newRunIds = modelPilot?.(agent, turn, newPrompts, modelSelection);
       if (modelPilot && !newRunIds) return { kind: 'reject' };
+      const requiredChoices = choiceRuns
+        ? [...authorized.values()].filter(
+            (run) =>
+              run.sessionId === String(agent.session.id) &&
+              run.claimedTurn === turn &&
+              choiceRuns.has(run),
+          )
+        : [];
+      let currentChoice;
       let originalText;
       if (historyImages && !agent.session.header.isSeeded) {
         const inputs = messages.filter(
@@ -707,6 +739,20 @@ export function installContext(ctx, config, key, route, requestContext) {
           const msg = inputs[0];
           const run = currentInputRun(agent, msg);
           const proof = run && imageOrigins.get(run);
+          const chosen = run && choiceRuns.get(run);
+          if (
+            chosen &&
+            proof?.turn === turn &&
+            proof.originalDigest === bodyHash(msg.content) &&
+            matchesIntake(run, msg)
+          )
+            currentChoice = {
+              id: msg.id,
+              identity: inputIdentity(msg),
+              digest: proof.originalDigest,
+              chosen,
+            };
+
           if (
             proof?.textTurn === turn &&
             matchesText(proof.text, msg, inputIdentity(msg))
@@ -804,6 +850,14 @@ export function installContext(ctx, config, key, route, requestContext) {
             },
             signal,
             attachmentSources,
+            choice:
+              currentChoice &&
+              prompts.length === 1 &&
+              prompts[0].id === currentChoice.id &&
+              inputIdentity(prompts[0]) === currentChoice.identity &&
+              bodyHash(prompts[0].content) === currentChoice.digest
+                ? currentChoice
+                : undefined,
             historyText:
               originalText &&
               prompts.length === 1 &&
@@ -813,6 +867,14 @@ export function installContext(ctx, config, key, route, requestContext) {
             runs: bindings.map((binding) => authorized.get(lookup(binding))),
             close: () => closeModelStep(record),
           };
+          if (
+            requiredChoices.length &&
+            (requiredChoices.length !== 1 ||
+              record.runs.length !== 1 ||
+              requiredChoices[0] !== record.runs[0] ||
+              !record.choice)
+          )
+            throw attachmentUnavailable();
           if (record.runs.some((run) => !run))
             throw new Error('Unbound model step');
           const fixtureToolHistory = toolProbe?.history(
@@ -834,11 +896,15 @@ export function installContext(ctx, config, key, route, requestContext) {
         );
         if (record && historyImages)
           record.authorizedUserId = snapshot.permissions?.userId;
-        if (record?.historyText) {
+        if (record?.historyText || record?.choice) {
           const actor = prompts[0].source.principal?.userId;
           if (typeof actor === 'string' && actor === record.authorizedUserId)
             record.historyUserId = actor;
-          else record.historyText = undefined;
+          else {
+            if (record.choice) throw attachmentUnavailable();
+            record.historyText = undefined;
+            record.choice = undefined;
+          }
         }
         if (record) {
           if (
@@ -1073,6 +1139,7 @@ export function installContext(ctx, config, key, route, requestContext) {
   return {
     fixtureToolGate: (exec) => toolProbe?.gate(exec),
     revoke(authSessionId, requirementId, cutoff) {
+      choices?.revoke(authSessionId, requirementId);
       if (config.firstMessageTitle)
         cancelTitleOrigins(
           (origin) =>
@@ -1091,6 +1158,7 @@ export function installContext(ctx, config, key, route, requestContext) {
     },
     modelBindingFor,
     confirmModelFirstWrite: modelPilot && confirmModelFirstWrite,
+    validateImageStage: choices?.validateStage,
     bindIntake(cap, sessionId, image) {
       const run = authorized.get(
         lookup({
@@ -1109,6 +1177,8 @@ export function installContext(ctx, config, key, route, requestContext) {
         intakeImages.has(run)
       )
         throw new Error('Native image intake unavailable');
+      const choice = choices?.claim(cap, sessionId, image);
+      if (choice) choiceRuns.set(run, choice);
       intakeImages.set(run, image);
     },
     historyTextFor:
@@ -1116,12 +1186,23 @@ export function installContext(ctx, config, key, route, requestContext) {
       ((options, call) => {
         const record = modelSteps.get(options.sessionId);
         if (
-          !record?.historyText ||
+          (!record?.historyText && !record?.choice) ||
           !call.bindingId ||
           modelBindingFor(options) !== call.bindingId
         )
           return;
         const known = historyImages.get(record.agent.session);
+        if (
+          record.choice &&
+          (!known ||
+            options.provider !==
+              record.choice.chosen.asset.recipient.provider ||
+            options.model !== record.choice.chosen.asset.recipient.model ||
+            !options.messages.some((m) =>
+              m.content.some((p) => p.type === 'image'),
+            ))
+        )
+          throw attachmentUnavailable();
         if (
           !known ||
           !options.messages.some((m) =>
@@ -1131,15 +1212,43 @@ export function installContext(ctx, config, key, route, requestContext) {
           return;
         const currentAt = currentTextPosition(
           options.messages,
-          record.historyText,
+          record.historyText ?? record.choice,
           inputIdentity,
+          record.choice
+            ? (w, m, key) =>
+                m.id === w.id &&
+                key === w.identity &&
+                w.digest === bodyHash(m.content)
+            : undefined,
         );
         if (currentAt < 0) throw attachmentUnavailable();
         const seen = new Set();
+        let retainedRef;
         const messages = options.messages.map((message, index) => {
           if (!message.content.some((p) => p.type === 'image')) return message;
+          if (record.choice && index === currentAt) {
+            const parts = message.content.filter((p) => p.type === 'image');
+            const ref = parts[0]?.attachment;
+            if (
+              parts.length !== 1 ||
+              ref?.attachmentId !== record.choice.chosen.asset.id ||
+              !record.attachmentSources?.has(message.id)
+            )
+              throw attachmentUnavailable();
+            retainedRef = ref;
+            return message;
+          }
           const prior = known.get(message.id);
           if (
+            (record.choice &&
+              !sameImagePosition(
+                prior?.asset?.position,
+                localImagePosition(
+                  record.agent.session,
+                  message,
+                  inputIdentity,
+                ),
+              )) ||
             index >= currentAt ||
             !prior?.completed ||
             prior.turn >= record.body.turn ||
@@ -1159,7 +1268,16 @@ export function installContext(ctx, config, key, route, requestContext) {
           if (!content.some((p) => p.text)) throw attachmentUnavailable();
           return Object.freeze({ ...message, content: Object.freeze(content) });
         });
+        if (
+          record.choice &&
+          (!retainedRef ||
+            !seen.has(record.choice.chosen.messageId) ||
+            !uniqueImageReference(options.messages, retainedRef))
+        )
+          throw attachmentUnavailable();
         return {
+          retainedRef,
+          expectedAsset: record.choice?.chosen.asset,
           original: options,
           projected: Object.freeze({
             ...options,
@@ -1167,7 +1285,9 @@ export function installContext(ctx, config, key, route, requestContext) {
           }),
           active: true,
           used: false,
-          current: () => currentModelStep(record),
+          current: () =>
+            currentModelStep(record) &&
+            (!record.choice || record.choice.chosen.deadline > Date.now()),
         };
       }),
     attachmentCallFor:
@@ -1253,7 +1373,7 @@ export function installContext(ctx, config, key, route, requestContext) {
             historyImages &&
             expected.length &&
             !record.agent.session.header.isSeeded
-              ? () => {
+              ? (variants, recipient) => {
                   if (!currentModelStep(record)) return;
                   let known = historyImages.get(record.agent.session);
                   if (!known)
@@ -1275,7 +1395,38 @@ export function installContext(ctx, config, key, route, requestContext) {
                       continue;
                     if (known.size >= 32 && !known.has(id))
                       known.delete(known.keys().next().value);
+                    const sourceImages = source.origin.images;
+                    const occurrence =
+                      sourceImages.length === 1 ? sourceImages[0] : undefined;
+                    const ref =
+                      occurrence &&
+                      msg.content[occurrence.blockIndex]?.attachment;
+                    const variant = ref && variants.get(ref.attachmentId);
+                    const position =
+                      ref &&
+                      localImagePosition(
+                        record.agent.session,
+                        msg,
+                        inputIdentity,
+                      );
                     known.set(id, {
+                      messageId: id,
+                      contentDigest: bodyHash(msg.content),
+                      asset:
+                        ref &&
+                        position &&
+                        variant &&
+                        recipient.credentialGeneration
+                          ? {
+                              position,
+                              id: ref.attachmentId,
+                              index: occurrence.blockIndex,
+                              bytes: ref.bytes,
+                              mediaType: ref.mediaType,
+                              variant,
+                              recipient,
+                            }
+                          : undefined,
                       turn: record.body.turn,
                       completed: false,
                       userId: source.origin.userId,
@@ -1286,12 +1437,18 @@ export function installContext(ctx, config, key, route, requestContext) {
                 }
               : undefined,
           signal: record.signal,
-          isCurrent: () => currentModelStep(record),
+          isCurrent: () =>
+            currentModelStep(record) &&
+            (!record.choice || record.choice.chosen.deadline > Date.now()),
           prepare: (images, signal) =>
             service(
               'model-attachment-prepare',
               {
                 ...cause,
+                ...(record.choice && {
+                  selectionDeadline: record.choice.chosen.deadline,
+                  previousRoutes: record.choice.chosen.asset.recipient.routes,
+                }),
                 images,
                 userContentSha256,
                 workingDirectoryEdits,

@@ -37,6 +37,8 @@ export function apply(
     late,
     evidencePath,
     readAttemptsPath,
+    changedVariantPath,
+    normalizeSelectedInput,
     normalizeFollowUp,
     historyBarrier,
     repeatImages,
@@ -155,6 +157,20 @@ export function apply(
     'agent/pre-step',
     async (_event, next) => {
       const decision = await next();
+      if (normalizeSelectedInput && decision.kind === 'enter') {
+        return {
+          ...decision,
+          messages: decision.messages.map((m) =>
+            m.content.some(
+              (p) =>
+                p.type === 'text' &&
+                p.text === 'Synthetic current image variant check',
+            )
+              ? { ...m, content: m.content.filter((p) => p.type === 'text') }
+              : m,
+          ),
+        };
+      }
       if (normalizeFollowUp && decision.kind === 'enter') {
         return {
           ...decision,
@@ -279,7 +295,11 @@ export function apply(
             JSON.stringify(ref.attachmentId) + '\n',
           );
         const current = scope.getStore();
-        const variant = await original.call(this, ref, target, signal);
+        const actualTarget =
+          changedVariantPath && existsSync(changedVariantPath)
+            ? { ...target, width: 4, height: 4 }
+            : target;
+        const variant = await original.call(this, ref, actualTarget, signal);
         if (current) {
           const stored = await attachments.readImage(ref, signal);
           appendFileSync(

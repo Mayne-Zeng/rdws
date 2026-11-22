@@ -27,6 +27,7 @@ export interface Grant {
   runId?: string;
   requestId?: string;
   hostGeneration?: string;
+  previousImage?: true;
   sourceSessionId?: string;
   atSeq?: number;
   agentPreset?: string | null;
@@ -91,6 +92,31 @@ export const nativeImageType = (value: unknown): value is NativeImageType =>
   value === 'image/jpeg' ||
   value === 'image/webp' ||
   value === 'image/gif';
+export function matchesNativeImageType(
+  type: NativeImageType,
+  data: Uint8Array,
+) {
+  const prefix = Buffer.from(
+    data.buffer,
+    data.byteOffset,
+    Math.min(data.byteLength, 16),
+  );
+  if (type === 'image/png')
+    return (
+      prefix
+        .subarray(0, 8)
+        .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) &&
+      prefix.toString('ascii', 12, 16) === 'IHDR'
+    );
+  if (type === 'image/jpeg')
+    return prefix[0] === 255 && prefix[1] === 216 && prefix[2] === 255;
+  if (type === 'image/webp')
+    return (
+      prefix.toString('ascii', 0, 4) === 'RIFF' &&
+      prefix.toString('ascii', 8, 12) === 'WEBP'
+    );
+  return ['GIF87a', 'GIF89a'].includes(prefix.toString('ascii', 0, 6));
+}
 export const imageStageHash = (mediaType: NativeImageType, bytes: Uint8Array) =>
   bodyHash([
     mediaType,

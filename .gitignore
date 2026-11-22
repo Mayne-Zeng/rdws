@@ -37,6 +37,9 @@ coverage/
 *.orig
 .chrome-cdp/
 
+# Local agent team state (AgentTeams)
+/.agent-teams/
+
 # Browser authentication and verification artifacts
 /playwright-report/
 /test-results/

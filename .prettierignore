@@ -9,3 +9,4 @@ playwright-report/
 test-results/
 .rdws/
 .impeccable/hook.cache.json
+.agent-teams/

@@ -97,6 +97,7 @@ export function createWorkbenchRuntime(
   fixture?: import('./native-fixture-tool-job.ts').FixtureToolAssembly,
   fleetCommands = false,
   sessionModelPilot?: SessionModelPilot,
+  readTool?: import('./native-projects.ts').ReadToolAssembly,
 ) {
   const instanceRoot =
     process.env.RDWS_MODE === 'test'
@@ -226,6 +227,7 @@ export function createWorkbenchRuntime(
     fixture,
     sessionModelPilot,
     writeTransaction,
+    readTool,
   );
 
   const revokedEpoch = new Map<string, number>();

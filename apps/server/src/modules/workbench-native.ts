@@ -616,6 +616,9 @@ export async function registerNativeTransport(
                 fixtureTool: true,
                 fixtureToolWire: true,
               }),
+              ...(scope.runtime.offerReadTool?.(pendingRun, scope.who) && {
+                readTool: true,
+              }),
             });
           }
           await confirmAccess(request.headers, original);

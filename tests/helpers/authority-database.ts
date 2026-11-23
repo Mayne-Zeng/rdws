@@ -163,6 +163,9 @@ export async function authorityDatabase(
       databaseUrl,
       childEnv,
       migrate,
+      // The exact container name this fixture started, so tests can assert
+      // its removal precisely instead of matching by prefix.
+      containerName: name,
       root,
       close,
       async logs() {

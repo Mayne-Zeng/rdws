@@ -20,6 +20,7 @@ import {
 } from '../../bridge/access.ts';
 import { cancelTitleOrigins, rememberTitleOrigin } from './title-binding.mjs';
 import { installFixtureToolProbe } from './tool-probe.mjs';
+import { installReadToolProbe } from './read-probe.mjs';
 import { installSessionModelPilot } from './session-model-pilot.mjs';
 import { intakeImageMatches } from './image-intake.mjs';
 
@@ -173,6 +174,22 @@ export function installContext(
             authorized.get(lookup(run)) === run && run.expiresAt > Date.now(),
           service,
         )
+      : undefined;
+  // §11.20.26 Read probe: opt-in by the isolated assembly only.
+  const readProbe =
+    config.readToolProbe === true && config.modelRoutes
+      ? installReadToolProbe(ctx, {
+          currentStep: (agent) => {
+            const record = modelSteps.get(String(agent.session.id));
+            return record?.agent === agent && currentModelStep(record)
+              ? record
+              : undefined;
+          },
+          liveRun: (run) =>
+            authorized.get(lookup(run)) === run && run.expiresAt > Date.now(),
+          service,
+          config: { readStreamMinSize: config.readStreamMinSize ?? 16 * 1024 },
+        })
       : undefined;
   const inboxInputs = (agent) => [
     ...agent.inbox.nextStep,
@@ -362,6 +379,8 @@ export function installContext(
     };
     if (input.fixtureTool === true && !toolProbe?.offer(run))
       throw new Error('Invalid fixture tool run');
+    if (input.readTool === true && !readProbe?.offer(run))
+      throw new Error('Invalid read tool run');
     if (!old) authorized.set(id, run);
     return { authorized: true };
   });
@@ -459,6 +478,11 @@ export function installContext(
           source.principal?.kind === 'rdws' ? run : undefined,
           turn,
         );
+      readProbe?.claim(
+        agent,
+        source.principal?.kind === 'rdws' ? run : undefined,
+        turn,
+      );
     },
     { global: true },
   );
@@ -1138,6 +1162,7 @@ export function installContext(
   }
   return {
     fixtureToolGate: (exec) => toolProbe?.gate(exec),
+    readToolGate: (exec) => readProbe?.gate(exec),
     revoke(authSessionId, requirementId, cutoff) {
       choices?.revoke(authSessionId, requirementId);
       if (config.firstMessageTitle)

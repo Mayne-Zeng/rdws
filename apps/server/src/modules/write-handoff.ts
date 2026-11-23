@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { and, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import {
   acquireAuthority,
@@ -272,6 +272,20 @@ export function createOwnedWriteHandoff(
   const windows = readsWindow
     ? createAuthorityWindows(checkedWriteTransaction(pool))
     : undefined;
+  // §11.20.26 windowAuthorize extension point (the "window-checked authority
+  // objects" reserved by §11.20.25): the page window locks every component of
+  // the read's authority generation G. Lock order follows withModelAuthority's
+  // identity()→scope() — session→user→member→(requirement)→participant→
+  // nativeSession — so a writer taking the same rows in the same order never
+  // waits in a cycle against the window. Participation and account state are
+  // judged by the FOR SHARE read-back itself.
+  //
+  // A-08: the requirement row is re-read for existence without a lock. It has
+  // no delete path and never changes id or projectId, so a row lock adds no
+  // guarantee, while ordinary business writes on the same requirement (which
+  // take that row FOR UPDATE) would become gate waiters and turn concurrent
+  // page reads into false 503s. The participation-removal writer therefore
+  // blocks on its first conflicting lock, the participant row DELETE.
   async function windowAuthorize(
     tx: WriteTransaction,
     scope: Scope,
@@ -285,7 +299,29 @@ export function createOwnedWriteHandoff(
       tx,
       scope.sessionId,
     );
-    const [member] = await tx
+    const [session] = await tx
+      .select({
+        expiresAt: schema.session.expiresAt,
+        authEpoch: schema.session.authEpoch,
+      })
+      .from(schema.session)
+      .where(
+        and(
+          eq(schema.session.id, scope.who.authSessionId),
+          eq(schema.session.userId, scope.who.userId),
+        ),
+      )
+      .for('share');
+    if (!session || session.expiresAt <= new Date())
+      businessError(401, '登录已失效，请重新登录');
+    const [account] = await tx
+      .select({ active: schema.user.active, authEpoch: schema.user.authEpoch })
+      .from(schema.user)
+      .where(eq(schema.user.id, scope.who.userId))
+      .for('share');
+    if (!account?.active || account.authEpoch !== session.authEpoch)
+      businessError(401, '账号已停用');
+    const roles = await tx
       .select({ role: schema.projectMember.role })
       .from(schema.projectMember)
       .where(
@@ -294,15 +330,42 @@ export function createOwnedWriteHandoff(
           eq(schema.projectMember.userId, scope.who.userId),
         ),
       )
+      .orderBy(asc(schema.projectMember.role))
       .for('share');
-    if (!member) businessError(403, '无权执行当前需求操作');
-    const [live] = await tx
-      .select({ expiresAt: schema.session.expiresAt })
-      .from(schema.session)
-      .where(eq(schema.session.id, scope.who.authSessionId))
+    if (!roles.length) businessError(403, '无权执行当前需求操作');
+    const [demand] = await tx
+      .select({ id: schema.requirement.id })
+      .from(schema.requirement)
+      .where(
+        and(
+          eq(schema.requirement.id, scope.requirementId),
+          eq(schema.requirement.projectId, scope.projectId),
+        ),
+      );
+    if (!demand) businessError(404, '需求不存在');
+    const participants = await tx
+      .select({
+        userId: schema.requirementParticipant.userId,
+        role: schema.requirementParticipant.role,
+      })
+      .from(schema.requirementParticipant)
+      .where(
+        eq(schema.requirementParticipant.requirementId, scope.requirementId),
+      )
+      .orderBy(
+        asc(schema.requirementParticipant.userId),
+        asc(schema.requirementParticipant.role),
+      )
       .for('share');
-    if (!live || live.expiresAt <= new Date())
-      businessError(401, '登录已失效，请重新登录');
+    if (
+      !participants.some(
+        (participant) =>
+          participant.userId === scope.who.userId &&
+          roles.some((role) => role.role === participant.role),
+      ) &&
+      !roles.some((role) => role.role === 'project_admin')
+    )
+      businessError(403, '无权访问当前需求');
     const [owned] = await tx
       .select({ id: schema.nativeSession.id })
       .from(schema.nativeSession)
@@ -315,6 +378,8 @@ export function createOwnedWriteHandoff(
       )
       .for('share');
     if (!owned) businessError(403, '只能核对本人会话的写权操作');
+    // Read-only insert-only table (SELECT-only for the application role, row
+    // locks would need UPDATE privilege): re-read without a lock.
     const [plan] = await tx
       .select({ repositories: schema.requirementWorktreePlan.repositories })
       .from(schema.requirementWorktreePlan)
@@ -327,10 +392,8 @@ export function createOwnedWriteHandoff(
       )
     )
       businessError(403, '仓库不在需求工作树范围内');
+    return session.expiresAt.getTime();
   }
-  // Frozen plan configuration is SELECT-only for the application role (row
-  // locks require UPDATE privilege); the revocation-blocking window locks
-  // stay on the member, session and native-session rows re-checked above.
   const windowedRead =
     readsEgress && windows
       ? async (input: {
@@ -339,6 +402,12 @@ export function createOwnedWriteHandoff(
           snapshotId: string;
           sha256: string;
           body: Buffer;
+          expiresAt: number;
+          live: {
+            signal: AbortSignal;
+            validBefore: number;
+            live?: () => boolean;
+          };
         }) => {
           const attemptId = randomUUID();
           const key = windowAttemptKey({
@@ -355,13 +424,49 @@ export function createOwnedWriteHandoff(
             attemptId,
             body: input.body,
           });
+          // The login deadline read under lock by the authorization re-check
+          // (T1) reaches the armed callback (T2) through this slot.
+          let loginValidBefore = 0;
           try {
             await windows.prepare(key);
             const outcome = await windows.open({
               key,
-              authorize: (tx) =>
-                windowAuthorize(tx, input.scope, input.repositoryId),
-              arm: () => prepared.arm(),
+              authorize: async (tx) => {
+                loginValidBefore = await windowAuthorize(
+                  tx,
+                  input.scope,
+                  input.repositoryId,
+                );
+              },
+              // §11.20.26 A-05: the armed callback re-checks, in the same
+              // event-loop turn and before the synchronous first write, the
+              // shortest deadline (login, snapshot, read), the read's abort
+              // signal and the fence / shutdown / login-closed state. Any
+              // failure is a provable not-sent outcome that closes out as a
+              // zero-write (503, no page) through the existing path.
+              arm: () => {
+                if (
+                  Math.min(
+                    loginValidBefore,
+                    input.live.validBefore,
+                    input.expiresAt,
+                  ) <= Date.now() ||
+                  input.live.signal.aborted ||
+                  // The FD3 request deadline (its abort signal) and the run
+                  // still being current: a cancelled or released run is a
+                  // provable not-sent.
+                  (input.live.live && !input.live.live()) ||
+                  stopping ||
+                  fences.size > 0 ||
+                  loginClosed(input.scope.who.authSessionId)
+                )
+                  return {
+                    acceptedBytes: 0,
+                    witnessedAt: Date.now(),
+                    wire: 'not-sent' as const,
+                  };
+                return prepared.arm();
+              },
             });
             // Zero-write and sealed close-outs release the prepared
             // connection through the single catch-path abort below.
@@ -462,6 +567,19 @@ export function createOwnedWriteHandoff(
       connection.release(!committed);
       connection.off('error', lost);
     }
+  }
+
+  // The trusted read path only ever receives the actor's identity fields.
+  function readScope(scope: Scope) {
+    return {
+      projectId: scope.projectId,
+      requirementId: scope.requirementId,
+      sessionId: scope.sessionId,
+      who: {
+        userId: scope.who.userId,
+        authSessionId: scope.who.authSessionId,
+      },
+    };
   }
 
   function requireLiveLogin(scope: Scope) {
@@ -2502,24 +2620,59 @@ export function createOwnedWriteHandoff(
       request: Parameters<NonNullable<typeof reads>['read']>[1],
       assertCurrent = () => {},
       signal?: AbortSignal,
+      live?: () => boolean,
     ) =>
       admit(() => {
         if (!reads) businessError(503, '当前读取暂不可用');
         return reads.read(
-          {
-            projectId: scope.projectId,
-            requirementId: scope.requirementId,
-            sessionId: scope.sessionId,
-            who: {
-              userId: scope.who.userId,
-              authSessionId: scope.who.authSessionId,
-            },
-          },
+          readScope(scope),
           structuredClone(request),
           assertCurrent,
           signal,
+          live,
         );
       }),
+    // §11.20.26 metadata entry: one managed whole-file read registers the
+    // single snapshot K and the first-page cursor without any page outbound.
+    readWorktreeStat: (
+      scope: Scope,
+      request: { repositoryId: string; path: string },
+      assertCurrent = () => {},
+      signal?: AbortSignal,
+      live?: () => boolean,
+    ) =>
+      admit(() => {
+        if (!reads) businessError(503, '当前读取暂不可用');
+        return reads.stat(
+          readScope(scope),
+          structuredClone(request),
+          assertCurrent,
+          signal,
+          live,
+        );
+      }),
+    // §11.20.26 long-line continuation registration (the Host probe reports
+    // the displayed prefix of a line the locked read annotated as truncated).
+    readWorktreeSegment: (
+      scope: Scope,
+      request: { snapshotId: string; line: number; prefix: string },
+      assertCurrent = () => {},
+      signal?: AbortSignal,
+      live?: () => boolean,
+    ) =>
+      admit(() => {
+        if (!reads) businessError(503, '当前读取暂不可用');
+        return reads.segment(
+          readScope(scope),
+          structuredClone(request),
+          assertCurrent,
+          signal,
+          live,
+        );
+      }),
+    // §11.20.26: a registered long-line segment of this very scope.
+    readWorktreeSegmentLive: (scope: Scope, segment: string) =>
+      !!reads && reads.registered(readScope(scope), segment),
     confirmCommandScope: (scope: Scope, assertCurrent: () => void) =>
       admit(() =>
         readForCommand(

@@ -19,9 +19,14 @@ import type {
   FixtureToolArm,
   FixtureToolAssembly,
 } from './modules/native-fixture-tool-job.ts';
+import type {
+  ReadToolArm,
+  ReadToolAssembly,
+} from './modules/native-projects.ts';
 import {
   createOwnedWriteHandoff,
   validateWriteHandoffDatabase,
+  type ReadsWindow,
 } from './modules/write-handoff.ts';
 import { checkedWriteTransaction } from './modules/checked-write-transaction.ts';
 import { isWriteAuthorityCommand } from './modules/workbench-paths.ts';
@@ -47,6 +52,13 @@ export function buildApp(options: {
     fleetCommands?: true;
     supervisedExecution?: true;
     readSnapshots?: true;
+    // §11.20.26 Read loopback: the page window carrier and the repository the
+    // isolated Read probe reads.
+    readTool?: {
+      window: ReadsWindow;
+      repositoryId: string;
+      readStreamMinSize?: number;
+    };
   };
 }) {
   const modelEgress = resolveNativeModelEgress(
@@ -59,6 +71,7 @@ export function buildApp(options: {
   const ticket = options.authorityTicket;
   const isolatedWrite = options.isolatedWrite;
   const fixtureTool = isolatedWrite?.fixtureTool === true;
+  const readTool = isolatedWrite?.readTool;
   if (
     isolatedWrite &&
     (process.env.RDWS_MODE !== 'test' ||
@@ -66,11 +79,22 @@ export function buildApp(options: {
       !ticket ||
       ((isolatedWrite.supervisedExecution || isolatedWrite.readSnapshots) &&
         fixtureTool) ||
-      modelEgress !== (fixtureTool ? 'mediated' : 'paused') ||
+      modelEgress !== (fixtureTool || readTool ? 'mediated' : 'paused') ||
       options.nativeHost ||
       !isAbsolute(isolatedWrite.gitPath))
   )
     throw new Error('Isolated write handoff requires a managed macOS test BFF');
+  // L4 assembly: the page carrier must be this loopback HTTPS endpoint;
+  // anything else is refused before any connection is made.
+  if (
+    readTool &&
+    (isolatedWrite?.readSnapshots !== true ||
+      fixtureTool ||
+      new URL(readTool.window.destination).protocol !== 'https:' ||
+      new URL(readTool.window.destination).hostname !== '127.0.0.1' ||
+      !readTool.repositoryId)
+  )
+    throw new Error('Isolated read loopback requires a loopback page carrier');
   const mediated = modelEgress === 'mediated';
   if (
     mediated &&
@@ -143,6 +167,15 @@ export function buildApp(options: {
   )
     throw new Error('Isolated tool probe requires a loopback model supplier');
   if (
+    readTool &&
+    (!policy ||
+      policy.firstMessageTitle ||
+      new URL(policy.destination).hostname !== '127.0.0.1')
+  )
+    throw new Error(
+      'Isolated read loopback requires a loopback model supplier',
+    );
+  if (
     policy?.firstMessageTitle &&
     (process.env.RDWS_MODE !== 'test' ||
       new URL(policy.destination).hostname !== '127.0.0.1')
@@ -166,6 +199,9 @@ export function buildApp(options: {
   );
   let ownedWrite: ReturnType<typeof createOwnedWriteHandoff> | undefined;
   const fixture: FixtureToolAssembly | undefined = fixtureTool ? {} : undefined;
+  const read: ReadToolAssembly | undefined = readTool
+    ? { readStreamMinSize: readTool.readStreamMinSize }
+    : undefined;
   let workbench: Awaited<ReturnType<typeof registerWorkbench>> | undefined;
   const auth = createAuth(database.db, {
     secret: options.secret,
@@ -249,6 +285,29 @@ export function buildApp(options: {
       },
     );
   }
+  if (read) {
+    // One armed Prompt request binds the only run the Read probe may
+    // declare for (hop 1 to hop 3); reading needs no write generation.
+    app.decorate(
+      'armIsolatedReadTool',
+      (input: Omit<ReadToolArm, 'broker' | 'repositoryId'>) => {
+        if (
+          !ownedWrite ||
+          closing ||
+          read.arm ||
+          input.scope.projectId !== policy!.projectId ||
+          !input.requestId ||
+          input.requestId.length > 128
+        )
+          throw new Error('Isolated read probe cannot be armed');
+        read.arm = {
+          ...structuredClone(input),
+          repositoryId: readTool!.repositoryId,
+          broker: ownedWrite,
+        };
+      },
+    );
+  }
   app.addHook('onReady', async () => {
     try {
       const prepared = workbench;
@@ -286,6 +345,7 @@ export function buildApp(options: {
           prepared.writeLoginClosed,
           isolatedWrite.supervisedExecution === true,
           isolatedWrite.readSnapshots === true,
+          readTool?.window,
         );
         ownedWrite.startStopRecovery();
       }
@@ -382,6 +442,7 @@ export function buildApp(options: {
       fixture,
       isolatedWrite?.fleetCommands === true,
       sessionModelPilot,
+      read,
     );
   });
   app.setErrorHandler((error: FastifyError, _request, reply) => {

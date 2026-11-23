@@ -174,6 +174,23 @@ export class NativeWebHost {
       throw new Error('Fixture tools require a fresh mediated test Host');
     this.fixtureToolProbe = true;
   }
+  private readToolProbe = false;
+  enableReadToolProbe(readStreamMinSize = 16 * 1024) {
+    if (
+      process.env.RDWS_MODE !== 'test' ||
+      this.modelEgress !== 'mediated' ||
+      this.modelTransport?.sessionModelPilot ||
+      this.starting ||
+      this.process ||
+      this.closing
+    )
+      throw new Error('Read tools require a fresh mediated test Host');
+    if (!Number.isSafeInteger(readStreamMinSize) || readStreamMinSize < 1)
+      throw new Error('Read tools require a streaming threshold');
+    this.readToolProbe = true;
+    this.readStreamMinSize = readStreamMinSize;
+  }
+  private readStreamMinSize = 16 * 1024;
   private contextHandler?: ContextHandler;
   configureContext(handle: ContextHandler) {
     this.contextHandler = handle;
@@ -510,6 +527,10 @@ export class NativeWebHost {
                 releasedCapabilities: this.releasedCapabilities,
                 contextGeneration: this.contextGeneration,
                 ...(this.fixtureToolProbe && { fixtureToolProbe: true }),
+                ...(this.readToolProbe && {
+                  readToolProbe: true,
+                  readStreamMinSize: this.readStreamMinSize,
+                }),
                 ...(this.modelTransport
                   ? {
                       modelRoutes: Object.fromEntries(

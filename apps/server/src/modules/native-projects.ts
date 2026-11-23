@@ -14,9 +14,14 @@ import {
 } from '@rdws/dsh/web';
 import type { createBusiness } from './business.ts';
 import { businessError, type Actor } from './business.ts';
+import type {
+  createOwnedWriteHandoff,
+  WriteHandoffScope,
+} from './write-handoff.ts';
 import {
   ContextRuns,
   contextSnapshot,
+  type ReadToolOperation,
   type RunBinding,
 } from './runtime-context.ts';
 import {
@@ -40,6 +45,22 @@ type Business = ReturnType<typeof createBusiness>;
 type Database = Parameters<typeof createSessionOperations>[0];
 type PilotDatabase = ReturnType<typeof connectDatabase>['db'];
 const MAX_CONTEXT_READS = 4;
+
+// §11.20.26 Read loopback assembly (isolated, opt-in): one armed Workbench
+// Prompt request binds the only run the Read probe may declare for. The
+// FD3 read service of hop 4 runs on the armed broker with the scope
+// re-derived from the signed run binding by ContextRuns.
+export type ReadToolArm = {
+  scope: WriteHandoffScope;
+  requestId: string;
+  repositoryId: string;
+  broker: ReturnType<typeof createOwnedWriteHandoff>;
+};
+export type ReadToolAssembly = {
+  arm?: ReadToolArm;
+  readStreamMinSize?: number;
+  offered?: { run: RunBinding };
+};
 
 // The pilot allowlist only converges inside the frozen strategy provider; rows
 // for other providers never change the projection (platform lock stays intact).
@@ -143,6 +164,7 @@ export function createProjectRuntimes(
   fixture?: FixtureToolAssembly,
   sessionModelPilot?: SessionModelPilot,
   pilotTransaction?: CheckedWriteTransaction,
+  readTool?: ReadToolAssembly,
 ) {
   if (sessionModelPilot && !pilotTransaction)
     throw new Error('Session model pilot requires a checked model authority');
@@ -161,6 +183,8 @@ export function createProjectRuntimes(
         : undefined;
     let offered: { run: RunBinding; job: NativeFixtureToolJob } | undefined;
     if (fixture && policy) native.enableFixtureToolProbe();
+    if (readTool && policy)
+      native.enableReadToolProbe(readTool.readStreamMinSize);
     const runtime: ProjectRuntime = {
       native,
       catalogModel: policy && {
@@ -269,6 +293,96 @@ export function createProjectRuntimes(
           },
           closeFixture: async () => offered?.job.close(),
         }),
+      ...(readTool &&
+        policy && {
+          // One armed Prompt request binds the only run the Read probe may
+          // declare for; the run control message then carries readTool.
+          offerReadTool(run: RunBinding, who: Actor) {
+            const arm = readTool.arm;
+            if (
+              readTool.offered ||
+              !arm ||
+              arm.scope.projectId !== project ||
+              arm.scope.requirementId !== run.requirementId ||
+              arm.scope.sessionId !== run.sessionId ||
+              arm.requestId !== run.requestId ||
+              arm.scope.who.userId !== who.userId ||
+              arm.scope.who.authSessionId !== who.authSessionId
+            )
+              return false;
+            readTool.offered = { run };
+            return true;
+          },
+        }),
+    };
+    // The Read binding handed to every FD3 request of the armed run (hop 3
+    // and hop 4): resolved per request, the scope re-derived by ContextRuns
+    // from the signed binding, never taken from the request body.
+    const readBinding = () => {
+      const arm = readTool?.arm;
+      const armed = readTool?.offered?.run;
+      if (!readTool || !arm || !armed) return undefined;
+      return {
+        run: armed,
+        projectId: project,
+        segment: (_input: Record<string, unknown>, id: string) =>
+          arm.broker.readWorktreeSegmentLive(arm.scope, id),
+        service: async (
+          operation: ReadToolOperation,
+          scope: WriteHandoffScope,
+          input: Record<string, unknown>,
+          expiresAt: number,
+          live: () => boolean,
+        ) => {
+          // The FD3 request deadline bounds the read through an abort
+          // signal the armed callback re-checks; the run's liveness
+          // (cancel, release) reaches the same re-check.
+          const current = () => {
+            if (Date.now() > expiresAt || !live())
+              businessError(409, '当前读取已失效');
+          };
+          const controller = new AbortController();
+          const timer = setTimeout(
+            () => controller.abort(),
+            Math.max(0, expiresAt - Date.now()),
+          );
+          timer.unref?.();
+          try {
+            if (operation === 'worktree-stat')
+              return await arm.broker.readWorktreeStat(
+                scope,
+                { repositoryId: arm.repositoryId, path: String(input.path) },
+                current,
+                controller.signal,
+                live,
+              );
+            if (operation === 'worktree-read')
+              return await arm.broker.readWorktree(
+                scope,
+                { cursor: String(input.cursor) },
+                current,
+                controller.signal,
+                live,
+              );
+            return await arm.broker.readWorktreeSegment(
+              scope,
+              {
+                snapshotId: String(input.snapshotId),
+                line: Number(input.line),
+                prefix: String(input.prefix),
+                ...(input.segment !== undefined && {
+                  segment: String(input.segment),
+                }),
+              },
+              current,
+              controller.signal,
+              live,
+            );
+          } finally {
+            clearTimeout(timer);
+          }
+        },
+      };
     };
     native.configureContext((input, token, reply) => {
       if (closing) businessError(403, '原生项目正在停止');
@@ -280,6 +394,7 @@ export function createProjectRuntimes(
         },
         offered?.run,
         offered?.job,
+        readBinding(),
       );
     });
     live.set(project, runtime);
@@ -326,6 +441,7 @@ export function createProjectRuntimes(
               body,
               model,
               proof?.projection,
+              runtime.runs.readWire(request),
             );
             if (normalized && proof)
               projections.set(request, {
@@ -437,4 +553,5 @@ export interface ProjectRuntime {
   abandonedRuns: Set<string>;
   offerFixtureTool?(run: RunBinding, who: Actor): boolean;
   closeFixture?(): Promise<void>;
+  offerReadTool?(run: RunBinding, who: Actor): boolean;
 }

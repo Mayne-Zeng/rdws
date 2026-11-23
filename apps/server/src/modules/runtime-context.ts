@@ -6,6 +6,11 @@ import type {
   ModelWireOutcome,
 } from '@rdws/dsh/web';
 import {
+  readReplyLimit,
+  readToolArguments,
+  readToolName,
+} from '@rdws/dsh/read-tool-arguments';
+import {
   businessError,
   digestOf,
   type Actor,
@@ -15,7 +20,11 @@ import {
   fixtureToolOperations,
   type NativeFixtureToolJob,
 } from './native-fixture-tool-job.ts';
-import type { FixtureToolProjection } from './model-egress-policy.ts';
+import type { WriteHandoffScope } from './write-handoff.ts';
+import type {
+  FixtureToolProjection,
+  ReadToolProjection,
+} from './model-egress-policy.ts';
 import type {
   ModelFirstWrite,
   ModelFirstWriteReceipts,
@@ -177,6 +186,7 @@ type ModelStep = {
   validBefore?: number;
   contextVersion?: number;
   fixtureToolUsed?: true;
+  readToolUsed?: true;
   fixtureToolJob?: NativeFixtureToolJob;
   fixtureWire?: FixtureWire;
   attempts: Set<string>;
@@ -237,8 +247,68 @@ function parseStepMarker(input: unknown): StepMarker {
     model: input.model,
   };
 }
+// §11.20.26 Read argument shape, shared by the permit and the FD4 body
+// policy.
+export { readLimit as readToolLimit } from '@rdws/dsh/read-tool-arguments';
+// FD3 read service operations of hop 4: one metadata request per file, one
+// page request per page, and the long-line segment registration.
+const readToolOperations = [
+  'worktree-stat',
+  'worktree-read',
+  'read-segment-register',
+] as const;
+export type ReadToolOperation = (typeof readToolOperations)[number];
+export type ReadToolBinding = {
+  run: RunBinding;
+  // Project of the armed run; the read scope is derived here from the signed
+  // run binding, the login and the own session.
+  projectId: string;
+  // Registered long-line segments of the original run, login and own
+  // session; a segment path is accepted only when this confirms it.
+  segment?: (input: Record<string, unknown>, segment: string) => boolean;
+  // The trusted parent read. Repository, path and cursor are the only
+  // variable fields the caller supplies.
+  service?: (
+    operation: ReadToolOperation,
+    scope: WriteHandoffScope,
+    input: Record<string, unknown>,
+    // The FD3 request deadline: never later than the step, the login and
+    // the permit; and whether the run is still current (cancel, release).
+    expiresAt: number,
+    live: () => boolean,
+  ) => Promise<unknown>;
+};
+// The FD3 reply cap (shared with the read service, which judges it before a
+// page leaves) is the backstop here.
+const readBindingFields = [
+  'runId',
+  'hostGeneration',
+  'requirementId',
+  'sessionId',
+  'requestId',
+  'peerNonce',
+  'authSessionId',
+];
+const readVariableFields: Record<ReadToolOperation, string[]> = {
+  'worktree-stat': ['path'],
+  'worktree-read': ['cursor'],
+  'read-segment-register': ['snapshotId', 'line', 'prefix'],
+};
+export function readToolPermitArguments(
+  input: Record<string, unknown>,
+  segment?: ReadToolBinding['segment'],
+): boolean {
+  // The frozen-arguments check belongs to the Host probe, before the body
+  // is signed; the parent judges the received shape exactly.
+  return (
+    isRecord(input.arguments) && readToolArguments(input.arguments, segment)
+  );
+}
+
 export class ContextRuns {
   private runs = new Map<string, Run>();
+  // The Read binding of the armed run, remembered from its first FD3 request.
+  private readArmed?: ReadToolBinding;
   private nonces = new Map<string, number>();
   private modelSteps = new Map<string, ModelStep>();
   private titles = new Map<string, TitleOrigin>();
@@ -806,6 +876,26 @@ export class ContextRuns {
     if (step && !step.closed && request.call.bindingId === step.id)
       return step.fixtureWire;
   }
+  // §11.20.26 hop 6: the FD4 body projection of the armed Read run. Only the
+  // steps of the run bound at hop 3 carry the read declaration and history.
+  readWire(request: ModelAttempt): ReadToolProjection | undefined {
+    const armed = this.readArmed;
+    if (
+      !armed?.segment ||
+      request.routeId !== 'main' ||
+      request.call.purpose !== undefined
+    )
+      return;
+    const step = this.modelSteps.get(request.call.sessionId ?? '');
+    if (
+      step &&
+      !step.closed &&
+      request.call.bindingId === step.id &&
+      step.batch.length === 1 &&
+      step.batch[0]?.runId === armed.run.runId
+    )
+      return { kind: 'read', segment: armed.segment };
+  }
   pilotWireModel(request: ModelAttempt) {
     if (
       !this.modelPilot ||
@@ -1203,10 +1293,14 @@ export class ContextRuns {
     reply?: (result: unknown, validBefore: number) => void,
     fixtureToolRun?: RunBinding,
     fixtureToolJob?: NativeFixtureToolJob,
+    readTool?: ReadToolBinding,
   ) {
     const cap = this.verify(token),
       now = Date.now();
     const fixtureEnabled = fixtureToolRun && process.env.RDWS_MODE === 'test';
+    // The Read permit exists only in the isolated assembly that armed it.
+    const readEnabled = readTool && process.env.RDWS_MODE === 'test';
+    if (readEnabled && readTool.segment) this.readArmed = readTool;
     const fixtureOperation =
       fixtureEnabled &&
       fixtureToolJob &&
@@ -1226,6 +1320,8 @@ export class ContextRuns {
         'model-title-close',
         ...(fixtureEnabled ? ['fixture-tool-permit'] : []),
         ...(fixtureOperation ? [fixtureOperation] : []),
+        ...(readEnabled ? ['read-tool-permit'] : []),
+        ...(readEnabled && readTool.service ? readToolOperations : []),
         'model-attachment-prepare',
         'model-attachment-release',
       ].includes(cap.operation ?? '') ||
@@ -1271,6 +1367,29 @@ export class ContextRuns {
         fixtureToolJob,
       );
       reply?.(result, result.expiresAt);
+      return result;
+    }
+    if (cap.operation === 'read-tool-permit' && readEnabled) {
+      const result = await this.authorizeReadTool(
+        input,
+        cap,
+        readTool,
+        fixtureToolJob,
+      );
+      reply?.(result, result.expiresAt);
+      return result;
+    }
+    const readOperation = readToolOperations.find(
+      (operation) => operation === cap.operation,
+    );
+    if (readOperation && readEnabled && readTool.service) {
+      const result = await this.handleWorktreeRead(
+        input,
+        readOperation,
+        readTool,
+        cap,
+      );
+      reply?.(result, cap.expiresAt);
       return result;
     }
     if (cap.operation?.startsWith('model-attachment-')) {
@@ -1569,5 +1688,134 @@ export class ContextRuns {
     step.fixtureToolJob = job;
     step.fixtureToolUsed = true;
     return { digest: cap.bodyHash, expiresAt, ...(jobId && { jobId }) };
+  }
+
+  // §11.20.26 hop 4, the FD3 read service. The scope is re-derived here from
+  // the signed run binding, the login and the own session; the caller only
+  // supplies the variable fields of the operation. A reply over the envelope
+  // cap fails without a page.
+  private async handleWorktreeRead(
+    input: Record<string, unknown>,
+    operation: ReadToolOperation,
+    binding: ReadToolBinding,
+    cap: Grant,
+  ) {
+    const run = this.runs.get(binding.run.runId);
+    if (!run || !binding.service) businessError(403, '当前运行绑定已失效');
+    if (
+      run.expiresAt <= Date.now() ||
+      this.closing(run.who.authSessionId, run.who.userId, run.requirementId) ||
+      Object.entries(this.binding(run)).some(
+        ([key, value]) =>
+          binding.run[key as keyof RunBinding] !== value ||
+          input[key] !== value,
+      ) ||
+      input.authSessionId !== run.who.authSessionId
+    )
+      businessError(403, '当前运行绑定已失效');
+    const variable = readVariableFields[operation];
+    const names = Object.keys(input);
+    // read-segment-register takes one optional field: the segment a
+    // truncated continuation itself continues.
+    const optional =
+      operation === 'read-segment-register' && 'segment' in input ? 1 : 0;
+    if (
+      names.length !== readBindingFields.length + variable.length + optional ||
+      (!optional && names.includes('segment')) ||
+      !readBindingFields.every((key) => key in input) ||
+      !variable.every((key) => key in input)
+    )
+      businessError(400, '读取参数不正确');
+    const scope: WriteHandoffScope = {
+      projectId: binding.projectId,
+      requirementId: run.requirementId,
+      sessionId: run.sessionId,
+      who: {
+        userId: run.who.userId,
+        authSessionId: run.who.authSessionId,
+      },
+    };
+    const result = await binding.service(
+      operation,
+      scope,
+      Object.fromEntries(
+        [...variable, ...(optional ? ['segment'] : [])].map((key) => [
+          key,
+          input[key],
+        ]),
+      ),
+      cap.expiresAt,
+      () => this.current([run]),
+    );
+    if (
+      Buffer.byteLength(JSON.stringify(result) ?? '', 'utf8') > readReplyLimit
+    )
+      businessError(413, '读取回包超过上限');
+    return result;
+  }
+
+  // §11.20.26 Read-specific single-use permit. Same binding discipline as the
+  // fixture permit — original run, login, own session, Agent generation,
+  // turn, current step and mediated binding — plus the exact argument shape
+  // of the locked read: {file_path[, offset][, limit]}, a registered path or
+  // a registered segment, positive integers and limit within the read limit.
+  private async authorizeReadTool(
+    input: Record<string, unknown>,
+    cap: Grant,
+    binding: ReadToolBinding,
+    job?: NativeFixtureToolJob,
+  ) {
+    const expected = binding.run;
+    const run = this.runs.get(expected.runId);
+    const step = this.modelSteps.get(expected.sessionId);
+    const { deadline } = input;
+    if (
+      !run ||
+      !step ||
+      step.batch.length !== 1 ||
+      step.batch[0] !== run ||
+      Object.entries(this.binding(run)).some(
+        ([key, value]) =>
+          expected[key as keyof RunBinding] !== value || input[key] !== value,
+      ) ||
+      input.authSessionId !== run.who.authSessionId ||
+      input.agentGeneration !== step.agentGeneration ||
+      input.turn !== step.turn ||
+      input.modelBindingId !== step.id ||
+      bodyHash(parseStepMarker(input.modelStep)) !== bodyHash(step.stamp) ||
+      input.toolName !== readToolName ||
+      typeof input.toolCallId !== 'string' ||
+      input.toolCallId.length < 1 ||
+      input.toolCallId.length > 128 ||
+      !Number.isSafeInteger(input.toolCallSeq) ||
+      Number(input.toolCallSeq) < 1 ||
+      typeof deadline !== 'number' ||
+      !Number.isSafeInteger(deadline) ||
+      deadline <= Date.now() ||
+      deadline > Date.now() + 2000 ||
+      !readToolPermitArguments(input, binding.segment)
+    )
+      return invalidModel();
+    const current = () =>
+      this.modelSteps.get(run.sessionId) === step &&
+      !step.closed &&
+      step.selection?.isCurrent() &&
+      this.current([run]);
+    if (step.readToolUsed || !current()) return invalidModel();
+    const login = await this.read(run.who, run.requirementId, run.sessionId);
+    const expiresAt = Math.min(
+      cap.expiresAt,
+      login.validBefore,
+      step.validBefore ?? 0,
+      run.expiresAt,
+      deadline,
+      job ? Date.now() + 1200 : Infinity,
+    );
+    // Single issue: a second ticket for the same call in the same step,
+    // a step that changed, or a run cancelled meanwhile all stay at zero.
+    if (step.readToolUsed || !current() || expiresAt <= Date.now())
+      return invalidModel();
+    step.readToolUsed = true;
+    return { digest: cap.bodyHash, expiresAt };
   }
 }

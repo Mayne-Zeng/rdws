@@ -3,6 +3,7 @@ import { open } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { isRecord, onlyKeys } from '@rdws/dsh/access';
 import { validProjectId } from '@rdws/dsh/web';
+import { readToolArguments } from '@rdws/dsh/read-tool-arguments';
 
 const maximumPolicyBytes = 4096;
 const unavailable = () => new Error('Main model egress policy is not usable');
@@ -126,6 +127,113 @@ const fixtureResult = 'RDWS fixture worktree state: ok';
 
 export type FixtureToolProjection =
   { kind: 'declaration' } | { kind: 'history'; callId: string };
+// §11.20.26 FD4 body projection of the armed Read run (hop 6): the locked
+// read is the only declared tool, and every tool exchange in the history is
+// one read call with the exact argument shape (a registered path or segment)
+// immediately followed by its own result. The FD4 first write itself is the
+// existing mechanism and is not changed.
+export type ReadToolProjection = {
+  kind: 'read';
+  segment: (input: Record<string, unknown>, id: string) => boolean;
+};
+const readName = 'read';
+const readDescription =
+  'Read a UTF-8 text file and return line-numbered content.';
+const readResultLimit = 256 * 1024;
+
+function readDeclaration(value: unknown) {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 1 ||
+    !isRecord(value[0]) ||
+    !onlyKeys(value[0], ['type', 'function']) ||
+    value[0].type !== 'function' ||
+    !isRecord(value[0].function)
+  )
+    return false;
+  const fn = value[0].function;
+  if (
+    !onlyKeys(fn, ['name', 'description', 'parameters']) ||
+    fn.name !== readName ||
+    fn.description !== readDescription ||
+    !isRecord(fn.parameters) ||
+    !onlyKeys(fn.parameters, [
+      'type',
+      'properties',
+      'required',
+      'additionalProperties',
+    ]) ||
+    fn.parameters.type !== 'object' ||
+    !isRecord(fn.parameters.properties) ||
+    !('file_path' in fn.parameters.properties) ||
+    !Object.keys(fn.parameters.properties).every((key) =>
+      ['file_path', 'offset', 'limit'].includes(key),
+    )
+  )
+    return false;
+  return (
+    fn.parameters.required === undefined ||
+    (Array.isArray(fn.parameters.required) &&
+      fn.parameters.required.length === 1 &&
+      fn.parameters.required[0] === 'file_path')
+  );
+}
+
+function readHistory(
+  messages: unknown[],
+  segment: ReadToolProjection['segment'],
+) {
+  let index = 0;
+  while (index < messages.length) {
+    const entry = messages[index];
+    if (!isRecord(entry) || entry.tool_calls === undefined) {
+      if (!textMessage(entry)) return false;
+      index++;
+      continue;
+    }
+
+    if (
+      !onlyKeys(entry, ['role', 'content', 'tool_calls']) ||
+      entry.role !== 'assistant' ||
+      (entry.content !== null && entry.content !== '') ||
+      !Array.isArray(entry.tool_calls) ||
+      entry.tool_calls.length !== 1
+    )
+      return false;
+    const call = entry.tool_calls[0];
+    if (
+      !isRecord(call) ||
+      !onlyKeys(call, ['id', 'type', 'function']) ||
+      typeof call.id !== 'string' ||
+      !call.id ||
+      call.type !== 'function' ||
+      !isRecord(call.function) ||
+      !onlyKeys(call.function, ['name', 'arguments']) ||
+      call.function.name !== readName ||
+      typeof call.function.arguments !== 'string'
+    )
+      return false;
+    let args: unknown;
+    try {
+      args = JSON.parse(call.function.arguments);
+    } catch {
+      return false;
+    }
+    if (!isRecord(args) || !readToolArguments(args, segment)) return false;
+    const result = messages[index + 1];
+    if (
+      !isRecord(result) ||
+      !onlyKeys(result, ['role', 'tool_call_id', 'content']) ||
+      result.role !== 'tool' ||
+      result.tool_call_id !== call.id ||
+      typeof result.content !== 'string' ||
+      result.content.length > readResultLimit
+    )
+      return false;
+    index += 2;
+  }
+  return true;
+}
 
 function fixtureDeclaration(value: unknown) {
   if (
@@ -211,6 +319,7 @@ export function prepareMainModelBody(
   body: Buffer,
   model: string,
   fixture?: FixtureToolProjection,
+  read?: ReadToolProjection,
 ) {
   try {
     const value: unknown = JSON.parse(
@@ -226,8 +335,10 @@ export function prepareMainModelBody(
         typeof value.enable_thinking !== 'boolean') ||
       (fixture?.kind === 'declaration'
         ? !fixtureDeclaration(value.tools)
-        : value.tools !== undefined &&
-          (!Array.isArray(value.tools) || value.tools.length > 0)) ||
+        : read
+          ? !readDeclaration(value.tools)
+          : value.tools !== undefined &&
+            (!Array.isArray(value.tools) || value.tools.length > 0)) ||
       (value.stream_options !== undefined &&
         (!isRecord(value.stream_options) ||
           !onlyKeys(value.stream_options, ['include_usage']) ||
@@ -242,7 +353,9 @@ export function prepareMainModelBody(
       value.messages.length === 0 ||
       (fixture?.kind === 'history'
         ? !fixtureHistory(value.messages, fixture.callId)
-        : !value.messages.every(textMessage))
+        : read
+          ? !readHistory(value.messages, read.segment)
+          : !value.messages.every(textMessage))
     )
       return;
     return Buffer.from(JSON.stringify(value));

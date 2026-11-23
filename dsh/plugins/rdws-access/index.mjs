@@ -11,12 +11,12 @@ import {
   targetSession,
   isRecord,
   onlyKeys,
-  RDWS_TOOL_GUARD_DENIAL,
 } from '../../bridge/access.ts';
 import { bootInjections } from '@deepseek-ai/dsh-client-modules';
 import { RemoteStreamMuxServer } from '@deepseek-ai/dsh-api-gateway/src/stream-server.ts';
 import { installContext } from './context.mjs';
 import { installImageIntake } from './image-intake.mjs';
+import { toolGateDecision } from './tool-gate.mjs';
 import { openContextIpc } from '../../bridge/context-ipc.ts';
 import { installModelCarrier } from './model-carrier.mjs';
 import { installPresets } from './presets.mjs';
@@ -37,17 +37,7 @@ export const inject = [
 export function apply(ctx, config) {
   if (process.send)
     process.once('disconnect', () => process.kill(process.pid, 'SIGTERM'));
-  ctx.tools.guard((exec) => {
-    const gate = contextBinding.fixtureToolGate(exec);
-    if (gate === 'allow') return;
-    return {
-      reason:
-        gate === 'invalidated'
-          ? 'Fixture tool permit no longer current'
-          : 'Tools are disabled in this RDWS stage',
-      info: RDWS_TOOL_GUARD_DENIAL,
-    };
-  });
+  ctx.tools.guard((exec) => toolGateDecision(exec, contextBinding));
   ctx.on(
     'agent/created',
     ({ agent }) => {

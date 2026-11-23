@@ -167,6 +167,7 @@
   - 已实现：[持锁授权与 TLS 首写的同一失效边界](02-directory-and-engineering-design.html#t07-t13-failure-boundary-plan-20261123)与[实施交付证据](02-directory-and-engineering-design.html#t07-t13-failure-boundary-evidence-20261123)。窗口机制四件套（末次确认往返、等待者守门、原连接提交证书、失证单发封存）以 opt-in 包装接入 T07 Read 出站路径；A1–A10 定点红绿通过（红跑退出 1、绿跑退出 0）；双面独立评审两轮已通过（round-2 pass，非阻塞项已落定），T13 双路第二消费者与正式 Read 工具开启待办。
   - 已实现（隔离装配、opt-in，待用户侧验收）：[锁版 Native Read 回环联合验收](02-directory-and-engineering-design.html#t07-native-read-loopback-plan-20261123)与[联合链路交付证据](02-directory-and-engineering-design.html#t07-native-read-loopback-evidence-20261123)（含 [A 段扩展点证据](02-directory-and-engineering-design.html#t07-native-read-loopback-a-evidence-20261123)）。七跳链路在一次性受管 PostgreSQL、真实登录的 Workbench Prompt、锁版 Native、T05 工作树与回环 TLS 供应商上端到端接通：页窗口授权扩锁（L15）、武装回调同轮复核、Read 专属单次许可、根守卫按名分派、stat 元数据操作、续段登记、FD3 读服务与 FD4 正文投影落地；L1、L3、L4、L6（页帧／页请求／证书一一对应）、L9–L11、L13（无写代与保护路径）、L14 在联合链路先红后绿（联合 2 项、扩展点 44 项；3 次实跑 18 情形、37 次 read 与许可、20 次续段登记、页＝帧＝证书 41），L2 六类在父端重证，L5／L7／L8／L12 的机制级注入与 L6 逐行联结、L13 并发写代情形沿 §11.20.25 与 §11.16.17 继承或未装配、未在 Native 页上重证；按表清点全部落入清单。双面评审与正式 Read 工具开启待办，本项状态不变。
   - 待决项：面向真实模型的续段告知通道（§11.20.20 长输出支持继续读取）为正式启用前置。
+  - 方案已交付：[写工具启用与双人联合旅程方案](02-directory-and-engineering-design.html#t07-write-tools-joint-plan-20261124)。Edit、Write、Shell 与本地 Git 四类的启用矩阵与许可形制、写权绑定、监督协议下从许可到 Broker、Seatbelt 与 FD4 投影的执行链、Shell 输出内容处置与长输出续读、出站定序、双人红到绿旅程、19 条新判据、9 组继承判据与 20 条反例已成分节，拟分 A、B 两段实施。仅方案，未改代码，待双面独立评审；本项状态不变。
   - 来源：I2-AUTH、I3-WRITE、I3-CONTEXT。
 
 - [ ] **T08 · 变更查看与交付快照**

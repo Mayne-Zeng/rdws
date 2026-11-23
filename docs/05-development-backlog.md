@@ -164,6 +164,7 @@
   - 已本地交付子项：[受管内部源码 Read 与分段](02-directory-and-engineering-design.html#t07-read-snapshot-evidence-20261121)。只读身份可在写执行活跃或旧占位未确认时读真实工作树。实际 UTF-8 分段、真实撤席与关停边界、双面独立复审、17 项定点和邻域、整仓 370 项与 1 条件跳过、静态及基线通过。锁版 Native 和回环出站仍待接入。
   - 已本地验证[配置指向的真实单测与写权接手](02-directory-and-engineering-design.html#t07-configured-test-handoff)。同一测试文件第一次真实退出 1（预期 6、实得 3），修改实现后退出 0。第二开发会话重读最新代码并接手，旧代的文件写入、Shell 和 Git 请求均拒绝。回环模型读取失败输出和完整工作台旅程继续单独验收。
   - [DSH Read 与受管工作树的隔离兼容性验证](02-directory-and-engineering-design.html#t07-native-read-provider-fixture)覆盖真实原生参数、行号、续页、修改后重读和跨字节页的 UTF-8。单行截断后的尾部不能用原生行 offset 补齐。正式调用及回环实际收取仍待验。
+  - 方案已交付：[持锁授权与 TLS 首写的同一失效边界](02-directory-and-engineering-design.html#t07-t13-failure-boundary-plan-20261123)。2026-11-23 用户裁决立项（D1/D2），替代旧草案查锁定序与故障注入判据、保留其隔离装配设计，T13 双路公开发送为第二消费者；待双面独立评审与实施切片。
   - 来源：I2-AUTH、I3-WRITE、I3-CONTEXT。
 
 - [ ] **T08 · 变更查看与交付快照**

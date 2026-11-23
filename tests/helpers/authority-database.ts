@@ -172,6 +172,10 @@ export async function authorityDatabase(
         });
         return result.stdout + result.stderr;
       },
+      // Silent-loss injection (§11.20.25 phase 4): freeze and thaw the whole
+      // instance without any TCP-level RST or FIN.
+      pause: () => exec('docker', ['pause', name], { env: dockerEnv }),
+      resume: () => exec('docker', ['unpause', name], { env: dockerEnv }),
     };
   } catch {
     await close();

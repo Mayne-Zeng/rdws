@@ -8,6 +8,7 @@
     "./execution": "./execution/macos.ts",
     "./execution/supervised": "./execution/macos-supervised.ts",
     "./web": "./host/web.ts",
+    "./host/model-wire": "./host/model-wire.ts",
     "./access": "./bridge/access.ts",
     "./sessions": "./bridge/sessions.ts",
     "./wire": "./bridge/wire.ts"

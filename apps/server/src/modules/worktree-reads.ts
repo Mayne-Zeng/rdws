@@ -6,6 +6,17 @@ import type { WriteHandoffScope as Scope } from './write-handoff.ts';
 
 type ReadRequest = { repositoryId: string; path: string } | { cursor: string };
 type Access = { repositories: DemandRepositories; validBefore: number };
+
+// §11.20.25 opt-in outbound carrier: when provided, every read page outbound
+// is ordered through a checked authorization window and only returns with a
+// coverage certificate; a lost certificate seals the attempt without retry.
+export type WorktreeReadWindow = (input: {
+  scope: Scope;
+  repositoryId: string;
+  snapshotId: string;
+  sha256: string;
+  body: Buffer;
+}) => Promise<void>;
 type Snapshot = {
   id: string;
   scope: Scope;
@@ -32,6 +43,7 @@ export function createWorktreeReads(
     current: () => void,
   ) => Promise<Access>,
   assertAuthority: (scope: Scope) => void,
+  windowed?: WorktreeReadWindow,
 ) {
   const running = new Map<AbortController, Scope>();
   const snapshots = new Map<string, Snapshot>();
@@ -137,7 +149,16 @@ export function createWorktreeReads(
           digestOf(access.repositories) !== snapshot.repositoryPlan
         )
           businessError(409, '当前读取游标已失效');
-        return page(snapshot, from);
+        const continuation = page(snapshot, from);
+        if (windowed)
+          await windowed({
+            scope,
+            repositoryId: snapshot.repositoryId,
+            snapshotId: snapshot.id,
+            sha256: snapshot.sha256,
+            body: snapshot.bytes.subarray(from, continuation.through),
+          });
+        return continuation;
       }
       if (
         Object.keys(request).length !== 2 ||
@@ -206,7 +227,16 @@ export function createWorktreeReads(
         cachedBytes += snapshot.bytes.length;
         scheduleExpiry();
       }
-      return page(snapshot, 0);
+      const outbound = page(snapshot, 0);
+      if (windowed)
+        await windowed({
+          scope,
+          repositoryId: snapshot.repositoryId,
+          snapshotId: snapshot.id,
+          sha256: snapshot.sha256,
+          body: snapshot.bytes.subarray(0, outbound.through),
+        });
+      return outbound;
     } finally {
       clearTimeout(timer);
       running.delete(controller);

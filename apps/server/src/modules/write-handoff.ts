@@ -28,6 +28,15 @@ import {
   type Actor,
 } from './business.ts';
 import { createWorktreeReads } from './worktree-reads.ts';
+import {
+  createAuthorityWindows,
+  windowAttemptKey,
+} from './failure-boundary-window.ts';
+import { createWindowedReadEgress } from './windowed-read-egress.ts';
+import {
+  checkedWriteTransaction,
+  type WriteTransaction,
+} from './checked-write-transaction.ts';
 
 type Database = ReturnType<typeof connectDatabase>;
 type Queries = Pick<Database['db'], 'select' | 'insert' | 'update' | 'delete'>;
@@ -158,6 +167,7 @@ export async function createWriteHandoff(
   gitPath: string,
   leaseMs = leaseDuration,
   readSnapshots = false,
+  readsWindow?: ReadsWindow,
 ) {
   checkLocalExecution(leaseMs);
   const database = connectDatabase(
@@ -187,11 +197,13 @@ export async function createWriteHandoff(
     undefined,
     false,
     readSnapshots,
+    readsWindow,
   );
   let shutdown: Promise<void> | undefined;
   async function stop() {
     try {
       await handoff.close();
+      await handoff.stopReadsEgress();
       await releaseAuthority(database.pool, owned);
     } finally {
       await database.pool.end();
@@ -199,6 +211,15 @@ export async function createWriteHandoff(
   }
   return { ...handoff, close: () => (shutdown ??= stop()) };
 }
+
+// §11.20.25 assembly-level switch for the checked authorization window on the
+// trusted read outbound. Absent (the default), the read path keeps the exact
+// §11.20.24 behavior.
+export type ReadsWindow = {
+  destination: string;
+  ca: string;
+  header: string;
+};
 
 export function createOwnedWriteHandoff(
   { pool, db }: Database,
@@ -209,6 +230,7 @@ export function createOwnedWriteHandoff(
   loginClosed: (id: string) => boolean = () => false,
   supervisedExecution = false,
   readSnapshots = false,
+  readsWindow?: ReadsWindow,
 ) {
   checkLocalExecution(leaseMs);
   if (!authority)
@@ -244,6 +266,116 @@ export function createOwnedWriteHandoff(
   let recoveryTimer: NodeJS.Timeout | undefined;
   let recoveryWork: Promise<void> | undefined;
   let recoveryCursor: string | undefined;
+  const readsEgress = readsWindow
+    ? createWindowedReadEgress(readsWindow)
+    : undefined;
+  const windows = readsWindow
+    ? createAuthorityWindows(checkedWriteTransaction(pool))
+    : undefined;
+  async function windowAuthorize(
+    tx: WriteTransaction,
+    scope: Scope,
+    repositoryId: string,
+  ) {
+    await business.authorizeRequirement(
+      scope.who,
+      scope.requirementId,
+      scope.projectId,
+      'reader',
+      tx,
+      scope.sessionId,
+    );
+    const [member] = await tx
+      .select({ role: schema.projectMember.role })
+      .from(schema.projectMember)
+      .where(
+        and(
+          eq(schema.projectMember.projectId, scope.projectId),
+          eq(schema.projectMember.userId, scope.who.userId),
+        ),
+      )
+      .for('share');
+    if (!member) businessError(403, '无权执行当前需求操作');
+    const [live] = await tx
+      .select({ expiresAt: schema.session.expiresAt })
+      .from(schema.session)
+      .where(eq(schema.session.id, scope.who.authSessionId))
+      .for('share');
+    if (!live || live.expiresAt <= new Date())
+      businessError(401, '登录已失效，请重新登录');
+    const [owned] = await tx
+      .select({ id: schema.nativeSession.id })
+      .from(schema.nativeSession)
+      .where(
+        and(
+          eq(schema.nativeSession.id, scope.sessionId),
+          eq(schema.nativeSession.requirementId, scope.requirementId),
+          eq(schema.nativeSession.ownerId, scope.who.userId),
+        ),
+      )
+      .for('share');
+    if (!owned) businessError(403, '只能核对本人会话的写权操作');
+    const [plan] = await tx
+      .select({ repositories: schema.requirementWorktreePlan.repositories })
+      .from(schema.requirementWorktreePlan)
+      .where(
+        eq(schema.requirementWorktreePlan.requirementId, scope.requirementId),
+      );
+    if (
+      !(plan?.repositories as { repositoryId: string }[] | undefined)?.some(
+        (entry) => entry.repositoryId === repositoryId,
+      )
+    )
+      businessError(403, '仓库不在需求工作树范围内');
+  }
+  // Frozen plan configuration is SELECT-only for the application role (row
+  // locks require UPDATE privilege); the revocation-blocking window locks
+  // stay on the member, session and native-session rows re-checked above.
+  const windowedRead =
+    readsEgress && windows
+      ? async (input: {
+          scope: Scope;
+          repositoryId: string;
+          snapshotId: string;
+          sha256: string;
+          body: Buffer;
+        }) => {
+          const attemptId = randomUUID();
+          const key = windowAttemptKey({
+            userId: input.scope.who.userId,
+            requirementId: input.scope.requirementId,
+            attemptId,
+            digest: digestOf({
+              repositoryId: input.repositoryId,
+              snapshotId: input.snapshotId,
+              sha256: input.sha256,
+            }),
+          });
+          const prepared = await readsEgress.frame({
+            attemptId,
+            body: input.body,
+          });
+          try {
+            await windows.prepare(key);
+            const outcome = await windows.open({
+              key,
+              authorize: (tx) =>
+                windowAuthorize(tx, input.scope, input.repositoryId),
+              arm: () => prepared.arm(),
+            });
+            // Zero-write and sealed close-outs release the prepared
+            // connection through the single catch-path abort below.
+            if (outcome.state === 'zero-write')
+              businessError(503, '读取出站窗口零写收尾，请重新读取');
+            if (outcome.state === 'sealed')
+              businessError(503, '读取出站已封存，请重新读取');
+            await prepared.finish();
+          } catch (error) {
+            prepared.abort();
+            throw error;
+          }
+        }
+      : undefined;
   const reads = readSnapshots
     ? createWorktreeReads(
         worktrees,
@@ -273,6 +405,7 @@ export function createOwnedWriteHandoff(
           if (stopping) businessError(409, '当前读取已失效');
           if (fences.size) businessError(409, '当前权限变更尚待确认');
         },
+        windowedRead,
       )
     : undefined;
 
@@ -2362,6 +2495,8 @@ export function createOwnedWriteHandoff(
   return {
     startStopRecovery,
     readStatus,
+    stopReadsEgress: () => readsEgress?.close() ?? Promise.resolve(),
+    readsEgressStats: () => readsEgress?.stats(),
     readWorktree: (
       scope: Scope,
       request: Parameters<NonNullable<typeof reads>['read']>[1],

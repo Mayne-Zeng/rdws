@@ -33,6 +33,19 @@ export type ShellStream = {
   // output was given whole or the budget ended the process).
   spillPath?: string;
 };
+// §11.23 C4: the structured result of one controlled commit, produced
+// by the fixed worker and confirmed by the three in-script checks.
+export type CommitPathRecord = {
+  path: string;
+  type: string;
+  digest: string | null;
+};
+export type CommitOutput = {
+  head: string;
+  parent: string;
+  messageSha256: string;
+  paths: CommitPathRecord[];
+};
 export type ShellOutput = {
   state: ShellToolState;
   outcome: 'finished' | 'refused' | 'unknown';
@@ -47,6 +60,17 @@ export type ShellOutput = {
   reason?: string;
   // What the content handling rewrote or masked, for the evidence.
   handled?: { prefixes: number; credentials: number };
+  // §11.23: the commit result of a Git commit call, and the append-only
+  // snapshot row recorded for it (absent until the recording succeeded).
+  commit?: CommitOutput;
+  snapshot?: {
+    requirementId: string;
+    repositoryId: string;
+    snapshotSeq: number;
+    commitHash: string;
+    contentDigest: string;
+    commandId: string;
+  };
 };
 
 // A long output is given as a head of this size and continued by read.
@@ -76,6 +100,113 @@ function splitStream(
     total,
     ...(spillPath && { spillPath }),
   }));
+}
+
+const hash40 = /^[0-9a-f]{40}$/;
+const digest64 = /^[a-f0-9]{64}$/;
+
+// §11.23 C4: the commit call of the fixed worker. The exit code alone is
+// never a success: state ok needs the structured committed record whose
+// three in-script checks passed; a structured refusal is definite
+// (zero commit — the worker restored the list's index state first);
+// everything else stays a result unknown.
+function commitShellOutput(
+  result: { status: string; stop: string; exitCode: number | null },
+  base: { exitCode: number | null; timeoutMs: 10000 },
+  stdoutText: string,
+  stderrText = '',
+): ShellOutput {
+  const parsed: unknown = (() => {
+    try {
+      return JSON.parse(stdoutText) as unknown;
+    } catch {
+      return undefined;
+    }
+  })();
+  const refused = (reason: string): ShellOutput => ({
+    ...base,
+    state: 'failed',
+    outcome: 'refused',
+    reason,
+    stdout: empty(),
+    stderr: empty(),
+    timedOut: false,
+  });
+  const unknownResult = (reason: string): ShellOutput => ({
+    ...base,
+    state: 'unknown',
+    outcome: 'unknown',
+    reason,
+    stdout: empty(),
+    stderr: empty(),
+    timedOut: false,
+  });
+  if (result.status === 'rejected') return refused('rejected');
+  if (result.stop === 'not-started') return refused('not-started');
+  if (result.stop !== 'confirmed' || !['ok', 'failed'].includes(result.status))
+    return unknownResult('the execution ended as ' + result.status);
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    !('stage' in parsed) ||
+    typeof (parsed as { stage: unknown }).stage !== 'string'
+  )
+    return unknownResult(
+      'the commit result could not be confirmed: ' + stderrText.slice(0, 300),
+    );
+  const stage = (parsed as { stage: string }).stage;
+  if (stage === 'refused')
+    return refused(
+      'commit-refused:' +
+        String((parsed as { reason?: unknown }).reason ?? 'unspecified'),
+    );
+  if (stage !== 'committed' || result.status !== 'ok')
+    return unknownResult('the commit may have landed but was not confirmed');
+  const record = parsed as {
+    head?: unknown;
+    parent?: unknown;
+    messageSha256?: unknown;
+    paths?: unknown;
+  };
+  if (
+    typeof record.head !== 'string' ||
+    !hash40.test(record.head) ||
+    typeof record.parent !== 'string' ||
+    !hash40.test(record.parent) ||
+    typeof record.messageSha256 !== 'string' ||
+    !digest64.test(record.messageSha256) ||
+    !Array.isArray(record.paths) ||
+    record.paths.length === 0 ||
+    !record.paths.every(
+      (entry) =>
+        typeof entry === 'object' &&
+        entry !== null &&
+        typeof (entry as { path?: unknown }).path === 'string' &&
+        typeof (entry as { type?: unknown }).type === 'string' &&
+        ((entry as { digest?: unknown }).digest === null ||
+          (typeof (entry as { digest?: unknown }).digest === 'string' &&
+            digest64.test((entry as { digest: string }).digest))),
+    )
+  )
+    return unknownResult('the commit record is not well formed');
+  return {
+    ...base,
+    state: 'ok',
+    outcome: 'finished',
+    stdout: {
+      text: stdoutText,
+      truncated: false,
+      total: Buffer.byteLength(stdoutText),
+    },
+    stderr: empty(),
+    timedOut: false,
+    commit: {
+      head: record.head,
+      parent: record.parent,
+      messageSha256: record.messageSha256,
+      paths: record.paths as CommitPathRecord[],
+    },
+  };
 }
 
 export class NativeShellToolJob {
@@ -109,6 +240,16 @@ export class NativeShellToolJob {
       // Told once the job reached a terminal state: the owner then drops
       // its reference, so a finished job lives only as long as its result.
       onSettled?: () => void;
+      // §11.23: the append-only snapshot recording of a confirmed commit
+      // (the hash is read back through the restricted read-only chain
+      // inside the broker before the row is written).
+      onCommit?: (input: {
+        scope: WriteHandoffScope;
+        repositoryId: string;
+        generation: string;
+        commandId: string;
+        commit: CommitOutput;
+      }) => Promise<unknown>;
     },
   ) {
     if (process.env.RDWS_MODE !== 'test' || process.platform !== 'darwin')
@@ -209,25 +350,30 @@ export class NativeShellToolJob {
             this.release();
             return;
           }
-          return this.finish(receipt.result).then(
-            (output) => {
-              this.output = output;
-              this.state = output.state;
-            },
-            () => {
-              this.output = {
-                state: 'unknown',
-                outcome: 'unknown',
-                reason: 'the output could not be handled',
-                exitCode: null,
-                stdout: empty(),
-                stderr: empty(),
-                timedOut: false,
-                timeoutMs: 10000,
-              };
-              this.state = 'unknown';
-            },
-          );
+          return this.finish(receipt.result)
+            .then(async (output) => {
+              if (output.commit) await this.recordCommit(output);
+              return output;
+            })
+            .then(
+              (output) => {
+                this.output = output;
+                this.state = output.state;
+              },
+              () => {
+                this.output = {
+                  state: 'unknown',
+                  outcome: 'unknown',
+                  reason: 'the output could not be handled',
+                  exitCode: null,
+                  stdout: empty(),
+                  stderr: empty(),
+                  timedOut: false,
+                  timeoutMs: 10000,
+                };
+                this.state = 'unknown';
+              },
+            );
         },
         () => {
           this.output = {
@@ -269,6 +415,50 @@ export class NativeShellToolJob {
         this.streams.stderr.reduce((n, c) => n + c.length, 0),
       listening: this.listening,
     };
+  }
+
+  // §11.23 C4/S1: after a confirmed commit the parent reads the commit
+  // hash back through the restricted read-only chain and records the
+  // append-only snapshot row; only then is the result a success. A
+  // missing or failed recording stays a result unknown (E3): the
+  // original key answers the same way on a re-query.
+  private async recordCommit(output: ShellOutput) {
+    const commit = output.commit;
+    if (!commit) return;
+    try {
+      const recorded = await this.options.onCommit?.({
+        scope: this.scope,
+        repositoryId: this.options.repositoryId,
+        generation: this.invocation.generation,
+        commandId: this.commandId,
+        commit,
+      });
+      if (
+        recorded &&
+        typeof recorded === 'object' &&
+        'snapshot' in recorded &&
+        recorded.snapshot
+      ) {
+        const snapshot = recorded.snapshot as {
+          requirementId: string;
+          repositoryId: string;
+          snapshotSeq: number;
+          commitHash: string;
+          contentDigest: string;
+        };
+        output.snapshot = { ...snapshot, commandId: this.commandId };
+        return;
+      }
+      throw new Error('the snapshot was not recorded');
+    } catch {
+      output.commit = undefined;
+      output.snapshot = undefined;
+      output.state = 'unknown';
+      output.outcome = 'unknown';
+      output.reason = 'the snapshot could not be recorded';
+      output.stdout = empty();
+      output.stderr = empty();
+    }
   }
 
   // W18 and W10: the whole output is reassembled per stream, handled once,
@@ -392,6 +582,13 @@ export class NativeShellToolJob {
       : stderr.text;
     const ended =
       result.status === 'output-limit' || result.status === 'timeout';
+    // §11.23 C4: a commit call is judged by the structured protocol of
+    // the fixed worker, not by the exit code alone.
+    if (
+      this.options.request.tool === 'git' &&
+      this.options.request.operation === 'commit'
+    )
+      return commitShellOutput(result, base, stdout.text, errText);
     const register = async (bytes: Buffer, from: number) =>
       ended
         ? undefined

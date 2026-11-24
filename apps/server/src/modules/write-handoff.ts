@@ -9,6 +9,7 @@ import {
 } from '@rdws/db';
 import {
   maxOutputBudgetBytes,
+  readGitMacosWorktree,
   runMacosWorktree,
   type ExecutionRequest,
 } from '@rdws/dsh/execution';
@@ -41,6 +42,10 @@ import {
   checkedWriteTransaction,
   type WriteTransaction,
 } from './checked-write-transaction.ts';
+import {
+  recordDeliverySnapshotRow,
+  type DeliverySnapshotPath,
+} from './delivery-snapshot.ts';
 
 type Database = ReturnType<typeof connectDatabase>;
 type Queries = Pick<Database['db'], 'select' | 'insert' | 'update' | 'delete'>;
@@ -2729,6 +2734,153 @@ export function createOwnedWriteHandoff(
     // §11.20.26: a registered long-line segment of this very scope.
     readWorktreeSegmentLive: (scope: Scope, segment: string) =>
       !!reads && reads.registered(readScope(scope), segment),
+    // §11.23 S1: the append-only write of one recorded delivery
+    // snapshot. Before the write, the commit hash is read back through
+    // the restricted read-only Git chain (a fresh broker execution of
+    // the fixed head query under the same scope and generation); the
+    // row records the read-back value, carries the same commandId as
+    // the write.execute receipt, and a replay answers with the
+    // original row (原键回查) without executing again.
+    recordDeliverySnapshot: (
+      scope: Scope,
+      input: {
+        repositoryId: string;
+        generation: string;
+        commitHash: string;
+        parentHead: string;
+        paths: DeliverySnapshotPath[];
+        messageSha256: string;
+        commandId: string;
+      },
+    ) =>
+      admit(async (): Promise<{ snapshot: unknown; replay: boolean }> => {
+        const tracked = confirmedHolding(scope, input.generation);
+        if (!tracked || !tracked.confirmed)
+          businessError(409, '当前会话没有可用的写入资格');
+        const replayed = await transaction(async (tx) => {
+          const [existing] = await tx
+            .select()
+            .from(schema.requirementDeliverySnapshot)
+            .where(
+              and(
+                eq(
+                  schema.requirementDeliverySnapshot.repositoryId,
+                  input.repositoryId,
+                ),
+                eq(
+                  schema.requirementDeliverySnapshot.commitHash,
+                  input.commitHash,
+                ),
+              ),
+            );
+          return existing;
+        });
+        if (replayed) {
+          if (
+            replayed.requirementId !== scope.requirementId ||
+            replayed.commandId !== input.commandId
+          )
+            businessError(409, '提交哈希已记录为其他快照');
+          return { snapshot: replayed, replay: true };
+        }
+        let readBackStdout = '';
+        const readBack = await execute(
+          scope,
+          {
+            generation: input.generation,
+            commandId: input.commandId + '-head',
+            repositoryId: input.repositoryId,
+            request: { tool: 'git', operation: 'head' },
+          },
+          ({ stream, chunk }) => {
+            if (stream === 'stdout') readBackStdout += chunk.toString('utf8');
+          },
+        );
+        if (
+          readBack.status !== 'finished' ||
+          readBack.result.status !== 'ok' ||
+          readBack.result.stop !== 'confirmed'
+        )
+          businessError(502, '提交哈希回读未能确认');
+        const stdout = readBackStdout.trim();
+        if (stdout !== input.commitHash)
+          businessError(502, '提交哈希回读与提交结果不一致');
+        return transaction(async (tx) => {
+          const [plan] = await tx
+            .select()
+            .from(schema.requirementWorktreePlan)
+            .where(
+              eq(
+                schema.requirementWorktreePlan.requirementId,
+                scope.requirementId,
+              ),
+            );
+          const repository = plan?.repositories.find(
+            ({ repositoryId: id }) => id === input.repositoryId,
+          );
+          if (!repository) businessError(403, '仓库不在需求工作树范围内');
+          const { snapshot, replay } = await recordDeliverySnapshotRow(tx, {
+            requirementId: scope.requirementId,
+            repositoryId: input.repositoryId,
+            commitHash: input.commitHash,
+            parentHead: input.parentHead,
+            baseCommit: repository.baseCommit,
+            paths: input.paths,
+            messageSha256: input.messageSha256,
+            commandId: input.commandId,
+            committedBy: scope.who.userId,
+            generation: input.generation,
+          });
+          return { snapshot, replay };
+        });
+      }),
+    // §11.23 D1/D3: the read-only Git query of the changes view. Any
+    // permitted reader of the requirement may sample the fixed status,
+    // diff and head queries; the path never reserves a write execution
+    // and never touches the control marker, so a reader does not
+    // contend with an in-flight write.
+    readWorktreeGit: (
+      scope: Scope,
+      request: { repositoryId: string; operation: 'status' | 'diff' | 'head' },
+      signal?: AbortSignal,
+    ) =>
+      admit(() => {
+        if (
+          request.operation !== 'status' &&
+          request.operation !== 'diff' &&
+          request.operation !== 'head'
+        )
+          businessError(400, '只读 Git 查询不支持该操作');
+        return (async () => {
+          const [plan] = await db
+            .select()
+            .from(schema.requirementWorktreePlan)
+            .where(
+              eq(
+                schema.requirementWorktreePlan.requirementId,
+                scope.requirementId,
+              ),
+            );
+          if (
+            !plan?.repositories.some(
+              ({ repositoryId: id }) => id === request.repositoryId,
+            )
+          )
+            businessError(403, '仓库不在需求工作树范围内');
+          const execution = await worktrees.executionScope(
+            scope.projectId,
+            scope.requirementId,
+            plan.repositories,
+            request.repositoryId,
+          );
+          return readGitMacosWorktree(
+            () => Promise.resolve(execution),
+            gitPath,
+            { operation: request.operation },
+            { signal },
+          );
+        })();
+      }),
     // §11.20.27 W18: the tree and runtime root of one repository of the
     // requirement, for the prefix rewriting of an output.
     executionLocations: (scope: Scope, repositoryId: string) =>

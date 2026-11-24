@@ -630,3 +630,102 @@ export const requirementCapabilityBinding = pgTable(
     }),
   ],
 );
+
+// §11.23 S1: the immutable historical candidate of one controlled commit.
+// Append-only: the application role loses UPDATE and DELETE in the
+// db-migrate guard, so corrections are new rows that reference the
+// original, never rewrites.
+export const requirementDeliverySnapshot = pgTable(
+  'requirement_delivery_snapshot',
+  {
+    requirementId: text('requirement_id')
+      .notNull()
+      .references(() => requirement.id),
+    repositoryId: text('repository_id').notNull(),
+    snapshotSeq: integer('snapshot_seq').notNull(),
+    commitHash: text('commit_hash').notNull(),
+    parentHead: text('parent_head').notNull(),
+    baseCommit: text('base_commit').notNull(),
+    paths: jsonb('paths')
+      .$type<
+        {
+          path: string;
+          type: string;
+          digest: string | null;
+        }[]
+      >()
+      .notNull(),
+    contentDigest: text('content_digest').notNull(),
+    messageSha256: text('message_sha256').notNull(),
+    commandId: text('command_id').notNull(),
+    committedBy: text('committed_by')
+      .notNull()
+      .references(() => user.id),
+    generation: uuid('generation').notNull(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [t.requirementId, t.repositoryId, t.snapshotSeq],
+    }),
+    // 原键回查: one commit of one repository lands exactly one snapshot.
+    uniqueIndex('requirement_delivery_snapshot_commit_idx').on(
+      t.repositoryId,
+      t.commitHash,
+    ),
+    index('requirement_delivery_snapshot_requirement_idx').on(t.requirementId),
+    check(
+      'requirement_delivery_snapshot_hashes',
+      sql`${t.commitHash} collate "C" ~ '^[0-9a-f]{40}$' and
+          ${t.parentHead} collate "C" ~ '^[0-9a-f]{40}$' and
+          ${t.baseCommit} collate "C" ~ '^[0-9a-f]{40}$' and
+          ${t.contentDigest} collate "C" ~ '^[a-f0-9]{64}$' and
+          ${t.messageSha256} collate "C" ~ '^[a-f0-9]{64}$'`,
+    ),
+    check(
+      'requirement_delivery_snapshot_paths',
+      sql`jsonb_typeof(${t.paths}) = 'array' and jsonb_array_length(${t.paths}) between 1 and 512`,
+    ),
+  ],
+);
+// §11.23 S1: the recorded merge outcome of one snapshot. Empty until T09;
+// append-only like the snapshot.
+export const requirementDeliveryMerge = pgTable(
+  'requirement_delivery_merge',
+  {
+    requirementId: text('requirement_id').notNull(),
+    repositoryId: text('repository_id').notNull(),
+    snapshotSeq: integer('snapshot_seq').notNull(),
+    environment: text('environment').notNull(),
+    cherryPickCommit: text('cherry_pick_commit').notNull(),
+    mergeCommit: text('merge_commit'),
+    recordedAt: timestamp('recorded_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [t.requirementId, t.repositoryId, t.snapshotSeq, t.environment],
+    }),
+    foreignKey({
+      name: 'requirement_delivery_merge_snapshot_fk',
+      columns: [t.requirementId, t.repositoryId, t.snapshotSeq],
+      foreignColumns: [
+        requirementDeliverySnapshot.requirementId,
+        requirementDeliverySnapshot.repositoryId,
+        requirementDeliverySnapshot.snapshotSeq,
+      ],
+    }),
+    check(
+      'requirement_delivery_merge_hashes',
+      sql`${t.cherryPickCommit} collate "C" ~ '^[0-9a-f]{40}$'
+          and (${t.mergeCommit} is null or ${t.mergeCommit} collate "C" ~ '^[0-9a-f]{40}$')`,
+    ),
+    check(
+      'requirement_delivery_merge_environment',
+      sql`char_length(${t.environment}) between 1 and 64`,
+    ),
+  ],
+);

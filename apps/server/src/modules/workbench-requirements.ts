@@ -15,6 +15,10 @@ import { isRecord, onlyKeys } from '@rdws/dsh/access';
 import { templateBindingPath, personnelPath } from './workbench-paths.ts';
 import { registerRequirementAudit } from './workbench-audit.ts';
 import {
+  historicalCandidates,
+  sampleCurrentCandidates,
+} from './delivery-view.ts';
+import {
   fail,
   type WorkbenchRuntime,
   type PersonnelFence,
@@ -93,6 +97,7 @@ export function registerRequirements(
     workspaceResult,
     worktreesFor,
     writeAuthority,
+    writeHandoff,
   } = workbench;
 
   app.post(
@@ -160,6 +165,62 @@ export function registerRequirements(
       return { ...data, canPrepare: !!plan && canPrepare(fresh) };
     },
   );
+
+  app.get<{
+    Params: { id: string };
+    Querystring: { repositoryId?: string; cursor?: string };
+  }>('/api/requirements/:id/changes', async (request, reply) => {
+    reply.header('cache-control', 'no-store');
+    const query = request.query;
+    if (
+      !isRecord(query) ||
+      typeof query.repositoryId !== 'string' ||
+      query.repositoryId.length === 0 ||
+      (query.cursor !== undefined && typeof query.cursor !== 'string')
+    )
+      businessError(400, '变更查看参数不正确');
+    const broker = writeHandoff();
+    if (!broker) businessError(503, '变更查看暂不可用');
+    const scope = await access(request.headers, request.params.id);
+    const repository = scope.plan?.find(
+      ({ repositoryId }) => repositoryId === query.repositoryId,
+    );
+    if (!repository) businessError(403, '仓库不在需求工作树范围内');
+    const viewScope = {
+      who: { userId: scope.who.userId, authSessionId: scope.who.authSessionId },
+      projectId: scope.item.projectId,
+      requirementId: scope.item.id,
+      sessionId: '',
+    };
+    const gitQuery = async (operation: 'status' | 'diff' | 'head') => {
+      const outcome = await broker.readWorktreeGit(viewScope, {
+        repositoryId: query.repositoryId!,
+        operation,
+      });
+      if (outcome.stop !== 'confirmed' || outcome.status !== 'ok')
+        return { stdout: '', status: 'failed', exitCode: outcome.exitCode };
+      return {
+        stdout: outcome.stdout,
+        status: 'ok',
+        exitCode: outcome.exitCode ?? 1,
+      };
+    };
+    const current = await sampleCurrentCandidates(
+      gitQuery,
+      query.repositoryId!,
+      {
+        ...(query.cursor !== undefined && { cursor: query.cursor }),
+      },
+    );
+    const historical = await historicalCandidates(
+      db,
+      query.repositoryId!,
+      scope.item.id,
+    );
+    await access(request.headers, scope.item.id);
+    if (stale(scope)) fail(401, '授权已变化');
+    return { current, historical };
+  });
 
   app.post<{ Params: { id: string } }>(
     '/api/requirements/:id/worktrees',

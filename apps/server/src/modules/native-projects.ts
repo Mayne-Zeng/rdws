@@ -610,6 +610,17 @@ export function createProjectRuntimes(
             .then((found) => found?.command === command),
         registeredCommand: (command: string) =>
           writeTool.commands!.registered(entry.generation)?.command === command,
+        // §11.23 C3: the commit identity is the write-generation
+        // holder's own account identity, read from the platform record.
+        identity: async () => {
+          const [holder] = await db
+            .select({ name: schema.user.name, email: schema.user.email })
+            .from(schema.user)
+            .where(eq(schema.user.id, arm.scope.who.userId));
+          return holder
+            ? { name: holder.name, email: holder.email }
+            : undefined;
+        },
         redaction: () => entry.policy,
         countRedaction: () => {
           entry.redactions++;
@@ -646,6 +657,18 @@ export function createProjectRuntimes(
                   request,
                   hostSignal: native.signal,
                   onSettled,
+                  // §11.23 S1: a confirmed commit records its immutable
+                  // snapshot row before the result is a success.
+                  onCommit: (input) =>
+                    arm.broker.recordDeliverySnapshot(input.scope, {
+                      repositoryId: input.repositoryId,
+                      generation: input.generation,
+                      commitHash: input.commit.head,
+                      parentHead: input.commit.parent,
+                      paths: input.commit.paths,
+                      messageSha256: input.commit.messageSha256,
+                      commandId: input.commandId,
+                    }),
                 }),
             ),
         }),

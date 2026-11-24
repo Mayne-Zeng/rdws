@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { bodyHash, isRecord, onlyKeys, type Grant } from '@rdws/dsh/access';
+import { gitCommitArguments } from '@rdws/dsh/write-tool-arguments';
 import type {
   ModelCarrierRequest,
   ModelWireCommit,
@@ -353,6 +354,9 @@ export type WriteToolBinding = {
   // Whether the command is the one registered for the generation right
   // now, without a read: the FD4 projection judges history with it.
   registeredCommand?: (command: string) => boolean;
+  // §11.23 C3: the server-fixed commit identity of the write-generation
+  // holder; a Git commit without it is not permitted.
+  identity?: () => Promise<{ name: string; email: string } | undefined>;
   // The prefix policy of the output handling, once the locations are known
   // (the FD4 backstop scan of tool results).
   redaction?: () => OutputPolicy | undefined;
@@ -375,6 +379,8 @@ export type WriteToolBinding = {
 export function writeToolRequest(
   toolName: WriteToolName,
   args: Record<string, unknown>,
+  // §11.23 C3: the server-fixed identity, required for a commit.
+  identity?: { name: string; email: string },
 ): WriteFileRequest | ShellRequest | undefined {
   if (toolName === 'write')
     return {
@@ -396,11 +402,26 @@ export function writeToolRequest(
   if (toolName === 'bash')
     // The only form: node <name>.test.mjs, so the file is the rest.
     return { tool: 'test', path: String(args.command).slice('node '.length) };
-  if (toolName === 'git')
+  if (toolName === 'git') {
+    if (args.operation === 'commit') {
+      // §11.23 C1/C3: the frozen list and the message go into the
+      // execution request; the identity is the server-fixed holder
+      // identity, never a model or environment value.
+      const commit = gitCommitArguments(args);
+      if (!commit || !identity) return undefined;
+      return {
+        tool: 'git',
+        operation: 'commit',
+        paths: commit.paths,
+        message: commit.message,
+        identity,
+      };
+    }
     return {
       tool: 'git',
       operation: args.operation as 'status' | 'diff',
     };
+  }
   return undefined;
 }
 
@@ -2216,9 +2237,11 @@ export class ContextRuns {
     )
       return step.writeToolUsed ? invalidModel() : noAuthority();
     binding.assertLease();
+    const identity = await binding.identity?.();
     const request = writeToolRequest(
       toolName as WriteToolName,
       input.arguments,
+      identity,
     );
     if (!request) return invalidModel();
     const job =

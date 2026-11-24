@@ -13,6 +13,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { userInfo } from 'node:os';
+import { gitCommitArguments } from '../bridge/write-tool-arguments.ts';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -48,7 +49,14 @@ export type ExecutionRequest =
     }
   | { tool: 'shell'; script: string }
   | { tool: 'test'; path: string }
-  | { tool: 'git'; operation: 'status' | 'diff' | 'head' };
+  | { tool: 'git'; operation: 'status' | 'diff' | 'head' }
+  | {
+      tool: 'git';
+      operation: 'commit';
+      paths: string[];
+      message: string;
+      identity: { name: string; email: string };
+    };
 
 type Status =
   | 'ok'
@@ -195,6 +203,31 @@ function allowedRequest(request: ExecutionRequest) {
     case 'test':
       return safeRelativePath(request.path);
     case 'git':
+      if (request.operation === 'commit') {
+        // §11.23 C1: the frozen selected-scope list, judged by the
+        // shared shape function (the same one the permit and the FD4
+        // projection call) on the model-facing shape, plus the
+        // server-fixed commit identity judged here.
+        if (
+          gitCommitArguments({
+            operation: request.operation,
+            paths: request.paths,
+            message: request.message,
+          }) === false
+        )
+          return false;
+        const { name, email } = request.identity ?? {};
+        return (
+          typeof name === 'string' &&
+          typeof email === 'string' &&
+          name.length > 0 &&
+          email.length > 0 &&
+          !controls.test(name) &&
+          !controls.test(email) &&
+          Buffer.byteLength(name) <= 256 &&
+          Buffer.byteLength(email) <= 320
+        );
+      }
       return Object.hasOwn(gitQueries, request.operation);
     default:
       return false;
@@ -254,6 +287,12 @@ function profile(
   // execution. Each becomes a literal deny rule for reading and writing,
   // placed after the allow rules (the last matching rule decides).
   denied: readonly { path: string; directory: boolean }[] = [],
+  // §11.23 C3: the commit admission. The only added write surface is the
+  // private repository (admin and store — the .git area and the index);
+  // the tree stays read-only. fork is allowed only so the fixed worker can
+  // exec the one permitted Git executable; every other process execution
+  // stays denied (W7 admission with this one enumerated delta).
+  commit?: { admin: string; git: string },
 ) {
   const store = git && scope.store ? [scope.store] : [];
   const paths = [
@@ -276,6 +315,7 @@ function profile(
     executable,
     ...store,
     ...(readWorker ? [readWorker] : []),
+    ...(commit ? [commit.admin] : []),
   ]) {
     for (let parent = dirname(path); parent !== '/'; parent = dirname(parent))
       ancestors.add(parent);
@@ -286,16 +326,28 @@ function profile(
     '(deny network*)',
     '(deny mach-lookup)',
     '(deny signal)',
-    '(deny process-fork)',
+    ...(commit ? ['(allow process-fork)'] : ['(deny process-fork)']),
     '(deny process-exec)',
     '(deny file-link)',
     '(deny file-write*)',
     ...(git || readWorker
       ? []
       : [`(allow file-write* (subpath ${quoted(scope.tree)}))`]),
+    ...(commit
+      ? [
+          // §11.23 C3/A6: the only added write surface — the private
+          // repository that holds the index and the commit objects.
+          `(allow file-write* (subpath ${quoted(commit.admin)}))`,
+          ...(scope.store
+            ? [`(allow file-write* (subpath ${quoted(scope.store)}))`]
+            : []),
+        ]
+      : []),
     '(allow file-write* (literal "/dev/null"))',
     '(deny file-write-create (vnode-type SYMLINK))',
-    `(deny file-write* (subpath ${quoted(join(scope.tree, '.git'))}))`,
+    ...(commit
+      ? []
+      : [`(deny file-write* (subpath ${quoted(join(scope.tree, '.git'))}))`]),
     `(deny file-map-executable (subpath ${quoted(scope.tree)}))`,
     `(deny file-read* (subpath ${quoted(home)}) (subpath ${quoted(scope.runtimeRoot)}))`,
     ...(readWorker
@@ -311,7 +363,7 @@ function profile(
     ...[...ancestors].map(
       (path) => `(allow file-read-metadata (literal ${quoted(path)}))`,
     ),
-    `(allow process-exec (literal ${quoted(executable === bash ? bash : perl)}) (literal ${quoted(executable)}))`,
+    `(allow process-exec (literal ${quoted(executable === bash ? bash : perl)}) (literal ${quoted(executable)})${commit ? ` (literal ${quoted(commit.git)})` : ''})`,
     ...denied.flatMap(({ path, directory }) => {
       const target = directory
         ? `(subpath ${quoted(path)})`
@@ -416,6 +468,34 @@ async function program(
         ],
       };
     case 'git':
+      if (request.operation === 'commit')
+        return {
+          // §11.23 C3: one fixed platform script. The worker receives
+          // the resolved Git executable and the repository scope as
+          // plain values and the frozen list, the message (never on a
+          // command line or in a log) and the server-fixed identity
+          // through stdin.
+          executable: await realpath(process.execPath),
+          args: [
+            '--no-addons',
+            '--input-type=module',
+            '-e',
+            await readFile(
+              new URL('./commit-worker.mjs', import.meta.url),
+              'utf8',
+            ),
+            '--',
+            scope.admin,
+            scope.tree,
+            await gitExecutable(gitPath, signal),
+          ],
+          input: JSON.stringify({
+            paths: request.paths,
+            message: request.message,
+            name: request.identity.name,
+            email: request.identity.email,
+          }),
+        };
       return {
         executable: await gitExecutable(gitPath, signal),
         args: [
@@ -723,6 +803,55 @@ export async function readMacosWorktree(
   }
 }
 
+// §11.23 D1/D3: the read-only Git query of the changes view. It runs the
+// fixed status/diff/head queries in the same restricted sandbox as the
+// write-side Git tool but without the write control marker, so a reader
+// never contends with an in-flight write execution. The whole stdout is
+// captured (up to the read snapshot bound) as raw bytes for the caller
+// to paginate; nothing is written anywhere.
+export async function readGitMacosWorktree(
+  verifiedScope: () => Promise<Scope>,
+  gitPath: string,
+  request: { operation: 'status' | 'diff' | 'head' },
+  options: Pick<Options, 'signal'> = {},
+): Promise<Result> {
+  const runId = randomUUID();
+  if (options.signal?.aborted) return result(runId, 'aborted');
+  if (process.platform !== 'darwin') return result(runId, 'unavailable');
+  let scope: Scope;
+  try {
+    scope = await verifiedScope();
+  } catch {
+    return result(runId, options.signal?.aborted ? 'aborted' : 'rejected');
+  }
+  try {
+    const identity = await lstat(scope.tree, { bigint: true });
+    if (
+      !identity.isDirectory() ||
+      identity.uid !== BigInt(process.getuid!()) ||
+      (identity.mode & 0o022n) !== 0n
+    )
+      return result(runId, 'rejected');
+    const home = await realpath(userInfo().homedir);
+    const command = await program(
+      scope,
+      gitPath,
+      { tool: 'git', operation: request.operation },
+      options.signal,
+    );
+    const policy = profile(scope, command.executable, home, true);
+    // §11.23 D4: the whole stdout up to the read snapshot bound comes
+    // back for the caller to paginate at the view's own page size.
+    const outcome = await launch(runId, scope, policy, command, {
+      signal: options.signal,
+      outputLimitBytes: maxSnapshotBytes,
+    });
+    return { ...outcome, marker: 'none' };
+  } catch {
+    return result(runId, options.signal?.aborted ? 'aborted' : 'rejected');
+  }
+}
+
 export async function runMacosWorktree(
   verifiedScope: () => Promise<Scope>,
   gitPath: string,
@@ -799,6 +928,14 @@ export async function runMacosWorktree(
         request.tool === 'git',
         undefined,
         request.tool === 'test' ? denied : [],
+        // §11.23 C3: the commit admission of the fixed worker; the git
+        // admin directory is the index side of the added write surface.
+        request.tool === 'git' && request.operation === 'commit'
+          ? {
+              admin: scope.admin,
+              git: await gitExecutable(gitPath, options.signal),
+            }
+          : undefined,
       );
       const control = new AbortController();
       const signal = options.signal

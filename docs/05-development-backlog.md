@@ -175,6 +175,7 @@
   - 说明：提供真实 diff、受控提交和不可变候选快照，分别记录历史候选、当前候选和后续实际合入结果。
   - 可验收目标：差异与工作树一致；提交只包含选定范围；快照记录需求提交和冻结基线；后续修改不改写历史快照；没有执行证据时不显示“已提交”或“已交付”。
   - 方案已交付：[T08 变更查看与交付快照方案](02-directory-and-engineering-design.html#t08-delivery-snapshot-plan-20261124)。
+  - 已实现（步骤 0 精度补遗 9 条、快照两表迁移与应用角色 revoke 守卫、受控提交链、快照写入与锚点校验、变更查看 D2–D5、证据投影 E1–E3、S5 与双人旅程）：[T08 A 段交付证据](02-directory-and-engineering-design.html#t08-delivery-snapshot-a-evidence-20261124)、[T08 B 段交付证据](02-directory-and-engineering-design.html#t08-delivery-snapshot-evidence-20261124)（双锚点：[方案 §11.23](02-directory-and-engineering-design.html#t08-delivery-snapshot-plan-20261124)）。A 段 C1–C5、S1–S4 与反例 N2/N4/N6–N9，B 段 D2–D5、E1–E3、S5 与反例 N1/N3/N5 各自先红后绿，邻域、受管 Chromium 旅程与静态检查通过；待验收状态不翻转。
   - 前置：T07。
   - 来源：I3-DELIVERY、D22、D23。
 

@@ -64,7 +64,14 @@ export function writeToolCall(name, value) {
     return { file_path: value.file_path, content: value.content };
   if (name === 'bash')
     return { command: value.command, description: value.description };
-  if (name === 'git') return { operation: value.operation };
+  if (name === 'git')
+    return value.operation === 'commit'
+      ? {
+          operation: value.operation,
+          paths: value.paths,
+          message: value.message,
+        }
+      : { operation: value.operation };
   const { file_path, old_string, new_string } = value;
   return {
     file_path,
@@ -381,19 +388,30 @@ export function installWriteToolProbe(ctx, deps) {
       enableRunInBackground: false,
       promoteOnTimeout: false,
     });
-    // The platform git tool: a fixed read-only query through the locked
-    // defineTool, so it takes the same native pipeline as the locked tools.
+    // The platform git tool: the fixed read-only queries and the
+    // §11.23 controlled commit, through the locked defineTool, so it
+    // takes the same native pipeline as the locked tools.
     scope.tools.register(
       tools.defineTool({
         name: 'git',
         description:
-          'Show the working tree status or the diff of the tracked changes of this requirement tree (read-only; status or diff).',
+          'Show the working tree status or the diff of the tracked changes of this requirement tree (read-only; status or diff), or record one controlled commit of an explicit selected-scope list (operation commit with a non-empty bounded paths list and a message; the platform fences the staged set against the list).',
         parameters: {
           operation: {
             type: 'string',
             required: true,
-            enum: ['status', 'diff'],
-            description: 'The fixed query: status or diff.',
+            enum: ['status', 'diff', 'commit'],
+            description:
+              'The fixed query: status or diff, or the controlled commit.',
+          },
+          paths: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'commit only: the explicit selected-scope path list.',
+          },
+          message: {
+            type: 'string',
+            description: 'commit only: the commit message.',
           },
         },
         output: {
@@ -409,7 +427,13 @@ export function installWriteToolProbe(ctx, deps) {
         },
         async execute(args, exec) {
           const job = await permitted(exec.signal, 'git');
-          if (args.operation !== job.args.operation)
+          const same =
+            args.operation === job.args.operation &&
+            (args.operation !== 'commit' ||
+              (JSON.stringify(job.args.paths) ===
+                JSON.stringify(args.paths ?? undefined) &&
+                job.args.message === args.message));
+          if (!same)
             throw new Error('RDWS git: the operation differs from the call');
           return {
             operation: args.operation,

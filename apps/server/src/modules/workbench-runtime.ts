@@ -1258,6 +1258,7 @@ export function createWorkbenchRuntime(
     },
     closeWorkflows,
     writeAuthority,
+    writeHandoff,
     writeWorktrees: worktrees,
     writeLoginClosed: (id: string) => closingSessions.has(id),
     access,

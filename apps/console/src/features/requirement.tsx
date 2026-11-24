@@ -14,6 +14,7 @@ import { OBSERVED_LOGIN_HEADER } from '@rdws/contracts/headers';
 import { Icon, api, roleLabels } from '../lib/ui.tsx';
 import { Conversation, type NativeTab } from './conversation.tsx';
 import { RequirementWorktrees } from './requirement-worktrees.tsx';
+import { RequirementChanges } from './requirement-changes.tsx';
 import { RequirementTemplate } from './requirement-template.tsx';
 import { SessionTemplateStatusPanel } from './session-template-status.tsx';
 import { RequirementPersonnel } from './requirement-personnel.tsx';
@@ -448,6 +449,7 @@ export function RequirementPage({
       ) : (
         <>
           <RequirementWorktrees id={id} />
+          <RequirementChanges id={id} />
           <section className="flow-panel">
             <div className="panel-heading">
               <h2>主线流程</h2>

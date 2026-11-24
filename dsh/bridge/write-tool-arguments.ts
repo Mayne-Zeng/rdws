@@ -151,15 +151,44 @@ export function writeToolArguments(
         registered(args.command)
       );
     case 'git':
-      return (
-        exactKeys(args, ['operation']) &&
-        gitOperations.includes(args.operation as (typeof gitOperations)[number])
-      );
+      if (exactKeys(args, ['operation']))
+        return gitOperations.includes(
+          args.operation as (typeof gitOperations)[number],
+        );
+      // §11.23 C1: the controlled commit is the only other git form;
+      // every other key set is a refusal (N8).
+      return gitCommitArguments(args) !== false;
     default:
       return false;
   }
 }
 
+// §11.23 C1: the explicit selected-scope list of one controlled commit:
+// a non-empty bounded array of repository-relative paths (at most 512,
+// each judged by the shared writeToolPath rule) and a message of at most
+// 4 KiB of well-formed UTF-8. The permit, the FD4 projection and the T06
+// admission all judge this shape through writeToolArguments below.
+export const gitCommitPathsLimit = 512;
+export const gitCommitMessageLimit = 4 * 1024;
+const commitKeys = ['operation', 'paths', 'message'];
+
+export function gitCommitArguments(
+  input: unknown,
+): { paths: string[]; message: string } | false {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return false;
+  const args = input as Record<string, unknown>;
+  if (!exactKeys(args, commitKeys) || args.operation !== 'commit') return false;
+  if (!Array.isArray(args.paths) || args.paths.length === 0) return false;
+  if (args.paths.length > gitCommitPathsLimit) return false;
+  const seen = new Set<string>();
+  for (const path of args.paths) {
+    if (!writeToolPath(path) || seen.has(path)) return false;
+    seen.add(path);
+  }
+  if (!text(args.message) || bytes(args.message) > gitCommitMessageLimit)
+    return false;
+  return { paths: args.paths as string[], message: args.message };
+}
 // The replacement arithmetic of Edit, shared by the T06 worker, the parent
 // and the Host: a literal replacement from left to right without
 // overlapping, the count advancing past every match (the same arithmetic as

@@ -39,6 +39,23 @@ export async function grantApplication(
       await client.query(
         `revoke update, delete on requirement_worktree_plan from ${application}`,
       );
+    // §11.23 S2: the delivery snapshot and its merge record are
+    // append-only. The application role may INSERT (a controlled commit
+    // records a new row) but never UPDATE or DELETE an existing row.
+    const hasDeliverySnapshot = await client.query(
+      "select to_regclass('public.requirement_delivery_snapshot') is not null as present",
+    );
+    if (hasDeliverySnapshot.rows[0]?.present)
+      await client.query(
+        `revoke update, delete on requirement_delivery_snapshot from ${application}`,
+      );
+    const hasDeliveryMerge = await client.query(
+      "select to_regclass('public.requirement_delivery_merge') is not null as present",
+    );
+    if (hasDeliveryMerge.rows[0]?.present)
+      await client.query(
+        `revoke update, delete on requirement_delivery_merge from ${application}`,
+      );
     const hasBinding = await client.query(
       "select to_regclass('public.requirement_capability_binding') is not null as present",
     );

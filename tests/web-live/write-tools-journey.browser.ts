@@ -72,6 +72,11 @@ const git = (operation: 'status' | 'diff'): Call => ({
   name: 'git',
   args: { operation },
 });
+// §11.23 C1: the controlled commit of an explicit selected-scope list.
+const gitCommit = (paths: string[], message: string): Call => ({
+  name: 'git',
+  args: { operation: 'commit', paths, message },
+});
 const read = (file_path: string, args: Record<string, number> = {}): Call => ({
   name: 'read',
   args: { file_path, ...args },
@@ -178,6 +183,11 @@ test('two developers go from red to green with the write tools in the Workbench'
     const treeDir = (await trees.executionScope(projectId, demand, plan, 'app'))
       .tree;
     gitPrepared = true;
+    // §11.23: the commit-count baseline of the frozen branch, for the
+    // relative assertions of the controlled commits.
+    const baseCommitCount = Number(
+      await fixtureGit(['-C', treeDir, 'rev-list', '--count', 'HEAD']),
+    );
     const keys = await modelTlsCertificate(lab.root);
     setDefaultCACertificates([...originalCAs, keys.cert.toString()]);
     const received: {
@@ -624,6 +634,14 @@ test('two developers go from red to green with the write tools in the Workbench'
       edit('a - b', 'a + b'),
       bash(),
       git('status'),
+      // §11.23: the controlled commits. The implementation is committed
+      // first (the test file stays uncommitted — the dirty out-of-list
+      // state), a second attempt with nothing staged is refused with its
+      // structured reason and zero commit, and the test file follows in
+      // its own commit.
+      gitCommit(['sum.mjs'], 'controlled commit of the implementation\n'),
+      gitCommit(['sum.mjs'], 'nothing is staged for this list\n'),
+      gitCommit(['sum.test.mjs'], 'controlled commit of the test\n'),
     ];
     const before = received.length;
     scripts.set(a.sessionId, [...journeyA]);
@@ -693,13 +711,16 @@ test('two developers go from red to green with the write tools in the Workbench'
     expect((resultsA[4] ?? '') + (resultsA[5] ?? '')).toContain(
       'ok 1 - sum adds',
     );
-    expect(resultsA.at(-1)).toContain('?? sum.test.mjs');
+    expect(resultsA.some((r) => r.includes('?? sum.test.mjs'))).toBe(true);
     expect(await readFile(join(treeDir, 'sum.mjs'), 'utf8')).toBe(right);
     expect(executions.map(({ tool, status }) => tool + ':' + status)).toEqual([
       'file:ok',
       'test:failed',
       'file:ok',
       'test:ok',
+      'git:ok',
+      'git:ok',
+      'git:failed',
       'git:ok',
     ]);
     // W18: every tool result the supplier received (the Shell and Git
@@ -735,6 +756,57 @@ test('two developers go from red to green with the write tools in the Workbench'
       expect(text).toContain('password=[redacted]');
       expect(text).toContain('env-read-denied');
     }
+    // §11.23: the two controlled commits landed exactly two immutable
+    // snapshot rows on top of the frozen base; the refused attempt added
+    // none and moved no ref.
+    const snapshots = await observer!.query(
+      'select snapshot_seq, commit_hash, command_id from requirement_delivery_snapshot where repository_id=$1 order by snapshot_seq',
+      ['app'],
+    );
+    expect(snapshots.rows).toHaveLength(2);
+    const commitCount = await fixtureGit([
+      '-C',
+      treeDir,
+      'rev-list',
+      '--count',
+      'HEAD',
+    ]);
+    expect(Number(commitCount)).toBe(baseCommitCount + 2);
+    const commitHashes = snapshots.rows.map((row) => row.commit_hash);
+    for (const hash of commitHashes)
+      expect(
+        await fixtureGit(['-C', treeDir, 'cat-file', '-e', hash + '^{commit}']),
+      ).toBe('');
+    // The refusal is visible to the model: the structured reason names
+    // the fence, and the zero-commit discipline kept the branch still.
+    expect(resultsA.some((r) => r.includes('staged-set-mismatch'))).toBe(true);
+    // N3: the recorded snapshots cannot be rewritten by the application
+    // role — the UPDATE and DELETE attempts are judged red here.
+    await expect(
+      observer!.query(
+        "update requirement_delivery_snapshot set content_digest='x' || content_digest",
+      ),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      observer!.query('delete from requirement_delivery_snapshot'),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      observer!.query('delete from requirement_delivery_merge'),
+    ).rejects.toThrow(/permission denied/);
+    // E3: many write.execute receipts exist (every execution of this
+    // journey, including the refused commit and the head read-backs), but
+    // the candidates come from the snapshot rows alone: exactly two rows
+    // for exactly the two real commits.
+    const receipts = await observer!.query(
+      "select count(*) as n from command_receipt where operation='write.execute' and scope='requirement:' || $1",
+      [demand],
+    );
+    expect(Number(receipts.rows[0]!.n)).toBeGreaterThanOrEqual(5);
+    const viewAfter = await observer!.query(
+      'select count(*) as n from requirement_delivery_snapshot where repository_id=$1',
+      ['app'],
+    );
+    expect(Number(viewAfter.rows[0]!.n)).toBe(2);
     // Dark theme and the 390px narrow screen of the same state.
     await a.page.emulateMedia({ colorScheme: 'dark' });
     await a.page.setViewportSize({ width: 390, height: 850 });
@@ -871,7 +943,13 @@ test('two developers go from red to green with the write tools in the Workbench'
     const runA2 = await send(
       a,
       devA,
-      [write('late.txt', 'late'), bash(), git('status')],
+      [
+        write('late.txt', 'late'),
+        // §11.23 C5/W2: the old session's controlled commit is refused
+        // with zero permit and zero execution.
+        gitCommit(['sum.mjs'], 'late controlled commit\n'),
+        git('status'),
+      ],
       false,
     );
     // A new reply followed the second Prompt, and the supplier served the
@@ -886,6 +964,21 @@ test('two developers go from red to green with the write tools in the Workbench'
     expect(
       await readFile(join(treeDir, 'late.txt'), 'utf8').catch(() => undefined),
     ).toBeUndefined();
+    // The late controlled commit executed nothing: the branch is still at
+    // three commits and no snapshot row appeared.
+    expect(
+      Number(await fixtureGit(['-C', treeDir, 'rev-list', '--count', 'HEAD'])),
+    ).toBe(baseCommitCount + 2);
+    expect(
+      Number(
+        (
+          await observer!.query(
+            'select count(*) as n from requirement_delivery_snapshot where repository_id=$1',
+            ['app'],
+          )
+        ).rows[0]!.n,
+      ),
+    ).toBe(2);
     expect(await readFile(join(treeDir, 'sum.mjs'), 'utf8')).toBe(right);
     expect(executions.length).toBe(beforeA2);
     await a.page.getByRole('tab', { name: '对话', exact: true }).click();
@@ -901,6 +994,44 @@ test('two developers go from red to green with the write tools in the Workbench'
     await expect
       .poll(() => lease(), { timeout: 15000 })
       .toMatchObject({ phase: 'released' });
+    // (10) §11.23: B reads the changes view in the Workbench: the
+    // historical candidates carry their evidence, the badges appear only
+    // with the complete evidence, and the current candidate is the real
+    // worktree state.
+    await b.page.goto('/?project=poc&requirement=' + demand);
+    await expect(b.page.getByRole('heading', { name: '变更查看' })).toBeVisible(
+      { timeout: 20000 },
+    );
+    await expect(b.page.getByTestId('delivery-candidate')).toHaveCount(2);
+    const candidates = b.page.getByTestId('delivery-candidate');
+    for (let index = 0; index < 2; index++)
+      await expect(candidates.nth(index).getByText('已提交')).toBeVisible();
+    // No merge evidence exists yet: the delivered badge is nowhere (S5
+    // keeps the dimensions apart, E2 keeps the fields evidence-only).
+    await expect(b.page.getByText('已交付')).toHaveCount(0);
+    const viewResponse = await b.ctx.request.get(
+      '/api/requirements/' + demand + '/changes?repositoryId=app',
+    );
+    expect(viewResponse.status()).toBe(200);
+    const viewText = await viewResponse.text();
+    for (const secret of [treeDir, root, process.env.HOME!, canary])
+      expect(viewText.includes(secret), 'leaked: ' + secret).toBe(false);
+    // Light, dark, narrow and keyboard states of the minimal changes
+    // area (screenshots land in the ignored output directory).
+    await shots(b.page, 'changes-light');
+    await b.page.emulateMedia({ colorScheme: 'dark' });
+    await shots(b.page, 'changes-dark');
+    await b.page.setViewportSize({ width: 390, height: 850 });
+    await shots(b.page, 'changes-dark-narrow');
+    expect(
+      await b.page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(390);
+    await b.page.evaluate(() =>
+      (document.getElementById('requirement-changes') as HTMLElement)?.focus(),
+    );
+    await shots(b.page, 'changes-keyboard');
+    await b.page.emulateMedia({ colorScheme: 'light' });
+    await b.page.setViewportSize({ width: 1280, height: 800 });
     await a.ctx.close();
     await b.ctx.close();
     await Promise.all([app!.close(), web!.close()]);

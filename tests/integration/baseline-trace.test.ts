@@ -40,7 +40,7 @@ test('the real source set has complete trace, view and dependency coverage', asy
   expect(result.status, result.stderr).toBe(0);
   expect(JSON.parse(result.stdout)).toMatchObject({
     status: 'passed',
-    tasks: 29,
+    tasks: 30,
     views: 16,
     tracePoints: 62,
     interfaceDomains: 17,

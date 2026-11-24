@@ -209,6 +209,28 @@
   <p><strong>D1 · 本人明确改选。</strong>保存 A 后失去回执，用户可以明确改选 B。服务端确认 B 保存后，迟到的 A 不能覆盖 B。确认前保留消息草稿，确认后由用户手动发送。</p>
   <p><strong>D2 · 原选择生效情况未知。</strong>补充 §8.14。在原会话派生切点无法确认模型选择是否生效时，允许派生和查看历史。新会话首次发送前，由本人从当前可用模型中明确选择一次，可以选择与父会话相同的模型，然后手动发送。<a href="02-directory-and-engineering-design.html#t13-choice-recovery-acceptance">验收场景</a>。</p>
 
+  <h3 id="demo-alignment-decisions-20261124">8.18 Demo 对齐补齐决定 · 2026-11-24</h3>
+  <p>2026-11-24，用户在正式工作台与 Demo 的逐视图比对结果上明确五项范围，登记为<a href="05-development-backlog.md">任务清单 T23</a>；方案与验证见<a href="02-directory-and-engineering-design.html#demo-alignment-plan-20261124">工程 §11.24</a>。</p>
+  <ul>
+    <li><strong>对话页：</strong>补 Markdown、工具卡片、时间戳与消息操作，并先核对 DSH 能否直接复用。</li>
+    <li><strong>侧栏：</strong>恢复，按 Demo 层级呈现需求与会话，并支持手动折叠。</li>
+    <li><strong>需求列表：</strong>补状态与阶段筛选；导出后做，先放入口。</li>
+    <li><strong>轨迹：</strong>补筛选与时间戳。</li>
+    <li><strong>需求档案「重要产物」区与能力矩阵：</strong>要做。</li>
+  </ul>
+  <p><strong>DSH 复用结论（查证）。</strong>DSH 的数据层继续直接复用，现状不变：原生 modules runtime、Session binding 与 eventSource 已由 <code>dsh/client/runtime.ts</code> 启动。DSH 的界面层不能单独取用：Markdown 渲染器与基础组件只存在于预编译的 Web 壳 <code>dsh-web-frontend</code>，未作为包发布；<code>dsh-client-ui-chat</code> 等业务界面插件经 slot 与壳的服务接线，只能随整套 DSH Web 应用运行。整套嵌入与 I4-UI、平台锁定策略（D2）及 BFF 路由边界冲突，不采用。对话页因此沿 I4-UI 自绘展示层。</p>
+  <p><strong>实施默认，尚非用户决定。</strong>下列八点中，前四点在登记时向用户提出，后四点由方案评审指出需要登记；用户均未作答复。实施按最保守口径推进，可随时调整，不得据此转述为已确认口径。</p>
+  <ul>
+    <li>Markdown 仅引入 <code>react-markdown</code> 与 <code>remark-gfm</code>，经 React 渲染、不启用原始 HTML，远程图片不自动加载；代码高亮暂不做。</li>
+    <li>需求「状态」三组照 Demo（进行中／待评审／已归档）；现有六个阶段均归「进行中」，后两组只保留分组位，不新增业务规则。</li>
+    <li>工具卡片：工作台公开投影只为 <code>tool/call</code> 与 <code>tool/result</code> 增加工具名、调用标识、轮次／步骤、事件时间与结果状态，名称与标识按字符集和长度校验；参数、结果正文、错误原因与 <code>meta</code> 继续不出投影。此项放宽安全边界，单独提交并经独立评审。</li>
+    <li>五项按对话页、侧栏、需求列表、轨迹、产物与矩阵的顺序逐项验证、评审、提交。</li>
+    <li>消息操作只做复制消息与复制代码块，用户与助手消息显示时间，助手消息另显示模型与原生记录的 token 用量；赞／踩、编辑重发与分享没有后端能力，不做。</li>
+    <li>对话视图在 621px 以上改为记录区占满、输入区固定的布局，窄屏沿用页面滚动。</li>
+    <li>能力矩阵与「当前身份可执行」对全体项目成员可见，「成员与权限」入口随之对全体项目成员开放；成员名单请求与角色表单仍仅项目管理员可用。</li>
+    <li>「重要产物」五行取现有真实数据源（需求说明、能力模板、需求工作树、代码变更、会话轨迹）；Demo 中的设计产物与回归用例／测试报告没有数据源，暂不展示。</li>
+  </ul>
+
   <div class="warn">以下 §0–§7 保留 v3 设计历史与证据。与上方当前实施基线冲突时，以上方决定及替代关系为准；历史“已评审”不代表本轮实现已验证。</div>
   <h2 id="s0"><span class="num">0</span>这份文件的用途</h2>
   <div class="verdict">

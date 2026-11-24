@@ -329,12 +329,16 @@ export function Conversation({
   userId,
   sessionId,
   nativeTab,
+  initialSessionId = '',
 }: {
   requirementId: string;
   projectId: string;
   userId: string;
   sessionId: string;
   nativeTab: NativeTab;
+  // A session named by the page address is selected once the directory
+  // confirms it; the address never widens what the reader may open.
+  initialSessionId?: string;
 }) {
   const { login, draft } = nativeTab;
   const scopedDraft =
@@ -364,6 +368,7 @@ export function Conversation({
       login={login}
       draft={scopedDraft}
       setDraft={nativeTab.setDraft}
+      initialSessionId={initialSessionId}
     />
   );
 }
@@ -373,10 +378,15 @@ function ConnectedConversation({
   login,
   draft,
   setDraft,
-}: NativeTab & { requirementId: string; projectId: string }) {
+  initialSessionId,
+}: NativeTab & {
+  requirementId: string;
+  projectId: string;
+  initialSessionId: string;
+}) {
   const storageKey =
     'rdws:session-operation:' + login.userId + ':' + requirementId;
-  const initialSession = useRef(draft?.sessionId ?? '');
+  const initialSession = useRef(initialSessionId || draft?.sessionId || '');
   const [runtime, setRuntime] = useState<NativeRuntime>();
   const [sessions, setSessions] = useState<
     { id: string; own: boolean; sourceSessionId?: string }[]
@@ -387,6 +397,13 @@ function ConnectedConversation({
   const [busy, setBusy] = useState(false);
   const [replay, setReplay] = useState(false),
     [intent, setIntent] = useState<PendingSession>();
+  // A session named by the address is followed when it changes, for example
+  // from the sidebar. It resolves only against the authorized directory.
+  useEffect(() => {
+    if (!initialSessionId) return;
+    setSelected(initialSessionId);
+    setReplay(false);
+  }, [initialSessionId]);
   const live = useRef(true),
     sending = useRef(false),
     refreshSequence = useRef(0),

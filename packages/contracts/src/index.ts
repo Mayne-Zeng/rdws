@@ -174,6 +174,31 @@ export const taskStatusLabels = {
 } as const;
 export type Stage = keyof typeof stageLabels;
 export type TaskStatus = keyof typeof taskStatusLabels;
+// Work status for the sidebar tree and the list filter. Every current stage
+// counts as in progress; review and archive hold their place until a later
+// task gives them a source, rather than inventing a mapping now.
+export const requirementStates = ['active', 'review', 'archived'] as const;
+export type RequirementState = (typeof requirementStates)[number];
+export const requirementStateLabels: Record<RequirementState, string> = {
+  active: '进行中',
+  review: '待评审',
+  archived: '已归档',
+};
+const stateByStage: Record<Stage, RequirementState> = {
+  intake: 'active',
+  assignment: 'active',
+  design: 'active',
+  development: 'active',
+  testing: 'active',
+  integration: 'active',
+};
+export function requirementStateOf(stage: Stage): RequirementState {
+  return stateByStage[stage];
+}
+export const stagesOfState = (state: RequirementState): Stage[] =>
+  (Object.keys(stageLabels) as Stage[]).filter(
+    (stage) => stateByStage[stage] === state,
+  );
 export const capabilityKindLabels = {
   plugin: '插件',
   skill: '技能',

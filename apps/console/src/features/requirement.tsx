@@ -38,6 +38,7 @@ export function RequirementPage({
   sessionId,
   projectId,
   nativeTab,
+  initialSessionId = '',
 }: {
   id: string;
   view: View;
@@ -45,6 +46,7 @@ export function RequirementPage({
   sessionId: string;
   projectId: string;
   nativeTab: NativeTab;
+  initialSessionId?: string;
 }) {
   const client = useQueryClient();
   const detailsScope = JSON.stringify([sessionId, userId, projectId, id]);
@@ -347,6 +349,7 @@ export function RequirementPage({
             userId={userId}
             sessionId={sessionId}
             nativeTab={nativeTab}
+            initialSessionId={initialSessionId}
           />
         ) : (
           <Loading text="正在核对需求会话权限" />

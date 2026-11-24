@@ -3,14 +3,20 @@ import { useSearchParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Loading } from 'tdesign-react';
 import {
+  requirementStateLabels,
+  requirementStateOf,
+  requirementStates,
   stageLabels,
-  type RequirementSummary,
   type ProjectList,
+  type RequirementState,
+  type RequirementSummary,
+  type Stage,
 } from '@rdws/contracts';
 import { Icon, api, roleLabels } from '../lib/ui.tsx';
 import { RequirementForm } from './requirement-form.tsx';
 import { RequirementImport } from './requirement-import.tsx';
 import { RequirementPage } from './requirement.tsx';
+import { DemandTree, useRailIcon } from './demand-tree.tsx';
 import { MembersPage } from './administration.tsx';
 import { RepositoriesPage } from './repositories.tsx';
 import { CapabilityTemplates } from './capability-templates.tsx';
@@ -62,6 +68,7 @@ export function ProjectWorkspace({
   const projectMatches =
     requestedProject === null || requestedProject === project.id;
   const selected = search.get('requirement') ?? '';
+  const selectedSession = search.get('session') ?? '';
   const current = search.get('view');
   const view: View = [
     'overview',
@@ -83,7 +90,30 @@ export function ProjectWorkspace({
     [protectedForm, setProtectedForm] = useState(false),
     [smallScreen, setSmallScreen] = useState(
       () => window.matchMedia('(max-width: 620px)').matches,
-    );
+    ),
+    // The selected requirement shows its sessions unless the reader folds
+    // it; any other one shows them once unfolded by hand.
+    [unfolded, setUnfolded] = useState<ReadonlySet<string>>(() => new Set()),
+    [folded, setFolded] = useState<ReadonlySet<string>>(() => new Set()),
+    [stateFilter, setStateFilter] = useState<'all' | RequirementState>('all'),
+    [stageFilter, setStageFilter] = useState<'all' | Stage>('all');
+  const railIcon = useRailIcon();
+  const sessionsOpen = (id: string) =>
+    !folded.has(id) && (id === selected || unfolded.has(id));
+  function toggleSessions(id: string, open: boolean) {
+    setUnfolded((current) => {
+      const next = new Set(current);
+      if (open) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+    setFolded((current) => {
+      const next = new Set(current);
+      if (open) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
   const rail = useRef<HTMLElement>(null),
     menu = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -153,13 +183,14 @@ export function ProjectWorkspace({
     requirementListStatus !== 401 &&
     requirementListStatus !== 403 &&
     requirementListStatus !== 404;
-  function navigate(next: View, id = selected) {
+  function navigate(next: View, id = selected, session?: string) {
     if (protectedForm) return;
     const panel = search.get('panel');
     setSearch({
       project: project.id,
       view: next,
       ...(id ? { requirement: id } : {}),
+      ...(session && next === 'chat' ? { session } : {}),
       ...(next === 'trace' &&
         view === 'trace' &&
         (panel === 'anchors' || panel === 'execution') && { panel }),
@@ -173,6 +204,19 @@ export function ProjectWorkspace({
     requirements.data?.requirements.filter((r) =>
       r.title.toLocaleLowerCase().includes(filter.toLocaleLowerCase()),
     ) ?? [];
+  // The list narrows the sidebar's title matches by work status and stage.
+  const listRows = filtered.filter(
+    (r) =>
+      (stateFilter === 'all' || requirementStateOf(r.stage) === stateFilter) &&
+      (stageFilter === 'all' || r.stage === stageFilter),
+  );
+  const listFiltered =
+    !!filter || stateFilter !== 'all' || stageFilter !== 'all';
+  const clearListFilters = () => {
+    setFilter('');
+    setStateFilter('all');
+    setStageFilter('all');
+  };
   const demandView =
     !!selected &&
     view !== 'create' &&
@@ -254,7 +298,13 @@ export function ProjectWorkspace({
       </main>
     );
   return (
-    <main className={'shell workspace-shell' + (mobile ? ' rail-open' : '')}>
+    <main
+      className={
+        'shell workspace-shell' +
+        (mobile ? ' rail-open' : '') +
+        (railIcon.icon ? ' rail-icon' : '')
+      }
+    >
       <aside
         ref={rail}
         id="project-rail"
@@ -290,6 +340,16 @@ export function ProjectWorkspace({
               <span>新建需求</span>
             </Button>
           )}
+          <button
+            type="button"
+            className="rail-collapse"
+            aria-label={railIcon.icon ? '展开侧栏' : '收起侧栏'}
+            aria-expanded={!railIcon.icon}
+            disabled={protectedForm}
+            onClick={railIcon.toggle}
+          >
+            <Icon name="menu" />
+          </button>
           <button
             className="rail-close icon-button"
             aria-label="关闭导航"
@@ -404,38 +464,27 @@ export function ProjectWorkspace({
           />
         </label>
         <div className="rail-scroll">
-          {filtered.length > 0 && (
-            <div className="tree-group">
-              <span className="status-dot" />
-              可访问需求<span>{filtered.length}</span>
-            </div>
-          )}
-          {filtered.map((r) => (
-            <button
-              key={r.id}
-              disabled={protectedForm}
-              aria-current={showTabs && r.id === selected ? 'page' : undefined}
-              aria-label={r.title}
-              className={
-                'demand-item' +
-                (r.id === selected && view !== 'create' ? ' active' : '')
-              }
-              onClick={() =>
-                navigate(
-                  sessionView || view === 'fleet' ? view : 'overview',
-                  r.id,
-                )
-              }
-            >
-              <span className="demand-icon">
-                <Icon name="file" />
-              </span>
-              <span className="demand-text">
-                <strong>{r.title}</strong>
-                <small>{stageLabels[r.stage]}</small>
-              </span>
-            </button>
-          ))}
+          <DemandTree
+            requirements={filtered}
+            current={showTabs}
+            selected={selected}
+            selectedSession={selectedSession}
+            directoryFollowedElsewhere={sessionView || view === 'fleet'}
+            projectId={project.id}
+            userId={userId}
+            loginId={sessionId}
+            observedLoginId={nativeTab.login.sessionId}
+            disabled={protectedForm}
+            isOpen={sessionsOpen}
+            onToggle={(id) => toggleSessions(id, !sessionsOpen(id))}
+            onOpenRequirement={(id) => {
+              toggleSessions(id, true);
+              navigate(sessionView || view === 'fleet' ? view : 'overview', id);
+            }}
+            onOpenSession={(id, session) =>
+              session ? navigate('chat', id, session) : navigate('overview', id)
+            }
+          />
           {requirements.isPending && (
             <p className="rail-empty" role="status">
               正在读取需求…
@@ -741,6 +790,7 @@ export function ProjectWorkspace({
                     sessionId={sessionId}
                     projectId={project.id}
                     nativeTab={nativeTab}
+                    initialSessionId={selectedSession}
                   />
                 )
               ) : requirements.isPending ? (
@@ -805,28 +855,89 @@ export function ProjectWorkspace({
                     onChange={(event) => setFilter(event.target.value)}
                     placeholder="按需求标题筛选"
                   />
-                  {filter && (
+                  {listFiltered && (
                     <Button
                       tag="button"
                       variant="text"
-                      onClick={() => setFilter('')}
+                      onClick={clearListFilters}
                     >
                       清除筛选
                     </Button>
                   )}
+                  <div
+                    className="segment"
+                    role="group"
+                    aria-label="需求状态筛选"
+                  >
+                    {(['all', ...requirementStates] as const).map((option) => {
+                      // A status no stage maps to yet is offered but marked
+                      // empty, instead of leading to a guaranteed-empty list.
+                      const unoccupied =
+                        option !== 'all' &&
+                        !!requirements.data &&
+                        requirements.data.requirements.every(
+                          (r) => requirementStateOf(r.stage) !== option,
+                        );
+                      return (
+                        <button
+                          key={option}
+                          type="button"
+                          aria-pressed={stateFilter === option}
+                          disabled={unoccupied && stateFilter !== option}
+                          title={
+                            unoccupied
+                              ? `暂无处于「${requirementStateLabels[option]}」的需求`
+                              : undefined
+                          }
+                          onClick={() => setStateFilter(option)}
+                        >
+                          {option === 'all'
+                            ? '全部'
+                            : requirementStateLabels[option]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    className="list-export"
+                    disabled
+                    title="导出功能待接入"
+                    aria-label="导出 CSV"
+                  >
+                    导出 CSV
+                  </button>
+                </div>
+                <div
+                  className="stage-filter"
+                  role="group"
+                  aria-label="阶段筛选"
+                >
+                  {(
+                    ['all', ...(Object.keys(stageLabels) as Stage[])] as const
+                  ).map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      aria-pressed={stageFilter === option}
+                      onClick={() => setStageFilter(option)}
+                    >
+                      {option === 'all' ? '全部阶段' : stageLabels[option]}
+                    </button>
+                  ))}
                 </div>
                 <section className="list-panel">
                   <div className="panel-heading">
                     <h2>需求列表</h2>
                     <span className="muted">
                       {requirements.data
-                        ? `${filtered.length} / ${requirements.data.requirements.length} 项`
+                        ? `${listRows.length} / ${requirements.data.requirements.length} 项`
                         : '—'}
                     </span>
                   </div>
                   {requirements.isPending ? (
                     <Loading text="正在读取需求" />
-                  ) : requirements.isError ? null : filtered.length ? (
+                  ) : requirements.isError ? null : listRows.length ? (
                     <table className="requirement-table" aria-label="需求列表">
                       <colgroup>
                         <col className="requirement-id-column" />
@@ -841,7 +952,7 @@ export function ProjectWorkspace({
                         </tr>
                       </thead>
                       <tbody>
-                        {filtered.map((r) => (
+                        {listRows.map((r) => (
                           <tr key={r.id} className="requirement-row">
                             <td>
                               <code className="record-id" title={r.id}>
@@ -875,9 +986,15 @@ export function ProjectWorkspace({
                   ) : (
                     <div className="empty-state">
                       <Icon name="folder" />
-                      <h3>{filter ? '没有匹配的需求' : '从一个需求开始'}</h3>
+                      <h3>
+                        {stateFilter !== 'all' || stageFilter !== 'all'
+                          ? '没有符合筛选条件的需求'
+                          : filter
+                            ? '没有匹配的需求'
+                            : '从一个需求开始'}
+                      </h3>
                       <p>
-                        {filter
+                        {filter || listFiltered
                           ? '调整或清除筛选条件，查看其他需求。'
                           : '需求创建后，子任务、分派和会话会集中在这里。'}
                       </p>

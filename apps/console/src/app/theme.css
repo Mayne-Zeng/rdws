@@ -1704,6 +1704,160 @@ input[type='checkbox'] {
     display: none;
   }
 }
+/* Wide rail (821px and above) while it is not shown as icons. */
+@media (min-width: 821px) {
+  .workspace-shell:not(.rail-icon) .rail-head {
+    padding: 14px 14px 10px;
+  }
+
+  .workspace-shell:not(.rail-icon) .rail-head .brand {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    column-gap: 10px;
+    row-gap: 3px;
+    margin: 0;
+  }
+
+  .workspace-shell:not(.rail-icon) .rail-head .brand-mark {
+    grid-row: span 2;
+    width: 28px;
+    height: 28px;
+  }
+
+  .workspace-shell:not(.rail-icon) .rail-head .brand strong {
+    font-size: 16px;
+    letter-spacing: -0.02em;
+  }
+
+  .workspace-shell:not(.rail-icon) .rail-head .t-button {
+    display: none;
+  }
+
+  .workspace-shell:not(.rail-icon) .project-card {
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    margin: 0 12px 12px;
+    padding: 10px 10px 0;
+    overflow: hidden;
+  }
+
+  .workspace-shell:not(.rail-icon) .project-mark {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    background: var(--brand-soft);
+    color: var(--brand-dark);
+  }
+
+  .workspace-shell:not(.rail-icon) .project-card > .project-metrics {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0;
+    margin: 0 -10px;
+    border-top: 1px solid var(--line-2);
+    background: var(--rail);
+    text-align: center;
+  }
+
+  .workspace-shell:not(.rail-icon) .project-metrics > span {
+    display: grid;
+    gap: 2px;
+    padding: 8px 2px;
+  }
+
+  .workspace-shell:not(.rail-icon) .project-metrics > span + span {
+    border-left: 1px solid var(--line-2);
+  }
+
+  .workspace-shell:not(.rail-icon) .project-metrics strong {
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .workspace-shell:not(.rail-icon) .nav-heading {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 8px 7px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .workspace-shell:not(.rail-icon) .nav-heading::after {
+    content: '';
+    flex: 1;
+    border-top: 1px solid var(--line);
+  }
+
+  .workspace-shell:not(.rail-icon) .rail-nav {
+    padding: 8px 16px 12px;
+  }
+
+  .workspace-shell:not(.rail-icon) .nav-item {
+    height: 35px;
+    font-size: 12px;
+  }
+
+  .workspace-shell:not(.rail-icon) .tree-heading {
+    align-items: center;
+    border-top: 1px solid var(--line);
+    margin: 4px 16px 9px;
+    padding: 10px 2px 0;
+  }
+
+  .workspace-shell:not(.rail-icon) .tree-create {
+    display: inline-flex;
+    width: var(--control-h);
+    height: var(--control-h);
+    background: transparent;
+    color: var(--muted);
+  }
+
+  .workspace-shell:not(.rail-icon) .tree-create:hover {
+    background: var(--hover);
+    color: var(--ink);
+  }
+
+  .workspace-shell:not(.rail-icon) .tree-search {
+    margin: 0 16px 8px;
+  }
+
+  .workspace-shell:not(.rail-icon) .tree-group {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 0 8px 4px;
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--rail-2);
+    color: var(--ink-2);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .workspace-shell:not(.rail-icon) .tree-group span:last-child {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .workspace-shell:not(.rail-icon) .demand-item {
+    width: calc(100% - 16px);
+    margin-inline: 8px;
+    padding: 7px 9px;
+  }
+
+  .workspace-shell:not(.rail-icon) .demand-item.active {
+    background: var(--brand-soft);
+  }
+}
+
+/* Icon rail, forced between 621px and 820px. Pure CSS so that a resize
+   applies in the same frame; the chosen form below mirrors these rules. */
 @media (min-width: 621px) and (max-width: 820px) {
   :root,
   :root[theme-mode] {
@@ -1768,7 +1922,122 @@ input[type='checkbox'] {
     justify-content: center;
     padding: 12px 8px;
   }
+  /* Tree parts carry no icon form; only requirement icons remain. */
+  .tree-group,
+  .demand-toggle,
+  .demand-gear,
+  .demand-sessions {
+    display: none;
+  }
+  .demand-node {
+    grid-template-columns: minmax(0, 1fr);
+    margin-inline: 0;
+  }
+  .demand-node > .demand-item {
+    width: 100%;
+    padding: 10px;
+  }
 }
+
+/* Icon rail by the reader's choice, above the forced range. These rules
+   mirror the media query above; keep the two in step. */
+@media (min-width: 821px) {
+  .workspace-shell.rail-icon {
+    --rail-w: 64px;
+  }
+
+  .rail-icon .rail-head {
+    padding: 16px 10px 8px;
+  }
+
+  .rail-icon .rail-head .brand {
+    justify-content: center;
+  }
+
+  .rail-icon .brand > strong,
+  .rail-icon .rail-head .brand > span:last-child,
+  .rail-icon .rail-head .t-button span:not(.t-button__text),
+  .rail-icon .nav-item > span,
+  .rail-icon .tree-heading,
+  .rail-icon .tree-search,
+  .rail-icon .demand-text,
+  .rail-icon .rail-foot > div,
+  .rail-icon .project-card > div,
+  .rail-icon .logout-label {
+    display: none;
+  }
+
+  .rail-icon .project-card {
+    margin: 12px 8px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .rail-icon .project-card select {
+    width: 48px;
+    font-size: 11px;
+  }
+
+  .rail-icon .logout-icon {
+    display: inline-flex;
+  }
+
+  .rail-icon .rail-foot .t-button {
+    width: 32px;
+    padding: 0;
+  }
+
+  .rail-icon .rail-head .t-button {
+    padding: 0;
+  }
+
+  .rail-icon .rail-nav {
+    padding: 8px;
+  }
+
+  .rail-icon .nav-item {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .rail-icon .rail-scroll {
+    padding: 12px 8px;
+  }
+
+  .rail-icon .demand-item {
+    justify-content: center;
+    padding: 10px;
+  }
+
+  .rail-icon .rail-foot {
+    flex-direction: column;
+    justify-content: center;
+    padding: 12px 8px;
+  }
+  /* Tree parts carry no icon form; only requirement icons remain. */
+  .rail-icon .tree-group,
+  .rail-icon .demand-toggle,
+  .rail-icon .demand-gear,
+  .rail-icon .demand-sessions {
+    display: none;
+  }
+  .rail-icon .demand-node {
+    grid-template-columns: minmax(0, 1fr);
+    margin-inline: 0;
+  }
+  .rail-icon .demand-node > .demand-item {
+    width: 100%;
+    padding: 10px;
+  }
+  .rail-icon .rail-collapse {
+    display: inline-flex;
+    margin: 10px auto 0;
+  }
+}
+
 @media (max-width: 620px) {
   :root,
   :root[theme-mode] {
@@ -2122,156 +2391,8 @@ input[type='checkbox'] {
   display: none;
 }
 
+/* Wide-screen adjustments of the main area; these do not concern the rail. */
 @media (min-width: 821px) {
-  .rail-head {
-    padding: 14px 14px 10px;
-  }
-
-  .rail-head .brand {
-    display: grid;
-    grid-template-columns: 28px minmax(0, 1fr);
-    grid-template-rows: auto auto;
-    column-gap: 10px;
-    row-gap: 3px;
-    margin: 0;
-  }
-
-  .rail-head .brand-mark {
-    grid-row: span 2;
-    width: 28px;
-    height: 28px;
-  }
-
-  .rail-head .brand strong {
-    font-size: 16px;
-    letter-spacing: -0.02em;
-  }
-
-  .rail-head .t-button {
-    display: none;
-  }
-
-  .project-card {
-    display: grid;
-    grid-template-columns: 24px minmax(0, 1fr) auto;
-    margin: 0 12px 12px;
-    padding: 10px 10px 0;
-    overflow: hidden;
-  }
-
-  .project-mark {
-    display: grid;
-    place-items: center;
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-sm);
-    background: var(--brand-soft);
-    color: var(--brand-dark);
-  }
-
-  .project-card > .project-metrics {
-    display: grid;
-    grid-column: 1 / -1;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0;
-    margin: 0 -10px;
-    border-top: 1px solid var(--line-2);
-    background: var(--rail);
-    text-align: center;
-  }
-
-  .project-metrics > span {
-    display: grid;
-    gap: 2px;
-    padding: 8px 2px;
-  }
-
-  .project-metrics > span + span {
-    border-left: 1px solid var(--line-2);
-  }
-
-  .project-metrics strong {
-    color: var(--ink);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .nav-heading {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 0 8px 7px;
-    color: var(--muted);
-    font-size: 11px;
-    font-weight: 600;
-  }
-
-  .nav-heading::after {
-    content: '';
-    flex: 1;
-    border-top: 1px solid var(--line);
-  }
-
-  .rail-nav {
-    padding: 8px 16px 12px;
-  }
-
-  .nav-item {
-    height: 35px;
-    font-size: 12px;
-  }
-
-  .tree-heading {
-    align-items: center;
-    border-top: 1px solid var(--line);
-    margin: 4px 16px 9px;
-    padding: 10px 2px 0;
-  }
-
-  .tree-create {
-    display: inline-flex;
-    width: var(--control-h);
-    height: var(--control-h);
-    background: transparent;
-    color: var(--muted);
-  }
-
-  .tree-create:hover {
-    background: var(--hover);
-    color: var(--ink);
-  }
-
-  .tree-search {
-    margin: 0 16px 8px;
-  }
-
-  .tree-group {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    margin: 0 8px 4px;
-    padding: 6px 8px;
-    border-radius: var(--radius-sm);
-    background: var(--rail-2);
-    color: var(--ink-2);
-    font-size: 11px;
-    font-weight: 600;
-  }
-
-  .tree-group span:last-child {
-    margin-left: auto;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .demand-item {
-    width: calc(100% - 16px);
-    margin-inline: 8px;
-    padding: 7px 9px;
-  }
-
-  .demand-item.active {
-    background: var(--brand-soft);
-  }
-
   .workspace-scope {
     display: flex;
     align-items: center;
@@ -2435,4 +2556,212 @@ input[type='checkbox'] {
   align-items: baseline;
   align-content: center;
   gap: 4px 8px;
+}
+
+/* Sidebar demand tree: status group -> requirement -> sessions. */
+.rail-collapse {
+  display: none;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink);
+}
+.rail-collapse:hover {
+  background: var(--hover);
+}
+/* The toggle only exists where the breakpoint leaves the choice open. */
+@media (min-width: 821px) {
+  .workspace-shell:not(.rail-icon) .rail-head {
+    position: relative;
+  }
+  .workspace-shell:not(.rail-icon) .rail-collapse {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    display: inline-flex;
+  }
+}
+.demand-node {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 26px;
+  align-items: stretch;
+  margin: 0 4px 3px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+.demand-node:hover {
+  background: var(--hover);
+}
+.demand-node.active {
+  background: var(--paper);
+  border-color: var(--brand-line);
+}
+.demand-node.active:hover {
+  background: var(--paper);
+}
+.demand-node > .demand-item,
+.demand-node > .demand-item:hover,
+.demand-node > .demand-item.active {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.demand-toggle,
+.demand-gear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+.demand-toggle:hover,
+.demand-gear:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.demand-toggle .icon,
+.demand-gear .icon {
+  width: 13px;
+  height: 13px;
+}
+.demand-node.open .demand-toggle .icon {
+  transform: rotate(90deg);
+}
+.demand-gear {
+  opacity: 0;
+}
+.demand-node:hover .demand-gear,
+.demand-node:focus-within .demand-gear {
+  opacity: 1;
+}
+.demand-sessions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 6px 6px 28px;
+}
+.demand-sessions .rail-empty {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 12px;
+  text-align: left;
+}
+.session-item:hover {
+  background: var(--hover);
+}
+.session-item.active {
+  background: var(--paper);
+  color: var(--brand-dark);
+  font-weight: 600;
+}
+.demand-node.active .session-item.active {
+  background: var(--brand-soft);
+}
+.session-badge {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--rail-2);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+}
+.session-item.active .session-badge {
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+}
+@media (min-width: 621px) {
+  .workspace-shell:not(.rail-icon) .demand-node {
+    margin-inline: 8px;
+  }
+  .workspace-shell:not(.rail-icon) .demand-node > .demand-item {
+    width: 100%;
+    margin-inline: 0;
+  }
+  .workspace-shell:not(.rail-icon) .demand-node.active {
+    background: var(--brand-soft);
+    border-color: transparent;
+  }
+  .workspace-shell:not(.rail-icon) .demand-node.active .session-item.active {
+    background: var(--paper);
+  }
+}
+@media (hover: none), (max-width: 620px) {
+  .demand-gear {
+    opacity: 1;
+  }
+}
+@media (max-width: 620px) {
+  .demand-toggle,
+  .demand-gear {
+    min-height: 40px;
+  }
+}
+
+/* Requirement list filters: work status, stage and the export entry. */
+.list-toolbar .segment {
+  margin: 0;
+}
+.stage-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.stage-filter button {
+  height: var(--control-h);
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.stage-filter button:hover {
+  border-color: var(--brand-line);
+}
+.stage-filter button[aria-pressed='true'] {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: var(--on-brand);
+  font-weight: 600;
+}
+.list-export {
+  margin-left: auto;
+  height: var(--control-h);
+  padding: 0 12px;
+  border: 1px solid var(--brand-line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--brand-dark);
+  font-size: 12px;
+}
+.list-export:disabled {
+  border-color: var(--line);
+  color: var(--muted);
+  opacity: 0.6;
+  cursor: not-allowed;
 }

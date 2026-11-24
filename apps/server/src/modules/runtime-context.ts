@@ -11,6 +11,22 @@ import {
   readToolName,
 } from '@rdws/dsh/read-tool-arguments';
 import {
+  writePermitEnvelopeBytes,
+  writePermitEnvelopeLimit,
+  writeToolArguments,
+  writeToolNames,
+  type WriteToolName,
+} from '@rdws/dsh/write-tool-arguments';
+import {
+  writeToolOperations,
+  type NativeWriteToolJob,
+  type WriteFileRequest,
+} from './native-write-tool-job.ts';
+import type {
+  NativeShellToolJob,
+  ShellRequest,
+} from './native-shell-tool-job.ts';
+import {
   businessError,
   digestOf,
   type Actor,
@@ -21,9 +37,14 @@ import {
   type NativeFixtureToolJob,
 } from './native-fixture-tool-job.ts';
 import type { WriteHandoffScope } from './write-handoff.ts';
-import type {
-  FixtureToolProjection,
-  ReadToolProjection,
+import type { OutputPolicy } from './shell-output-handling.ts';
+import {
+  conservativeRedaction,
+  toolDefinitions,
+  type FixtureToolProjection,
+  type ReadToolProjection,
+  type ToolDefinition,
+  type WriteToolProjection,
 } from './model-egress-policy.ts';
 import type {
   ModelFirstWrite,
@@ -187,7 +208,9 @@ type ModelStep = {
   contextVersion?: number;
   fixtureToolUsed?: true;
   readToolUsed?: true;
+  writeToolUsed?: true;
   fixtureToolJob?: NativeFixtureToolJob;
+  writeToolJob?: NativeWriteToolJob | NativeShellToolJob;
   fixtureWire?: FixtureWire;
   attempts: Set<string>;
   wireAttempt?: string;
@@ -305,10 +328,103 @@ export function readToolPermitArguments(
   );
 }
 
+// §11.20.27 write binding of one armed run (hop 3 and 4): the scope is
+// re-derived from the signed run binding like the read binding; the write
+// generation comes from the Broker's confirmed holding of the own session.
+export type WriteToolBinding = {
+  run: RunBinding;
+  projectId: string;
+  repositoryId: string;
+  // The tools this run declared; a call of any other name is not permitted.
+  tools: readonly WriteToolName[];
+  holding: () =>
+    | { generation: string; contextVersion: number; expiresAt: number }
+    | undefined;
+  // Throws when the generation is no longer the confirmed holding.
+  assertLease: () => void;
+  // Whether the command is the one registered for the generation and the
+  // requirement tree's package.json still has the registered digest. The
+  // read is bounded by the permit request (its signal and liveness).
+  registered: (
+    command: string,
+    assertCurrent: () => void,
+    signal?: AbortSignal,
+  ) => Promise<boolean>;
+  // Whether the command is the one registered for the generation right
+  // now, without a read: the FD4 projection judges history with it.
+  registeredCommand?: (command: string) => boolean;
+  // The prefix policy of the output handling, once the locations are known
+  // (the FD4 backstop scan of tool results).
+  redaction?: () => OutputPolicy | undefined;
+  // Counts a redaction the FD4 backstop had to make (must stay zero), and
+  // reads the count back.
+  countRedaction?: () => void;
+  redactionCount?: () => number;
+  job: (
+    request: WriteFileRequest,
+    generation: { generation: string; contextVersion: number },
+  ) => NativeWriteToolJob;
+  // The Shell and Git job of a permitted call (B segment).
+  shell?: (
+    request: ShellRequest,
+    generation: { generation: string; contextVersion: number },
+  ) => NativeShellToolJob;
+};
+// The Broker execution request of a permitted write tool call: the file
+// tools, the test file of a registered Shell command, or the fixed Git query.
+export function writeToolRequest(
+  toolName: WriteToolName,
+  args: Record<string, unknown>,
+): WriteFileRequest | ShellRequest | undefined {
+  if (toolName === 'write')
+    return {
+      tool: 'file',
+      operation: 'write',
+      path: String(args.file_path),
+      text: String(args.content),
+      receipt: true,
+    };
+  if (toolName === 'edit')
+    return {
+      tool: 'file',
+      operation: 'edit',
+      path: String(args.file_path),
+      old_string: String(args.old_string),
+      new_string: String(args.new_string),
+      replace_all: args.replace_all === true,
+    };
+  if (toolName === 'bash')
+    // The only form: node <name>.test.mjs, so the file is the rest.
+    return { tool: 'test', path: String(args.command).slice('node '.length) };
+  if (toolName === 'git')
+    return {
+      tool: 'git',
+      operation: args.operation as 'status' | 'diff',
+    };
+  return undefined;
+}
+
 export class ContextRuns {
   private runs = new Map<string, Run>();
   // The Read binding of the armed run, remembered from its first FD3 request.
-  private readArmed?: ReadToolBinding;
+  private readArmed = new Map<string, ReadToolBinding>();
+  // §11.20.27: the write bindings of the armed runs and the definitions the
+  // Host registered for them (the FD4 projection compares word for word).
+  private writeArmed = new Map<string, WriteToolBinding>();
+  private writeDefinitions = new Map<string, ToolDefinition[]>();
+  // What a session that ever held the write tools keeps after its armed
+  // runs are gone: the read definition (the declared set of a run without
+  // the write generation is read alone) and the output policy, so a later
+  // run of that session can still project the exchanges of its history.
+  private sessionTools = new Map<
+    string,
+    {
+      read?: ToolDefinition;
+      redaction?: () => OutputPolicy | undefined;
+      countRedaction?: () => void;
+      redactionCount?: () => number;
+    }
+  >();
   private nonces = new Map<string, number>();
   private modelSteps = new Map<string, ModelStep>();
   private titles = new Map<string, TitleOrigin>();
@@ -452,11 +568,19 @@ export class ContextRuns {
         this.discard(id);
   }
   clear() {
-    for (const step of this.modelSteps.values()) step.fixtureToolJob?.cancel();
+    for (const step of this.modelSteps.values()) {
+      step.fixtureToolJob?.cancel();
+      step.writeToolJob?.cancel();
+    }
     this.runs.clear();
     this.nonces.clear();
     this.modelSteps.clear();
     this.titles.clear();
+    // §11.20.27: the armed-run tables go with the runs they named.
+    this.readArmed.clear();
+    this.writeArmed.clear();
+    this.writeDefinitions.clear();
+    this.sessionTools.clear();
   }
   cancelTitle(sessionId: string) {
     for (const run of this.runs.values())
@@ -470,11 +594,17 @@ export class ContextRuns {
         if (origin.run.runId === runId) origin.phase = 'closed';
     const run = this.runs.get(runId);
     this.runs.delete(runId);
+    // §11.20.27: an armed run that is discarded releases its bindings; the
+    // session keeps only what its history needs (the tool projection).
+    this.readArmed.delete(runId);
+    this.writeArmed.delete(runId);
+    this.writeDefinitions.delete(runId);
     if (!run) return;
     const step = this.modelSteps.get(run.sessionId);
     if (step?.batch.includes(run)) {
       step.closed = true;
       step.fixtureToolJob?.cancel();
+      step.writeToolJob?.cancel();
       step.attachment = undefined;
       if (step.batch.every((member) => this.runs.get(member.runId) !== member))
         this.modelSteps.delete(run.sessionId);
@@ -878,23 +1008,73 @@ export class ContextRuns {
   }
   // §11.20.26 hop 6: the FD4 body projection of the armed Read run. Only the
   // steps of the run bound at hop 3 carry the read declaration and history.
-  readWire(request: ModelAttempt): ReadToolProjection | undefined {
-    const armed = this.readArmed;
-    if (
-      !armed?.segment ||
-      request.routeId !== 'main' ||
-      request.call.purpose !== undefined
-    )
+  // The armed run of a model step, when it is one of the runs that
+  // reached an FD3 request (several runs may be armed in one BFF).
+  private armedStep(request: ModelAttempt, runId: (runId: string) => boolean) {
+    if (request.routeId !== 'main' || request.call.purpose !== undefined)
       return;
     const step = this.modelSteps.get(request.call.sessionId ?? '');
     if (
       step &&
       !step.closed &&
       request.call.bindingId === step.id &&
-      step.batch.length === 1 &&
-      step.batch[0]?.runId === armed.run.runId
+      step.batch.length === 1
     )
-      return { kind: 'read', segment: armed.segment };
+      return runId(step.batch[0]!.runId) ? step : undefined;
+  }
+  readWire(request: ModelAttempt): ReadToolProjection | undefined {
+    const step = this.armedStep(
+      request,
+      (runId) => !!this.readArmed.get(runId)?.segment,
+    );
+    const armed = step && this.readArmed.get(step.batch[0]!.runId);
+    if (!armed?.segment) return;
+    return { kind: 'read', segment: armed.segment };
+  }
+  // §11.20.27 hop 6: the FD4 projection of the run armed with write tools,
+  // once the Host registered the definitions of the armed set. B segment:
+  // the projection also carries the registered command (history calls of
+  // bash must be the registered one) and the prefix policy of the output
+  // handling, applied once more over every tool result as a backstop.
+  writeWire(request: ModelAttempt): WriteToolProjection | undefined {
+    const session = this.sessionTools.get(request.call.sessionId ?? '');
+    const step = this.armedStep(
+      request,
+      (runId) =>
+        !!this.writeArmed.get(runId) ||
+        !!this.writeDefinitions.get(runId) ||
+        !!this.readArmed.get(runId),
+    );
+    if (!step) return;
+    const runId = step.batch[0]!.runId;
+    const armed = this.writeArmed.get(runId);
+    const read = this.readArmed.get(runId);
+    const tools = this.writeDefinitions.get(runId);
+    if (tools?.length) {
+      if (!armed) return;
+      // The policy is never absent: before the locations of the run are
+      // resolved the conservative default stands in (the first request of
+      // a run carries no tool result).
+      return {
+        kind: 'tools',
+        tools,
+        segment: read?.segment ?? (() => false),
+        redaction: armed.redaction?.() ?? conservativeRedaction(),
+        redactions: armed.redactionCount?.() ?? 0,
+        ...(armed.countRedaction && { countRedaction: armed.countRedaction }),
+      };
+    }
+    // A later run of a session that lost the write tools: read alone is
+    // declared, and the earlier write exchanges are projected as history.
+    if (!session?.read || !read) return;
+    return {
+      kind: 'tools',
+      tools: [session.read],
+      segment: read.segment ?? (() => false),
+      redaction: session.redaction?.() ?? conservativeRedaction(),
+      redactions: session.redactionCount?.() ?? 0,
+      ...(session.countRedaction && { countRedaction: session.countRedaction }),
+    };
   }
   pilotWireModel(request: ModelAttempt) {
     if (
@@ -1294,13 +1474,22 @@ export class ContextRuns {
     fixtureToolRun?: RunBinding,
     fixtureToolJob?: NativeFixtureToolJob,
     readTool?: ReadToolBinding,
+    writeTool?: WriteToolBinding,
   ) {
     const cap = this.verify(token),
       now = Date.now();
     const fixtureEnabled = fixtureToolRun && process.env.RDWS_MODE === 'test';
     // The Read permit exists only in the isolated assembly that armed it.
     const readEnabled = readTool && process.env.RDWS_MODE === 'test';
-    if (readEnabled && readTool.segment) this.readArmed = readTool;
+    if (readEnabled && readTool.segment)
+      this.readArmed.set(readTool.run.runId, readTool);
+    // §11.20.27: the write tool operations exist only in the isolated
+    // assembly that armed the run with a write generation.
+    const writeEnabled = writeTool && process.env.RDWS_MODE === 'test';
+    if (writeEnabled) this.writeArmed.set(writeTool.run.runId, writeTool);
+    const writeOperation =
+      writeEnabled &&
+      writeToolOperations.find((operation) => operation === cap?.operation);
     const fixtureOperation =
       fixtureEnabled &&
       fixtureToolJob &&
@@ -1322,6 +1511,10 @@ export class ContextRuns {
         ...(fixtureOperation ? [fixtureOperation] : []),
         ...(readEnabled ? ['read-tool-permit'] : []),
         ...(readEnabled && readTool.service ? readToolOperations : []),
+        ...(writeEnabled
+          ? ['write-tool-permit', 'write-tool-definitions']
+          : []),
+        ...(writeOperation ? [writeOperation] : []),
         'model-attachment-prepare',
         'model-attachment-release',
       ].includes(cap.operation ?? '') ||
@@ -1379,6 +1572,45 @@ export class ContextRuns {
       reply?.(result, result.expiresAt);
       return result;
     }
+    if (cap.operation === 'write-tool-permit' && writeEnabled && writeTool) {
+      const result = await this.authorizeWriteTool(input, cap, writeTool);
+      reply?.(result, result.expiresAt);
+      return result;
+    }
+    if (
+      cap.operation === 'write-tool-definitions' &&
+      writeEnabled &&
+      writeTool
+    ) {
+      const result = this.declareWriteTools(input, cap, writeTool);
+      reply?.(result, cap.expiresAt);
+      return result;
+    }
+    if (writeOperation && writeTool) {
+      const job = this.modelSteps.get(writeTool.run.sessionId)?.writeToolJob;
+      if (!job) businessError(403, '原生写工具作业未获授权');
+      let validBefore = cap.expiresAt;
+      const result = await job.control(
+        writeOperation.slice('write-tool-'.length) as
+          'begin' | 'status' | 'cancel' | 'output',
+        input,
+        async ({ who, requirementId, sessionId }) => {
+          const loginClosed = () =>
+            this.closing(who.authSessionId, who.userId, requirementId);
+          if (loginClosed()) return invalidModel();
+          const current = await this.read(who, requirementId, sessionId);
+          validBefore = Math.min(current.validBefore, validBefore);
+          if (loginClosed() || validBefore <= Date.now()) return invalidModel();
+        },
+      );
+      if (
+        writeOperation === 'write-tool-output' &&
+        Buffer.byteLength(JSON.stringify(result) ?? '', 'utf8') > readReplyLimit
+      )
+        businessError(413, '写工具回包超过上限');
+      reply?.(result, validBefore);
+      return result;
+    }
     const readOperation = readToolOperations.find(
       (operation) => operation === cap.operation,
     );
@@ -1428,6 +1660,7 @@ export class ContextRuns {
       ) {
         current.closed = true;
         current.fixtureToolJob?.cancel();
+        current.writeToolJob?.cancel();
         current.attachment = undefined;
       }
       const result = { released: true };
@@ -1532,6 +1765,7 @@ export class ContextRuns {
       if (previous) {
         previous.closed = true;
         previous.fixtureToolJob?.cancel();
+        previous.writeToolJob?.cancel();
         previous.attachment = undefined;
       }
       this.modelSteps.set(run.sessionId, modelStep);
@@ -1817,5 +2051,192 @@ export class ContextRuns {
       return invalidModel();
     step.readToolUsed = true;
     return { digest: cap.bodyHash, expiresAt };
+  }
+
+  // §11.20.27 hop 2: the definitions the Host registered for the armed run,
+  // exactly the armed set (read and the write tools of the run) in the
+  // fixed order; the FD4 projection compares every declaration with them.
+  private declareWriteTools(
+    input: Record<string, unknown>,
+    cap: Grant,
+    binding: WriteToolBinding,
+  ) {
+    const run = this.runs.get(binding.run.runId);
+    if (!run) businessError(403, '当前运行绑定已失效');
+    const names = Object.keys(input);
+    if (
+      names.length !== readBindingFields.length + 1 ||
+      !readBindingFields.every((key) => key in input) ||
+      !('definitions' in input)
+    )
+      businessError(400, '写工具声明参数不正确');
+    if (
+      run.expiresAt <= Date.now() ||
+      this.closing(run.who.authSessionId, run.who.userId, run.requirementId) ||
+      Object.entries(this.binding(run)).some(
+        ([key, value]) =>
+          binding.run[key as keyof RunBinding] !== value ||
+          input[key] !== value,
+      ) ||
+      input.authSessionId !== run.who.authSessionId
+    )
+      businessError(403, '当前运行绑定已失效');
+    const tools = toolDefinitions(input.definitions, [
+      'read',
+      ...binding.tools,
+    ]);
+    if (!tools) businessError(403, '写工具声明与武装集合不一致');
+    this.writeDefinitions.set(binding.run.runId, tools);
+    // The session keeps the read definition and the output policy for its
+    // later runs, armed with the write tools or not.
+    const readDefinition = tools.find(({ name }) => name === 'read');
+    this.sessionTools.set(binding.run.sessionId, {
+      ...(readDefinition && { read: readDefinition }),
+      ...(binding.redaction && { redaction: binding.redaction }),
+      ...(binding.countRedaction && { countRedaction: binding.countRedaction }),
+      ...(binding.redactionCount && { redactionCount: binding.redactionCount }),
+    });
+    return { declared: tools.map(({ name }) => name) };
+  }
+
+  // §11.20.27 write-specific single-use permit (W1, W2, W3). Same binding
+  // discipline as the read permit, plus the write binding: the Broker's
+  // confirmed holding of the own session must be the generation the run was
+  // armed with, the step's frozen version must equal that generation's
+  // context version (§11.20.10), every fence must hold, and — for a Shell
+  // call — the command must be the one registered for the generation while
+  // package.json still has the registered digest, read within this
+  // request's deadline (W6). One permit per step; the permit carries the
+  // job key of the Broker execution created from the frozen arguments.
+  private async authorizeWriteTool(
+    input: Record<string, unknown>,
+    cap: Grant,
+    binding: WriteToolBinding,
+  ) {
+    const expected = binding.run;
+    const run = this.runs.get(expected.runId);
+    const step = this.modelSteps.get(expected.sessionId);
+    const { deadline, toolName } = input;
+    if (
+      !run ||
+      !step ||
+      step.batch.length !== 1 ||
+      step.batch[0] !== run ||
+      Object.entries(this.binding(run)).some(
+        ([key, value]) =>
+          expected[key as keyof RunBinding] !== value || input[key] !== value,
+      ) ||
+      input.authSessionId !== run.who.authSessionId ||
+      input.agentGeneration !== step.agentGeneration ||
+      input.turn !== step.turn ||
+      input.modelBindingId !== step.id ||
+      bodyHash(parseStepMarker(input.modelStep)) !== bodyHash(step.stamp) ||
+      typeof toolName !== 'string' ||
+      !writeToolNames.includes(toolName as WriteToolName) ||
+      !binding.tools.includes(toolName as WriteToolName) ||
+      typeof input.toolCallId !== 'string' ||
+      input.toolCallId.length < 1 ||
+      input.toolCallId.length > 128 ||
+      !Number.isSafeInteger(input.toolCallSeq) ||
+      Number(input.toolCallSeq) < 1 ||
+      typeof deadline !== 'number' ||
+      !Number.isSafeInteger(deadline) ||
+      deadline <= Date.now() ||
+      deadline > Date.now() + 2000 ||
+      // The exact shape; a bash command is checked against the
+      // registration below, after the shape.
+      !isRecord(input.arguments) ||
+      !writeToolArguments(
+        toolName,
+        input.arguments,
+        toolName === 'bash' ? () => true : undefined,
+      ) ||
+      writePermitEnvelopeBytes(toolName, input.arguments) >
+        writePermitEnvelopeLimit
+    )
+      return invalidModel();
+    const current = () =>
+      this.modelSteps.get(run.sessionId) === step &&
+      !step.closed &&
+      step.selection?.isCurrent() &&
+      this.current([run]);
+    if (step.writeToolUsed || !current()) return invalidModel();
+    const noAuthority: () => never = () =>
+      businessError(409, '当前会话没有可用的写入资格');
+    // The write generation of the own session and the frozen version.
+    const holding = binding.holding();
+    if (
+      !holding ||
+      holding.expiresAt <= Date.now() ||
+      holding.contextVersion !== step.contextVersion
+    )
+      noAuthority();
+    binding.assertLease();
+    if (toolName === 'bash') {
+      const controller = new AbortController();
+      const timer = setTimeout(
+        () => controller.abort(),
+        Math.max(0, Math.min(deadline, cap.expiresAt) - Date.now()),
+      );
+      timer.unref?.();
+      const live = () => {
+        if (!current() || Date.now() >= deadline) noAuthority();
+      };
+      try {
+        live();
+        const registered = await binding.registered(
+          String(input.arguments.command),
+          live,
+          controller.signal,
+        );
+        if (!registered) businessError(409, '命令未随当前写代登记或已变化');
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    const login = await this.read(run.who, run.requirementId, run.sessionId);
+    const expiresAt = Math.min(
+      cap.expiresAt,
+      login.validBefore,
+      step.validBefore ?? 0,
+      run.expiresAt,
+      deadline,
+      holding.expiresAt,
+      Date.now() + 2000,
+    );
+    // Single issue; and the generation is read again after the awaits, so
+    // a takeover that landed meanwhile leaves everything at zero.
+    const latest = binding.holding();
+    if (
+      step.writeToolUsed ||
+      !current() ||
+      expiresAt <= Date.now() ||
+      !latest ||
+      latest.generation !== holding.generation
+    )
+      return step.writeToolUsed ? invalidModel() : noAuthority();
+    binding.assertLease();
+    const request = writeToolRequest(
+      toolName as WriteToolName,
+      input.arguments,
+    );
+    if (!request) return invalidModel();
+    const job =
+      request.tool === 'file'
+        ? binding.job?.(request, holding)
+        : binding.shell?.(request, holding);
+    if (!job) return invalidModel();
+    const jobId = job.offer(
+      run.who,
+      run.requirementId,
+      run.sessionId,
+      step.contextVersion,
+      bodyHash(input),
+      expiresAt,
+      () => !!current(),
+    );
+    step.writeToolJob = job;
+    step.writeToolUsed = true;
+    return { digest: cap.bodyHash, expiresAt, jobId };
   }
 }

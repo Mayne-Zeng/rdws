@@ -19,10 +19,15 @@ import type {
   FixtureToolArm,
   FixtureToolAssembly,
 } from './modules/native-fixture-tool-job.ts';
-import type {
-  ReadToolArm,
-  ReadToolAssembly,
+import {
+  armedSizes,
+  armRequest,
+  type ReadToolArm,
+  type ReadToolAssembly,
+  type WriteToolArm,
+  type WriteToolAssembly,
 } from './modules/native-projects.ts';
+import { createWriteCommands } from './modules/write-tool-commands.ts';
 import {
   createOwnedWriteHandoff,
   validateWriteHandoffDatabase,
@@ -59,6 +64,10 @@ export function buildApp(options: {
       repositoryId: string;
       readStreamMinSize?: number;
     };
+    // §11.20.27 A segment: the file write tools (edit, write) of the
+    // writable session, bound to the repository the armed run writes; B
+    // segment: shellGit arms the Shell and Git tools beside them.
+    writeTools?: { repositoryId: string; shellGit?: true };
   };
 }) {
   const modelEgress = resolveNativeModelEgress(
@@ -72,18 +81,37 @@ export function buildApp(options: {
   const isolatedWrite = options.isolatedWrite;
   const fixtureTool = isolatedWrite?.fixtureTool === true;
   const readTool = isolatedWrite?.readTool;
+  const writeTools = isolatedWrite?.writeTools;
   if (
     isolatedWrite &&
     (process.env.RDWS_MODE !== 'test' ||
       process.platform !== 'darwin' ||
       !ticket ||
-      ((isolatedWrite.supervisedExecution || isolatedWrite.readSnapshots) &&
-        fixtureTool) ||
-      modelEgress !== (fixtureTool || readTool ? 'mediated' : 'paused') ||
+      // §11.20.22 banned co-assembling the supervised protocol with mediated
+      // Native tools for its round; §11.20.27 A segment lifts that for the
+      // supervised execution (every write tool execution runs supervised).
+      // The constant fixture tool still never joins the read snapshots.
+      (isolatedWrite.readSnapshots && fixtureTool) ||
+      modelEgress !==
+        (fixtureTool || readTool || writeTools ? 'mediated' : 'paused') ||
       options.nativeHost ||
       !isAbsolute(isolatedWrite.gitPath))
   )
     throw new Error('Isolated write handoff requires a managed macOS test BFF');
+  // §11.20.27 hop 2: the write tools are armed only in the supervised
+  // assembly — read snapshots and supervised execution on, no constant
+  // fixture tool, the loopback page carrier of this run (L4), fleet
+  // commands, and a repository the armed run is bound to.
+  if (
+    writeTools &&
+    (isolatedWrite?.supervisedExecution !== true ||
+      isolatedWrite.readSnapshots !== true ||
+      fixtureTool ||
+      !isolatedWrite.fleetCommands ||
+      !readTool ||
+      !writeTools.repositoryId)
+  )
+    throw new Error('Isolated write tools require the supervised assembly');
   // L4 assembly: the page carrier must be this loopback HTTPS endpoint;
   // anything else is refused before any connection is made.
   if (
@@ -200,7 +228,18 @@ export function buildApp(options: {
   let ownedWrite: ReturnType<typeof createOwnedWriteHandoff> | undefined;
   const fixture: FixtureToolAssembly | undefined = fixtureTool ? {} : undefined;
   const read: ReadToolAssembly | undefined = readTool
-    ? { readStreamMinSize: readTool.readStreamMinSize }
+    ? {
+        readStreamMinSize: readTool.readStreamMinSize,
+        arms: new Map(),
+        offered: new Map(),
+      }
+    : undefined;
+  const write: WriteToolAssembly | undefined = writeTools
+    ? {
+        arms: new Map(),
+        offered: new Map(),
+        ...(writeTools.shellGit && { shellGit: true }),
+      }
     : undefined;
   let workbench: Awaited<ReturnType<typeof registerWorkbench>> | undefined;
   const auth = createAuth(database.db, {
@@ -294,19 +333,53 @@ export function buildApp(options: {
         if (
           !ownedWrite ||
           closing ||
-          read.arm ||
+          read.arms?.has(input.requestId) ||
           input.scope.projectId !== policy!.projectId ||
           !input.requestId ||
           input.requestId.length > 128
         )
           throw new Error('Isolated read probe cannot be armed');
-        read.arm = {
+        // §11.20.27 B-1: one entry per armed request key, inserted by the
+        // same bounded insert as the offered tables (oldest evicted first).
+        read.arms ??= new Map();
+        armRequest(read.arms, input.requestId, {
           ...structuredClone(input),
           repositoryId: readTool!.repositoryId,
           broker: ownedWrite,
-        };
+        });
       },
     );
+  }
+  if (write) {
+    // §11.20.27 hop 2: one armed Prompt request of the writable session.
+    // The write generation itself is read from the Broker when the Prompt
+    // is forwarded, never supplied by the caller.
+    app.decorate(
+      'armIsolatedWriteTools',
+      (input: Omit<WriteToolArm, 'broker'>) => {
+        if (
+          !ownedWrite ||
+          closing ||
+          write.arms?.has(input.requestId) ||
+          input.scope.projectId !== policy!.projectId ||
+          input.repositoryId !== writeTools!.repositoryId ||
+          !input.requestId ||
+          input.requestId.length > 128
+        )
+          throw new Error('Isolated write tools cannot be armed');
+        write.arms ??= new Map();
+        armRequest(write.arms, input.requestId, {
+          ...structuredClone(input),
+          broker: ownedWrite,
+        });
+      },
+    );
+    // Live sizes of the arming tables and the job registry, for the
+    // evidence that they stay bounded across many runs.
+    app.decorate('isolatedWriteToolStats', () => ({
+      ...armedSizes(read!, write),
+      ...(write.stats?.() ?? {}),
+    }));
   }
   app.addHook('onReady', async () => {
     try {
@@ -348,6 +421,23 @@ export function buildApp(options: {
           readTool?.window,
         );
         ownedWrite.startStopRecovery();
+        // §11.20.27 W6: the command set is registered when a write
+        // generation becomes the confirmed holding (acquire, takeover).
+        if (write && ownedWrite) {
+          write.commands = createWriteCommands(ownedWrite);
+          // The repository of every armed request (they share one in this
+          // assembly); a BFF armed later registers at the first offer.
+          ownedWrite.watchGrants((scope, grant) => {
+            for (const repositoryId of new Set(
+              [...(write.arms?.values() ?? [])].map((arm) => arm.repositoryId),
+            ))
+              void write.commands!.confirm(
+                scope,
+                grant.generation,
+                repositoryId,
+              );
+          });
+        }
       }
     } catch (error) {
       if (managedWork) {
@@ -443,6 +533,7 @@ export function buildApp(options: {
       isolatedWrite?.fleetCommands === true,
       sessionModelPilot,
       read,
+      write,
     );
   });
   app.setErrorHandler((error: FastifyError, _request, reply) => {

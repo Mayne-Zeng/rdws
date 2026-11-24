@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { writeFileSync } from 'node:fs';
 import {
+  chmod,
   link,
   lstat,
   mkdir,
@@ -21,7 +22,11 @@ import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { DemandWorktrees } from '@rdws/orchestrator';
 import { RepositoryMirrors } from '@rdws/syncer/mirror';
 import {
+  editStringLimit,
+  editTargetLimit,
   runMacosWorktree,
+  writeContentLimit,
+  writeExistingLimit,
   type ExecutionRequest,
 } from '../../dsh/execution/macos.ts';
 import { fixtureGit, httpsGitFixture } from '../helpers/https-git.ts';
@@ -753,6 +758,438 @@ describe.runIf(process.platform === 'darwin')(
       } finally {
         await rm(marker, { recursive: true });
       }
+    });
+
+    // §11.20.27 A segment, the T06 side of the Write and Edit loop (W5, R7,
+    // R8, R9 and the T06 half of R20): the receipt channel of the file
+    // worker, judged against the real Seatbelt process and the real bytes.
+    test('§11.20.27 W5 Write and Edit run the two-receipt channel and refuse before any write', async () => {
+      const sha = (text: string) =>
+        createHash('sha256').update(text).digest('hex');
+      const receipts = (result: { stdout: string; stderr: string }) => {
+        expect(result.stderr).toBe('');
+        return result.stdout
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => JSON.parse(line));
+      };
+      const target = join(scope.tree, 'wt-sum.mjs');
+      const temps = async () =>
+        (await readdir(scope.tree)).filter((name) =>
+          name.startsWith('.rdws-write-'),
+        );
+      const first = 'export const sum = (a, b) => a - b;\n';
+      const second =
+        'export const sum = (a, b) => a + b;\nexport const twice = (x) => x + x;\n';
+      // Write creates: no file before, so the first receipt says so and
+      // carries no bytes; the second carries the digest of what landed.
+      const created = await run({
+        tool: 'file',
+        operation: 'write',
+        path: 'wt-sum.mjs',
+        text: first,
+        receipt: true,
+      });
+      expect(created).toMatchObject({
+        status: 'ok',
+        exitCode: 0,
+        stop: 'confirmed',
+      });
+      expect(receipts(created)).toEqual([
+        { kind: 'before', existed: false, size: 0, bytes: '' },
+        {
+          kind: 'after',
+          existed: false,
+          created: true,
+          size: Buffer.byteLength(first),
+          sha256: sha(first),
+        },
+      ]);
+      expect(await readFile(target, 'utf8')).toBe(first);
+      expect(await temps()).toEqual([]);
+      // Write updates: the bytes before the write leave first, base64.
+      const updated = await run({
+        tool: 'file',
+        operation: 'write',
+        path: 'wt-sum.mjs',
+        text: second,
+        receipt: true,
+      });
+      expect(updated).toMatchObject({
+        status: 'ok',
+        exitCode: 0,
+        stop: 'confirmed',
+      });
+      expect(receipts(updated)).toEqual([
+        {
+          kind: 'before',
+          existed: true,
+          size: Buffer.byteLength(first),
+          sha256: sha(first),
+          bytes: Buffer.from(first).toString('base64'),
+        },
+        {
+          kind: 'after',
+          existed: true,
+          created: false,
+          size: Buffer.byteLength(second),
+          sha256: sha(second),
+        },
+      ]);
+      expect(await readFile(target, 'utf8')).toBe(second);
+      // Edit: a unique match, then every match; the file bytes equal the
+      // literal replacement of the bytes before (left to right, not
+      // overlapping), which is what the Host derives to compare.
+      const events: string[] = [];
+      const edited = await run(
+        {
+          tool: 'file',
+          operation: 'edit',
+          path: 'wt-sum.mjs',
+          old_string: 'a + b',
+          new_string: 'Number(a) + Number(b)',
+          replace_all: false,
+        },
+        {
+          // The two receipts are two separate writes of the worker.
+          onOutput: ({ chunk }) => void events.push(chunk.toString()),
+        },
+      );
+      const afterUnique = second.replace('a + b', 'Number(a) + Number(b)');
+      expect(edited).toMatchObject({
+        status: 'ok',
+        exitCode: 0,
+        stop: 'confirmed',
+      });
+      expect(receipts(edited)).toEqual([
+        {
+          kind: 'before',
+          existed: true,
+          size: Buffer.byteLength(second),
+          sha256: sha(second),
+          bytes: Buffer.from(second).toString('base64'),
+        },
+        {
+          kind: 'after',
+          existed: true,
+          created: false,
+          size: Buffer.byteLength(afterUnique),
+          sha256: sha(afterUnique),
+          replacements: 1,
+        },
+      ]);
+      expect(events).toHaveLength(2);
+      expect(JSON.parse(events[0]!)).toMatchObject({ kind: 'before' });
+      expect(JSON.parse(events[1]!)).toMatchObject({ kind: 'after' });
+      expect(await readFile(target, 'utf8')).toBe(afterUnique);
+      const all = await run({
+        tool: 'file',
+        operation: 'edit',
+        path: 'wt-sum.mjs',
+        old_string: 'x',
+        new_string: 'y',
+        replace_all: true,
+      });
+      const afterAll = afterUnique.split('x').join('y');
+      // Every occurrence, counted from left to right without overlapping.
+      const occurrences = afterUnique.split('x').length - 1;
+      expect(occurrences).toBeGreaterThan(1);
+      expect(receipts(all)[1]).toMatchObject({
+        kind: 'after',
+        size: Buffer.byteLength(afterAll),
+        sha256: sha(afterAll),
+        replacements: occurrences,
+      });
+      expect(await readFile(target, 'utf8')).toBe(afterAll);
+      // The staged file never survives and the rename stays in the tree.
+      expect(await temps()).toEqual([]);
+      expect((await lstat(target)).nlink).toBe(1);
+      // R7: no match and an ambiguous match are error results; the first
+      // receipt is not even emitted and the file is unchanged.
+      for (const [edit, code] of [
+        [{ old_string: 'absent', new_string: 'x', replace_all: false }, 5],
+        // "const" is on both lines: two matches without replace_all.
+        [{ old_string: 'const', new_string: 'X', replace_all: false }, 6],
+      ] as const) {
+        const refused = await run({
+          tool: 'file',
+          operation: 'edit',
+          path: 'wt-sum.mjs',
+          ...edit,
+        });
+        expect(refused).toMatchObject({
+          status: 'failed',
+          exitCode: code,
+          stop: 'confirmed',
+        });
+        expect(refused.stdout).toBe('');
+        expect(await readFile(target, 'utf8')).toBe(afterAll);
+      }
+      // R7: a target, a before, or a result over the limit, and a file that
+      // is not UTF-8, are refused before the first receipt: zero write.
+      const big = join(scope.tree, 'wt-big.txt');
+      const fat = 'é'.repeat(editTargetLimit / 2 + 1);
+      await writeFile(big, fat);
+      const overTarget = await run({
+        tool: 'file',
+        operation: 'edit',
+        path: 'wt-big.txt',
+        old_string: 'é',
+        new_string: 'x',
+        replace_all: true,
+      });
+      expect(overTarget).toMatchObject({ status: 'failed', exitCode: 3 });
+      expect(overTarget.stdout).toBe('');
+      expect(await readFile(big, 'utf8')).toBe(fat);
+      await writeFile(big, 'a'.repeat(100));
+      const overResult = await run({
+        tool: 'file',
+        operation: 'edit',
+        path: 'wt-big.txt',
+        old_string: 'a',
+        new_string: 'b'.repeat(editStringLimit),
+        replace_all: true,
+      });
+      expect(overResult).toMatchObject({ status: 'failed', exitCode: 3 });
+      expect(overResult.stdout).toBe('');
+      expect(await readFile(big, 'utf8')).toBe('a'.repeat(100));
+      await writeFile(big, Buffer.from([0xff, 0xfe, 0x61]));
+      const notUtf8 = await run({
+        tool: 'file',
+        operation: 'edit',
+        path: 'wt-big.txt',
+        old_string: 'a',
+        new_string: 'b',
+        replace_all: false,
+      });
+      expect(notUtf8).toMatchObject({ status: 'failed', exitCode: 4 });
+      expect(notUtf8.stdout).toBe('');
+      expect(
+        Buffer.from(await readFile(big)).equals(
+          Buffer.from([0xff, 0xfe, 0x61]),
+        ),
+      ).toBe(true);
+      // R8: Write over an existing file beyond the limit, over content
+      // beyond the limit, and over a protected location: zero write.
+      await writeFile(big, fat);
+      const overExisting = await run({
+        tool: 'file',
+        operation: 'write',
+        path: 'wt-big.txt',
+        text: 'small',
+        receipt: true,
+      });
+      expect(overExisting).toMatchObject({ status: 'failed', exitCode: 3 });
+      expect(overExisting.stdout).toBe('');
+      expect(await readFile(big, 'utf8')).toBe(fat);
+      // An existing file exactly at the limit is still replaced.
+      await writeFile(big, 'e'.repeat(writeExistingLimit));
+      expect(
+        await run({
+          tool: 'file',
+          operation: 'write',
+          path: 'wt-big.txt',
+          text: 'small\n',
+          receipt: true,
+        }),
+      ).toMatchObject({ status: 'ok', exitCode: 0 });
+      expect(await readFile(big, 'utf8')).toBe('small\n');
+      const overContent = await run({
+        tool: 'file',
+        operation: 'write',
+        path: 'wt-new.txt',
+        text: 'c'.repeat(writeContentLimit + 1),
+        receipt: true,
+      });
+      expect(overContent).toMatchObject({
+        status: 'rejected',
+        stop: 'not-started',
+      });
+      await expect(lstat(join(scope.tree, 'wt-new.txt'))).rejects.toMatchObject(
+        { code: 'ENOENT' },
+      );
+      await writeFile(join(scope.tree, '.env'), 'KEEP=1\n');
+      for (const path of [
+        '.env',
+        'cfg/.env.local',
+        'wt-sum.mjs/.credentials.yml',
+      ]) {
+        expect(
+          await run({
+            tool: 'file',
+            operation: 'write',
+            path,
+            text: 'over',
+            receipt: true,
+          }),
+        ).toMatchObject({ status: 'rejected', stop: 'not-started' });
+        expect(
+          await run({
+            tool: 'file',
+            operation: 'edit',
+            path,
+            old_string: 'K',
+            new_string: 'x',
+            replace_all: false,
+          }),
+        ).toMatchObject({ status: 'rejected', stop: 'not-started' });
+      }
+      expect(await readFile(join(scope.tree, '.env'), 'utf8')).toBe('KEEP=1\n');
+      // R7: the admission refuses traversal, absolute paths and .git (case
+      // insensitive) before any process starts; the reserved segment prefix
+      // is refused earlier, by the shared argument shape.
+      for (const path of [
+        '../wt-sum.mjs',
+        '/wt-sum.mjs',
+        '.git/config',
+        'src/.GIT/config',
+        'a\\u0000b',
+      ]) {
+        expect(
+          await run({
+            tool: 'file',
+            operation: 'edit',
+            path,
+            old_string: 'a',
+            new_string: 'b',
+            replace_all: false,
+          }),
+          path,
+        ).toMatchObject({ status: 'rejected', stop: 'not-started' });
+      }
+      // W5 and the T06 half of R20: the first receipt leaves before the
+      // rename. With the directory made unwritable the staging file cannot
+      // even be created, so exactly the first receipt is out, the result is
+      // a failure without the second receipt, and the file is unchanged —
+      // the Host side treats a missing after receipt as unknown, never as
+      // success.
+      await chmod(scope.tree, 0o500);
+      let lost: Awaited<ReturnType<typeof run>>;
+      try {
+        lost = await run({
+          tool: 'file',
+          operation: 'write',
+          path: 'wt-sum.mjs',
+          text: 'lost\n',
+          receipt: true,
+        });
+      } finally {
+        await chmod(scope.tree, 0o755);
+      }
+      expect(lost).toMatchObject({ status: 'failed', stop: 'confirmed' });
+      expect(lost.stdout.trim().split('\n')).toHaveLength(1);
+      expect(JSON.parse(lost.stdout.trim())).toMatchObject({
+        kind: 'before',
+        existed: true,
+        sha256: sha(afterAll),
+      });
+      expect(await readFile(target, 'utf8')).toBe(afterAll);
+      expect(await temps()).toEqual([]);
+      // R9: a link that exists before the run refuses the start.
+      await symlink('wt-sum.mjs', join(scope.tree, 'wt-link'));
+      try {
+        expect(
+          await run({
+            tool: 'file',
+            operation: 'edit',
+            path: 'wt-sum.mjs',
+            old_string: 'y',
+            new_string: 'z',
+            replace_all: true,
+          }),
+        ).toMatchObject({ status: 'rejected', stop: 'not-started' });
+        expect(await readFile(target, 'utf8')).toBe(afterAll);
+      } finally {
+        await unlink(join(scope.tree, 'wt-link'));
+      }
+      await expect(lstat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    // §11.20.27 B segment, W19 / R16 / R5: the Shell profile refuses the
+    // protected locations that exist in the tree, by literal rules for
+    // reading and writing; the rest of the process boundary (no fork, no
+    // network, no writes to .git, no reads of the account home) is the
+    // standing Seatbelt skeleton.
+    test('§11.20.27 W19 the Shell profile refuses the protected locations of the tree by literal rules', async () => {
+      const canary = 'w19-canary-5c1f';
+      const env = join(scope.tree, '.env');
+      await writeFile(env, 'SECRET=' + canary + '\n');
+      await mkdir(join(scope.tree, 'secrets'), { recursive: true });
+      const pem = join(scope.tree, 'secrets', 'server.pem');
+      await writeFile(
+        pem,
+        '-----BEGIN RSA PRIVATE KEY-----\n' +
+          canary +
+          '\n-----END RSA PRIVATE KEY-----\n',
+      );
+      await writeFile(
+        join(scope.tree, 'wt-protected.test.mjs'),
+        `
+        import assert from 'node:assert/strict';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { test } from 'node:test';
+const denied = (name, action) => {
+  try {
+    action();
+    console.log(name + '-allowed');
+  } catch (error) {
+    console.log(name + '-denied:' + error.code);
+  }
+};
+test('protected locations are refused', () => {
+  denied('env-read', () => readFileSync('.env', 'utf8'));
+  denied('env-write', () => writeFileSync('.env', 'over'));
+  denied('pem-read', () => readFileSync('secrets/server.pem', 'utf8'));
+  denied('pem-write', () => writeFileSync('secrets/server.pem', 'over'));
+  denied('git-write', () => writeFileSync('.git/HEAD', 'over'));
+});
+`,
+      );
+      try {
+        const result = await run({
+          tool: 'test',
+          path: 'wt-protected.test.mjs',
+        });
+        expect(result).toMatchObject({
+          status: 'ok',
+          exitCode: 0,
+          stop: 'confirmed',
+        });
+        for (const marker of [
+          'env-read-denied:',
+          'env-write-denied:',
+          'pem-read-denied:',
+          'pem-write-denied:',
+          'git-write-denied:',
+        ])
+          expect(result.stdout, marker).toContain(marker);
+        expect(result.stdout).not.toMatch(/-allowed/);
+        expect(result.stdout).not.toContain(canary);
+        expect(result.stderr).not.toContain(canary);
+        expect(await readFile(env, 'utf8')).toBe('SECRET=' + canary + '\n');
+        expect(await readFile(pem, 'utf8')).toContain(canary);
+        // The same process boundary the file tools never reach: a read
+        // of the account home is refused as well.
+        await writeFile(
+          join(scope.tree, 'wt-protected.test.mjs'),
+          `
+          import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+test('home is refused', () => {
+  try { readFileSync(homedir() + '/.zshrc'); console.log('HOME-READ-ALLOWED'); } catch (error) { console.log('home-read-denied:' + error.code); }
+});
+`,
+        );
+        const home = await run({ tool: 'test', path: 'wt-protected.test.mjs' });
+        expect(home.stdout).toContain('home-read-denied:');
+        expect(home.stdout).not.toContain('HOME-READ-ALLOWED');
+      } finally {
+        await rm(join(scope.tree, 'secrets'), { recursive: true });
+        await unlink(env).catch(() => {});
+        await unlink(join(scope.tree, 'wt-protected.test.mjs')).catch(() => {});
+      }
+      await expect(lstat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
     });
   },
 );

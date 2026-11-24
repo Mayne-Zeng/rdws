@@ -70,11 +70,29 @@ export function truncatedLines(text) {
 
 export function installReadToolProbe(ctx, deps) {
   const { currentStep, liveRun, service, config } = deps;
-  let offered;
+  // §11.20.27 B-1: every armed run of the BFF, by run id, bounded; the
+  // run of a provider call is reached through the signal the locked read
+  // hands to it.
+  const offered = new Map();
+  const maxArmedRuns = 32;
+  const runOf = new WeakMap();
   let definition;
-  let snapshot;
+  // The read state of each armed run: the snapshot its last read produced
+  // and the segment it continued. Keyed by the run object — the one identity
+  // both sides of the continuation share (the paging provider and the
+  // session's tool result) — so two sessions reading in one Host never
+  // register against each other's snapshot. A weak map: the state lives as
+  // long as the run.
+  const readState = new WeakMap();
+  function stateOf(run) {
+    let state = readState.get(run);
+    if (!state) {
+      state = {};
+      readState.set(run, state);
+    }
+    return state;
+  }
   // The registered segment the last read continued, when it was one.
-  let segment;
   const claims = new WeakMap();
   const agents = new WeakMap();
   const calls = new WeakMap();
@@ -91,8 +109,7 @@ export function installReadToolProbe(ctx, deps) {
     executed: 0,
   };
 
-  function scopeBody(extra) {
-    const run = offered;
+  function scopeBody(extra, run) {
     if (!run) throw new Error('RDWS read: no armed run');
     return {
       runId: run.runId,
@@ -118,7 +135,7 @@ export function installReadToolProbe(ctx, deps) {
       signal.throwIfAborted();
       const page = await service(
         'worktree-read',
-        scopeBody({ cursor }),
+        scopeBody({ cursor }, runOf.get(signal)),
         signal,
       );
       if (
@@ -130,10 +147,14 @@ export function installReadToolProbe(ctx, deps) {
       )
         throw new Error('RDWS read: file changed during read');
       snapshotId = page.snapshotId;
-      snapshot = snapshotId;
-      segment = start.path.startsWith(readSegmentPath)
-        ? start.path.slice(readSegmentPath.length)
-        : undefined;
+      const run = runOf.get(signal);
+      if (run) {
+        const state = stateOf(run);
+        state.snapshot = snapshotId;
+        state.segment = start.path.startsWith(readSegmentPath)
+          ? start.path.slice(readSegmentPath.length)
+          : undefined;
+      }
       counts.pages++;
       yield page.text;
       if (typeof page.cursor !== 'string') return;
@@ -150,7 +171,7 @@ export function installReadToolProbe(ctx, deps) {
       counts.stat++;
       const meta = await service(
         'worktree-stat',
-        scopeBody({ path: target.targetKey }),
+        scopeBody({ path: target.targetKey }, runOf.get(signal)),
         signal,
       );
       if (
@@ -227,9 +248,10 @@ export function installReadToolProbe(ctx, deps) {
     agent.ctx.tools.register(definition, {
       when: ({ agent: actual }) =>
         actual === agent &&
-        offered !== undefined &&
-        claims.get(agent)?.run === offered &&
-        liveRun(offered),
+        (() => {
+          const claimed = claims.get(agent)?.run;
+          return !!claimed && offered.has(claimed.runId) && liveRun(claimed);
+        })(),
     });
   }
   ctx.on(
@@ -263,10 +285,15 @@ export function installReadToolProbe(ctx, deps) {
       // sequence; each line the locked read annotated as truncated is
       // reported with the prefix it actually displayed and the parent resolves
       // the byte offset.
+      // The run that claimed this session's current step owns the state.
+      const claimedRun =
+        agents.get(session) && claims.get(agents.get(session))?.run;
+      const state = claimedRun && readState.get(claimedRun);
       if (
         event.type === 'tool/result' &&
         Number.isSafeInteger(event.seq) &&
-        snapshot !== undefined &&
+        state?.snapshot !== undefined &&
+        claimedRun &&
         calls.get(session)?.data.callId === event.data.message?.toolCallId &&
         event.data.message?.isError !== true &&
         Array.isArray(event.data.message?.content) &&
@@ -284,12 +311,15 @@ export function installReadToolProbe(ctx, deps) {
             counts.segmentAttempts++;
             void service(
               'read-segment-register',
-              scopeBody({
-                snapshotId: snapshot,
-                line,
-                prefix,
-                ...(segment && { segment }),
-              }),
+              scopeBody(
+                {
+                  snapshotId: state.snapshot,
+                  line,
+                  prefix,
+                  ...(state.segment && { segment: state.segment }),
+                },
+                claimedRun,
+              ),
             )
               .then(() => {
                 counts.segments++;
@@ -328,9 +358,9 @@ export function installReadToolProbe(ctx, deps) {
       if (
         !step?.bindingId ||
         !claim ||
-        claim.run !== offered ||
+        !offered.has(claim.run.runId) ||
         step.runs.length !== 1 ||
-        step.runs[0] !== offered ||
+        step.runs[0] !== claim.run ||
         claim.turn !== step.body.turn ||
         !call ||
         call.data.callId !== exec.callId ||
@@ -340,7 +370,7 @@ export function installReadToolProbe(ctx, deps) {
         return outcome;
       const body = {
         ...step.body,
-        authSessionId: offered.authSessionId,
+        authSessionId: claim.run.authSessionId,
         modelBindingId: step.bindingId,
         toolName: readToolName,
         toolCallId: exec.callId,
@@ -363,6 +393,7 @@ export function installReadToolProbe(ctx, deps) {
             body,
             expiresAt: permit.expiresAt,
           });
+          runOf.set(exec.signal, claim.run);
         }
       } catch {
         permits.delete(exec);
@@ -377,12 +408,14 @@ export function installReadToolProbe(ctx, deps) {
     ready,
     offer(run) {
       if (
-        (offered && offered !== run) ||
+        offered.has(run.runId) ||
         typeof run.authSessionId !== 'string' ||
         !run.authSessionId
       )
         return false;
-      offered = run;
+      while (offered.size >= maxArmedRuns)
+        offered.delete(offered.keys().next().value);
+      offered.set(run.runId, run);
       return true;
     },
     claim(agent, run, turn) {
@@ -390,7 +423,8 @@ export function installReadToolProbe(ctx, deps) {
       claims.set(agent, {
         turn,
         run:
-          run === offered && (previous?.turn !== turn || previous?.run === run)
+          offered.has(run.runId) &&
+          (previous?.turn !== turn || previous?.run === run)
             ? run
             : undefined,
       });

@@ -55,6 +55,8 @@ export type SupervisorCommand =
       gitPath: string;
       request: ExecutionRequest;
       binding: ExecutionProofBinding;
+      // §11.20.27 W10: the output budget named by the caller, if any.
+      outputLimitBytes?: number;
     }
   | { kind: 'go'; validBefore: number }
   | { kind: 'stop'; outputFailed?: true };
@@ -406,6 +408,7 @@ export async function runSupervisedMacosWorktree(
     onOutput?: (event: Output) => void;
     arm: (location: ExecutionProofLocation) => Promise<void>;
     authorizeStart: (go: (validBefore: number) => void) => Promise<void>;
+    outputLimitBytes?: number;
   },
 ): Promise<Result> {
   const unknown: Result = {
@@ -479,7 +482,16 @@ export async function runSupervisedMacosWorktree(
   const abort = () => stop();
   options.signal.addEventListener('abort', abort, { once: true });
   try {
-    send({ kind: 'prepare', scope, gitPath, request, binding });
+    send({
+      kind: 'prepare',
+      scope,
+      gitPath,
+      request,
+      binding,
+      ...(options.outputLimitBytes !== undefined && {
+        outputLimitBytes: options.outputLimitBytes,
+      }),
+    });
     if (options.signal.aborted) stop();
     const [code, signal] = await closed;
     await activation;

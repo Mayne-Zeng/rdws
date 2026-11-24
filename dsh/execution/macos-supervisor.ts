@@ -47,10 +47,14 @@ process.on('message', (command: SupervisorCommand) => {
   }
   if (started || command.kind !== 'prepare') return;
   started = true;
-  void execute(command).finally(() => {
-    clearTimeout(cutoff);
-    if (process.connected) process.disconnect!();
-  });
+  void execute(command)
+    .catch(() => {
+      process.exitCode = 1;
+    })
+    .finally(() => {
+      clearTimeout(cutoff);
+      if (process.connected) process.disconnect!();
+    });
 });
 
 async function execute({
@@ -58,6 +62,7 @@ async function execute({
   gitPath,
   request,
   binding,
+  outputLimitBytes,
 }: Extract<SupervisorCommand, { kind: 'prepare' }>) {
   try {
     const observed = await runMacosWorktree(
@@ -67,6 +72,7 @@ async function execute({
       {
         runId: binding.runId,
         signal: control.signal,
+        ...(outputLimitBytes !== undefined && { outputLimitBytes }),
         onOutput: (event) => send({ kind: 'output', event }),
         async authorizeStart(start) {
           const location = await publishArmedProof(scope, binding);
@@ -94,7 +100,14 @@ async function execute({
         ? { ...observed, status: 'failed' as const }
         : observed;
     await publishStopProof(scope, binding, result);
-    send({ kind: 'finished', result });
+    // The result may be large: wait until the IPC write completed before the
+    // channel closes, or the parent would never see the terminal state.
+    await new Promise<void>((resolve) => {
+      if (!process.connected) return resolve();
+      process.send!({ kind: 'finished', result }, undefined, undefined, () =>
+        resolve(),
+      );
+    });
   } catch {
     process.exitCode = 1;
   }

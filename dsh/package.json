@@ -12,7 +12,8 @@
     "./access": "./bridge/access.ts",
     "./sessions": "./bridge/sessions.ts",
     "./wire": "./bridge/wire.ts",
-    "./read-tool-arguments": "./bridge/read-tool-arguments.ts"
+    "./read-tool-arguments": "./bridge/read-tool-arguments.ts",
+    "./write-tool-arguments": "./bridge/write-tool-arguments.ts"
   },
   "dependencies": {
     "@deepseek-ai/dsh-sdk-client": "0.2.2-rc.3",

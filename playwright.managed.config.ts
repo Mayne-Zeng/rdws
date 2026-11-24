@@ -5,6 +5,7 @@ export default defineConfig({
   testMatch: [
     '**/managed-fleet.browser.ts',
     '**/model-pilot-passive.browser.ts',
+    '**/write-tools-journey.browser.ts',
   ],
   workers: 1,
   timeout: 120000,

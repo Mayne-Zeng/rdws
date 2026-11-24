@@ -619,6 +619,14 @@ export async function registerNativeTransport(
               ...(scope.runtime.offerReadTool?.(pendingRun, scope.who) && {
                 readTool: true,
               }),
+              // §11.20.27: only a run of the session that holds the write
+              // generation carries the write tools.
+              ...(scope.runtime.offerWriteTools?.(pendingRun, scope.who) && {
+                writeTools: true,
+                ...(scope.runtime.writeShellGit && {
+                  writeShellGit: true,
+                }),
+              }),
             });
           }
           await confirmAccess(request.headers, original);

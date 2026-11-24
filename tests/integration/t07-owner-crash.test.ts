@@ -136,24 +136,50 @@ async function fingerprint(root: string) {
 }
 
 test.skipIf(process.platform !== 'darwin')(
-  'supervised proof mode rejects the mediated Native tool assembly',
+  '§11.20.27 the supervised protocol is co-assembled with the mediated Native tool; the fixture tool still never joins the read snapshots and the write tools require supervision',
   () => {
+    // §11.20.22 banned the co-assembly for its round; §11.20.27 A segment
+    // lifts it (W15 takes the supervised evidence instead of this guard).
+    // The guards run before any database connection is made.
     vi.stubEnv('RDWS_MODE', 'test');
     vi.stubEnv('RDWS_NATIVE_MODEL_EGRESS', 'mediated');
-    try {
-      expect(() =>
+    const assembly =
+      (isolatedWrite: Parameters<typeof buildApp>[0]['isolatedWrite']) => () =>
         buildApp({
           databaseUrl: 'postgresql://127.0.0.1/rdws_test',
           origin: 'http://127.0.0.1:5317',
           secret: randomBytes(32).toString('hex'),
           authorityTicket: randomBytes(32).toString('hex'),
-          isolatedWrite: {
-            gitPath: '/usr/bin/git',
-            fixtureTool: true,
-            supervisedExecution: true,
-          },
+          isolatedWrite,
+        });
+    try {
+      // Lifted: supervision and the mediated fixture tool assemble; the
+      // next guard the assembly meets is the model policy, not the ban.
+      expect(
+        assembly({
+          gitPath: '/usr/bin/git',
+          fixtureTool: true,
+          supervisedExecution: true,
+        }),
+      ).toThrow('Mediated Native egress policy and mode must be set together');
+      // Still refused: the constant fixture tool with the read snapshots.
+      expect(
+        assembly({
+          gitPath: '/usr/bin/git',
+          fixtureTool: true,
+          supervisedExecution: true,
+          readSnapshots: true,
         }),
       ).toThrow('Isolated write handoff requires a managed macOS test BFF');
+      // The write tools exist only in the supervised assembly.
+      expect(
+        assembly({
+          gitPath: '/usr/bin/git',
+          fleetCommands: true,
+          readSnapshots: true,
+          writeTools: { repositoryId: 'app' },
+        }),
+      ).toThrow('Isolated write tools require the supervised assembly');
     } finally {
       vi.unstubAllEnvs();
     }

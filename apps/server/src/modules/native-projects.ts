@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isRecord } from '@rdws/dsh/access';
 import { schema, type connectDatabase } from '@rdws/db';
 import { and, eq } from 'drizzle-orm';
 import { sessionRpc } from '@rdws/dsh/sessions';
@@ -21,9 +22,22 @@ import type {
 import {
   ContextRuns,
   contextSnapshot,
+  type ReadToolBinding,
   type ReadToolOperation,
   type RunBinding,
+  type WriteToolBinding,
 } from './runtime-context.ts';
+import {
+  NativeWriteToolJob,
+  type WriteFileRequest,
+} from './native-write-tool-job.ts';
+import {
+  NativeShellToolJob,
+  type ShellRequest,
+} from './native-shell-tool-job.ts';
+import type { WriteCommands } from './write-tool-commands.ts';
+import { outputPolicy, type OutputPolicy } from './shell-output-handling.ts';
+import { userInfo } from 'node:os';
 import {
   NativeFixtureToolJob,
   type FixtureToolAssembly,
@@ -56,11 +70,103 @@ export type ReadToolArm = {
   repositoryId: string;
   broker: ReturnType<typeof createOwnedWriteHandoff>;
 };
+// §11.20.27 step 0 (B-1): arming is a table keyed by request id, bounded
+// and first-in first-out, so one BFF carries the several armed runs of the
+// two-developer journey; an entry is accepted only for the run whose key it
+// names.
+export const maxArmedRequests = 32;
 export type ReadToolAssembly = {
-  arm?: ReadToolArm;
+  arms?: Map<string, ReadToolArm>;
   readStreamMinSize?: number;
-  offered?: { run: RunBinding };
+  offered?: Map<string, RunBinding>;
 };
+
+// §11.20.27 write loopback assembly (isolated, opt-in): the armed Prompt
+// requests of the writable sessions, the repository they write and the
+// command set registry of their write generations. shellGit arms the
+// Shell and Git tools beside the file tools.
+export type WriteToolArm = {
+  scope: WriteHandoffScope;
+  requestId: string;
+  repositoryId: string;
+  broker: ReturnType<typeof createOwnedWriteHandoff>;
+};
+export type WriteToolAssembly = {
+  arms?: Map<string, WriteToolArm>;
+  shellGit?: boolean;
+  commands?: WriteCommands;
+  // Live sizes of the runtime's tables, for the evidence that they stay
+  // bounded (filled in by the project runtime).
+  stats?: () => { jobs: number };
+  offered?: Map<
+    string,
+    {
+      run: RunBinding;
+      generation: string;
+      contextVersion: number;
+      // The prefix policy of the output handling, once known.
+      policy?: OutputPolicy;
+      redactions: number;
+    }
+  >;
+};
+// Ownership of a write job. The owner's table holds the job from the
+// moment it is offered to the Host until it settles. An offer the parent
+// refuses (a lease that moved between the permit and the offer) cancels and
+// releases the job at once: it is neither executed nor kept.
+export function ownWriteJob<
+  T extends {
+    offer: (...args: never[]) => string;
+    cancel(): void;
+  },
+>(make: (onSettled: () => void) => T, table: Set<T>): T {
+  const job = make(() => table.delete(job));
+  const offered: (...args: unknown[]) => string = job.offer.bind(job) as never;
+  job.offer = ((...args: unknown[]) => {
+    table.add(job);
+    try {
+      return offered(...args);
+    } catch (error) {
+      // cancel() settles a job that never began, which releases it and
+      // tells the owner; a job already settled is gone already.
+      job.cancel();
+      throw error;
+    }
+  }) as T['offer'];
+  return job;
+}
+
+// Closing the write jobs of a runtime. A job whose stop could not be
+// confirmed is not swallowed: the shutdown fails and the normal hand-over
+// is refused, as for the fixture job (§11.20.9, §11.20.22).
+export async function closeWriteJobs(
+  jobs: Iterable<NativeWriteToolJob | NativeShellToolJob>,
+) {
+  const results = await Promise.allSettled([...jobs].map((job) => job.close()));
+  const failed = results.find((result) => result.status === 'rejected');
+  if (failed && failed.status === 'rejected') throw failed.reason;
+}
+
+// The size of the armed tables of an assembly, for the evidence that they
+// stay bounded across many runs.
+export function armedSizes(read: ReadToolAssembly, write: WriteToolAssembly) {
+  return {
+    readArms: read.arms?.size ?? 0,
+    readOffered: read.offered?.size ?? 0,
+    writeArms: write.arms?.size ?? 0,
+    writeOffered: write.offered?.size ?? 0,
+    registered: write.commands?.size() ?? 0,
+  };
+}
+
+// The bounded insert of the arming tables: one entry per armed request
+// key, the oldest evicted first past the limit.
+export function armRequest<T>(table: Map<string, T>, key: string, value: T) {
+  if (table.has(key)) throw new Error('Isolated tool request already armed');
+  while (table.size >= maxArmedRequests)
+    table.delete(table.keys().next().value!);
+  table.set(key, value);
+}
 
 // The pilot allowlist only converges inside the frozen strategy provider; rows
 // for other providers never change the projection (platform lock stays intact).
@@ -165,6 +271,7 @@ export function createProjectRuntimes(
   sessionModelPilot?: SessionModelPilot,
   pilotTransaction?: CheckedWriteTransaction,
   readTool?: ReadToolAssembly,
+  writeTool?: WriteToolAssembly,
 ) {
   if (sessionModelPilot && !pilotTransaction)
     throw new Error('Session model pilot requires a checked model authority');
@@ -185,6 +292,7 @@ export function createProjectRuntimes(
     if (fixture && policy) native.enableFixtureToolProbe();
     if (readTool && policy)
       native.enableReadToolProbe(readTool.readStreamMinSize);
+    if (writeTool && policy) native.enableWriteToolProbe();
     const runtime: ProjectRuntime = {
       native,
       catalogModel: policy && {
@@ -253,6 +361,7 @@ export function createProjectRuntimes(
             }
           : undefined,
       ),
+      writeShellGit: writeTool?.shellGit === true && !!policy,
       inFlightPrompts: new Set<string>(),
       acceptedPrompts: new Map<string, number>(),
       abandonedRuns: new Set<string>(),
@@ -295,12 +404,14 @@ export function createProjectRuntimes(
         }),
       ...(readTool &&
         policy && {
-          // One armed Prompt request binds the only run the Read probe may
-          // declare for; the run control message then carries readTool.
+          // The armed Prompt request of this run key binds the run the Read
+          // probe may declare for; the run control message then carries
+          // readTool.
           offerReadTool(run: RunBinding, who: Actor) {
-            const arm = readTool.arm;
+            const arm = readTool.arms?.get(run.requestId);
             if (
-              readTool.offered ||
+              !readTool.offered ||
+              readTool.offered.has(run.requestId) ||
               !arm ||
               arm.scope.projectId !== project ||
               arm.scope.requirementId !== run.requirementId ||
@@ -310,20 +421,99 @@ export function createProjectRuntimes(
               arm.scope.who.authSessionId !== who.authSessionId
             )
               return false;
-            readTool.offered = { run };
+            armRequest(readTool.offered, run.requestId, run);
             return true;
           },
         }),
+      ...(writeTool &&
+        policy && {
+          // The run declares the write tools only when the own session
+          // holds the write generation at this moment (hop 1 and 2).
+          offerWriteTools(run: RunBinding, who: Actor) {
+            const arm = writeTool.arms?.get(run.requestId);
+            if (
+              !writeTool.offered ||
+              writeTool.offered.has(run.requestId) ||
+              !arm ||
+              !writeTool.commands ||
+              arm.scope.projectId !== project ||
+              arm.scope.requirementId !== run.requirementId ||
+              arm.scope.sessionId !== run.sessionId ||
+              arm.requestId !== run.requestId ||
+              arm.scope.who.userId !== who.userId ||
+              arm.scope.who.authSessionId !== who.authSessionId
+            )
+              return false;
+            const holding = arm.broker.writeHolding(arm.scope);
+            if (!holding) return false;
+            const entry: {
+              run: RunBinding;
+              generation: string;
+              contextVersion: number;
+              policy?: OutputPolicy;
+              redactions: number;
+            } = {
+              run,
+              generation: holding.generation,
+              contextVersion: holding.contextVersion,
+              redactions: 0,
+            };
+            armRequest(writeTool.offered, run.requestId, entry);
+            // The prefixes of this execution for the output handling and
+            // the FD4 backstop, resolved once per armed request.
+            void arm.broker
+              .executionLocations(arm.scope, arm.repositoryId)
+              .then((locations) => {
+                entry.policy = outputPolicy({
+                  tree: locations.tree,
+                  runtimeRoot: locations.runtimeRoot,
+                  home: userInfo().homedir,
+                  node: process.execPath,
+                });
+              })
+              .catch(() => {});
+            // Registered when the generation became the holding; a BFF
+            // armed afterwards registers it now, before the first permit.
+            void writeTool.commands.confirm(
+              structuredClone(arm.scope),
+              holding.generation,
+              arm.repositoryId,
+            );
+            return true;
+          },
+          closeWrite: () => closeWriteJobs(writeJobs),
+        }),
     };
+    const writeJobs = new Set<NativeWriteToolJob | NativeShellToolJob>();
+    runtime.writeJobCount = () => writeJobs.size;
+    if (writeTool) writeTool.stats = () => ({ jobs: writeJobs.size });
+    function track<T extends NativeWriteToolJob | NativeShellToolJob>(
+      make: (onSettled: () => void) => T,
+    ): T {
+      return ownWriteJob<T>(make, writeJobs as Set<T>);
+    }
+    // The armed entry of a run, by request id then run id: an FD3 request
+    // names its run, and only the entry bound to that very run answers.
+    function armedRun<T>(
+      table: Map<string, T> | undefined,
+      runOf: (entry: T) => RunBinding,
+      runId: unknown,
+    ) {
+      if (!table || typeof runId !== 'string') return undefined;
+      for (const [requestId, entry] of table)
+        if (runOf(entry).runId === runId)
+          return { requestId, entry, run: runOf(entry) };
+      return undefined;
+    }
     // The Read binding handed to every FD3 request of the armed run (hop 3
     // and hop 4): resolved per request, the scope re-derived by ContextRuns
     // from the signed binding, never taken from the request body.
-    const readBinding = () => {
-      const arm = readTool?.arm;
-      const armed = readTool?.offered?.run;
+    const readBindingFor = (runId: unknown): ReadToolBinding | undefined => {
+      const armed = armedRun(readTool?.offered, (run) => run, runId);
+      const arm = armed && readTool?.arms?.get(armed.requestId);
       if (!readTool || !arm || !armed) return undefined;
       return {
-        run: armed,
+        run: armed.run,
         projectId: project,
         segment: (_input: Record<string, unknown>, id: string) =>
           arm.broker.readWorktreeSegmentLive(arm.scope, id),
@@ -384,8 +574,86 @@ export function createProjectRuntimes(
         },
       };
     };
+    // The write binding handed to every FD3 write tool request of the
+    // armed run: the generation is the one read when the run was offered,
+    // re-read from the Broker on every permit and every begin.
+    const writeBindingFor = (runId: unknown): WriteToolBinding | undefined => {
+      const armed = armedRun(writeTool?.offered, ({ run }) => run, runId);
+      const arm = armed && writeTool?.arms?.get(armed.requestId);
+      if (!writeTool || !arm || !armed || !writeTool.commands) return undefined;
+      const entry = armed.entry;
+      const shellGit = writeTool.shellGit === true;
+      return {
+        run: armed.run,
+        projectId: project,
+        repositoryId: arm.repositoryId,
+        tools: shellGit ? ['edit', 'write', 'bash', 'git'] : ['edit', 'write'],
+        holding: () => {
+          const holding = arm.broker.writeHolding(arm.scope);
+          return holding?.generation === entry.generation ? holding : undefined;
+        },
+        assertLease: () =>
+          arm.broker.assertWireLease(
+            arm.scope,
+            entry.generation,
+            entry.contextVersion,
+          ),
+        registered: (command, assertCurrent, signal) =>
+          writeTool
+            .commands!.verify(
+              arm.scope,
+              entry.generation,
+              arm.repositoryId,
+              assertCurrent,
+              signal,
+            )
+            .then((found) => found?.command === command),
+        registeredCommand: (command: string) =>
+          writeTool.commands!.registered(entry.generation)?.command === command,
+        redaction: () => entry.policy,
+        countRedaction: () => {
+          entry.redactions++;
+        },
+        redactionCount: () => entry.redactions,
+        job: (
+          request: WriteFileRequest,
+          generation: { generation: string; contextVersion: number },
+        ) =>
+          track(
+            (onSettled) =>
+              new NativeWriteToolJob({
+                scope: arm.scope,
+                grant: generation,
+                broker: arm.broker,
+                repositoryId: arm.repositoryId,
+                request,
+                hostSignal: native.signal,
+                onSettled,
+              }),
+          ),
+        ...(shellGit && {
+          shell: (
+            request: ShellRequest,
+            generation: { generation: string; contextVersion: number },
+          ) =>
+            track(
+              (onSettled) =>
+                new NativeShellToolJob({
+                  scope: arm.scope,
+                  grant: generation,
+                  broker: arm.broker,
+                  repositoryId: arm.repositoryId,
+                  request,
+                  hostSignal: native.signal,
+                  onSettled,
+                }),
+            ),
+        }),
+      };
+    };
     native.configureContext((input, token, reply) => {
       if (closing) businessError(403, '原生项目正在停止');
+      const runId = isRecord(input) ? input.runId : undefined;
       return runtime.runs.handle(
         input,
         token,
@@ -394,7 +662,8 @@ export function createProjectRuntimes(
         },
         offered?.run,
         offered?.job,
-        readBinding(),
+        readBindingFor(runId),
+        writeBindingFor(runId),
       );
     });
     live.set(project, runtime);
@@ -442,6 +711,7 @@ export function createProjectRuntimes(
               model,
               proof?.projection,
               runtime.runs.readWire(request),
+              runtime.runs.writeWire(request),
             );
             if (normalized && proof)
               projections.set(request, {
@@ -513,14 +783,17 @@ export function createProjectRuntimes(
       closing = true;
       await Promise.allSettled([...pending.values()]);
       const results = await Promise.allSettled(
-        [...live.values()].map(async ({ native, runs, closeFixture }) => {
-          runs.clear();
-          try {
-            await closeFixture?.();
-          } finally {
-            await native.close();
-          }
-        }),
+        [...live.values()].map(
+          async ({ native, runs, closeFixture, closeWrite }) => {
+            runs.clear();
+            try {
+              await closeFixture?.();
+              await closeWrite?.();
+            } finally {
+              await native.close();
+            }
+          },
+        ),
       );
       await firstWrites?.drain();
       if (results.some((result) => result.status === 'rejected'))
@@ -554,4 +827,10 @@ export interface ProjectRuntime {
   offerFixtureTool?(run: RunBinding, who: Actor): boolean;
   closeFixture?(): Promise<void>;
   offerReadTool?(run: RunBinding, who: Actor): boolean;
+  offerWriteTools?(run: RunBinding, who: Actor): boolean;
+  // Whether the armed write tools of this runtime include Shell and Git.
+  writeShellGit?: boolean;
+  // Write jobs still owned (not yet settled); for the evidence.
+  writeJobCount?(): number;
+  closeWrite?(): Promise<void>;
 }

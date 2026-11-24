@@ -191,6 +191,22 @@ export class NativeWebHost {
     this.readStreamMinSize = readStreamMinSize;
   }
   private readStreamMinSize = 16 * 1024;
+  private writeToolProbe = false;
+  enableWriteToolProbe() {
+    if (
+      process.env.RDWS_MODE !== 'test' ||
+      this.modelEgress !== 'mediated' ||
+      this.modelTransport?.sessionModelPilot ||
+      !this.readToolProbe ||
+      this.starting ||
+      this.process ||
+      this.closing
+    )
+      throw new Error(
+        'Write tools require a fresh mediated test Host with the Read probe',
+      );
+    this.writeToolProbe = true;
+  }
   private contextHandler?: ContextHandler;
   configureContext(handle: ContextHandler) {
     this.contextHandler = handle;
@@ -531,6 +547,7 @@ export class NativeWebHost {
                   readToolProbe: true,
                   readStreamMinSize: this.readStreamMinSize,
                 }),
+                ...(this.writeToolProbe && { writeToolProbe: true }),
                 ...(this.modelTransport
                   ? {
                       modelRoutes: Object.fromEntries(

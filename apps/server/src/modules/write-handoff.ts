@@ -7,7 +7,11 @@ import {
   schema,
   connectDatabase,
 } from '@rdws/db';
-import { runMacosWorktree, type ExecutionRequest } from '@rdws/dsh/execution';
+import {
+  maxOutputBudgetBytes,
+  runMacosWorktree,
+  type ExecutionRequest,
+} from '@rdws/dsh/execution';
 import {
   readSupervisedStop,
   runSupervisedMacosWorktree,
@@ -53,6 +57,8 @@ type Invocation = {
   commandId: string;
   repositoryId: string;
   request: ExecutionRequest;
+  // §11.20.27 W10: the bounded output budget of a write tool Shell call.
+  outputLimitBytes?: number;
 };
 type RunResult = Awaited<ReturnType<typeof runMacosWorktree>>;
 type ExecutionProof = {
@@ -637,6 +643,41 @@ export function createOwnedWriteHandoff(
     );
   }
 
+  // §11.20.27 write binding: listeners told when a write generation of a
+  // scope becomes the confirmed holding (acquire and takeover alike), which
+  // is when the command set of that generation is registered.
+  const grantListeners = new Set<(scope: Scope, grant: Grant) => void>();
+  function announceGrant(scope: Scope, grant: Grant) {
+    for (const listener of grantListeners)
+      Promise.resolve()
+        .then(() => listener(structuredClone(scope), { ...grant }))
+        .catch(() => {});
+  }
+
+  // The confirmed holding of this very session, when it is still usable
+  // (live login, no fence, not stopping, not expired); undefined otherwise.
+  function currentHolding(scope: Scope) {
+    const tracked = holdings.get(scope.requirementId);
+    if (
+      !tracked?.confirmed ||
+      tracked.scope.projectId !== scope.projectId ||
+      tracked.scope.sessionId !== scope.sessionId ||
+      tracked.scope.who.userId !== scope.who.userId ||
+      tracked.scope.who.authSessionId !== scope.who.authSessionId
+    )
+      return undefined;
+    try {
+      allowed(tracked.grant.expiresAt, scope);
+    } catch {
+      return undefined;
+    }
+    return {
+      generation: tracked.grant.generation,
+      contextVersion: tracked.grant.contextVersion,
+      expiresAt: tracked.grant.expiresAt,
+    };
+  }
+
   function confirmedHolding(scope: Scope, generation: string) {
     const tracked = holdings.get(scope.requirementId);
     if (
@@ -921,6 +962,7 @@ export function createOwnedWriteHandoff(
     allowed(expiresAt, scope);
     assertCurrent();
     tracked.confirmed = true;
+    announceGrant(scope, { generation, expiresAt, contextVersion });
     return {
       generation,
       expiresAt,
@@ -1310,9 +1352,10 @@ export function createOwnedWriteHandoff(
           !loginClosed(scope.who.authSessionId) &&
           proposed.expiresAt > Date.now() &&
           tracked?.grant.generation === proposed.generation
-        )
+        ) {
           tracked.confirmed = true;
-        else await drain(scope.requirementId, proposed.generation);
+          announceGrant(tracked.scope, tracked.grant);
+        } else await drain(scope.requirementId, proposed.generation);
       } else forget(scope.requirementId, proposed.generation);
       request.proposed = undefined;
     }
@@ -2008,6 +2051,13 @@ export function createOwnedWriteHandoff(
     let candidate:
       | { runId: string; receipt: ReceiptValue; proof?: ExecutionProof }
       | undefined;
+    if (
+      input.outputLimitBytes !== undefined &&
+      (!Number.isSafeInteger(input.outputLimitBytes) ||
+        input.outputLimitBytes < 1 ||
+        input.outputLimitBytes > maxOutputBudgetBytes)
+    )
+      businessError(403, '输出预算不正确');
     const reservation = await transaction(async (tx, deadline) => {
       const snapshot = await context(tx, scope);
       const row = await lockedLease(tx, scope.requirementId);
@@ -2200,6 +2250,9 @@ export function createOwnedWriteHandoff(
             signal,
             onOutput,
             authorizeStart,
+            ...(input.outputLimitBytes !== undefined && {
+              outputLimitBytes: input.outputLimitBytes,
+            }),
             async arm(location) {
               await transaction(async (tx, deadline) => {
                 const { validBefore } = await liveRun(tx, deadline);
@@ -2221,6 +2274,9 @@ export function createOwnedWriteHandoff(
           signal,
           onOutput,
           authorizeStart,
+          ...(input.outputLimitBytes !== undefined && {
+            outputLimitBytes: input.outputLimitBytes,
+          }),
         });
     const done = running
       .then(
@@ -2673,6 +2729,70 @@ export function createOwnedWriteHandoff(
     // §11.20.26: a registered long-line segment of this very scope.
     readWorktreeSegmentLive: (scope: Scope, segment: string) =>
       !!reads && reads.registered(readScope(scope), segment),
+    // §11.20.27 W18: the tree and runtime root of one repository of the
+    // requirement, for the prefix rewriting of an output.
+    executionLocations: (scope: Scope, repositoryId: string) =>
+      admit(async () => {
+        const [plan] = await db
+          .select()
+          .from(schema.requirementWorktreePlan)
+          .where(
+            eq(
+              schema.requirementWorktreePlan.requirementId,
+              scope.requirementId,
+            ),
+          );
+        if (
+          !plan?.repositories.some(
+            ({ repositoryId: id }) => id === repositoryId,
+          )
+        )
+          businessError(403, '仓库不在需求工作树范围内');
+        const execution = await worktrees.executionScope(
+          scope.projectId,
+          scope.requirementId,
+          plan.repositories,
+          repositoryId,
+        );
+        return { tree: execution.tree, runtimeRoot: execution.runtimeRoot };
+      }),
+    // §11.20.27 W10: the continuation snapshot of a Shell output.
+    registerOutputSnapshot: (
+      scope: Scope,
+      repositoryId: string,
+      bytes: Buffer,
+      from: number,
+      assertCurrent = () => {},
+    ) =>
+      admit(() => {
+        if (!reads) businessError(503, '当前读取暂不可用');
+        return reads.register(
+          readScope(scope),
+          repositoryId,
+          bytes,
+          from,
+          assertCurrent,
+        );
+      }),
+    // §11.20.27: the parent's own managed whole-file read, without pages or
+    // window egress (the command set of a write generation).
+    readWorktreeBytes: (
+      scope: Scope,
+      request: { repositoryId: string; path: string },
+      assertCurrent = () => {},
+      signal?: AbortSignal,
+      live?: () => boolean,
+    ) =>
+      admit(() => {
+        if (!reads) businessError(503, '当前读取暂不可用');
+        return reads.bytes(
+          readScope(scope),
+          structuredClone(request),
+          assertCurrent,
+          signal,
+          live,
+        );
+      }),
     confirmCommandScope: (scope: Scope, assertCurrent: () => void) =>
       admit(() =>
         readForCommand(
@@ -2698,6 +2818,14 @@ export function createOwnedWriteHandoff(
       if (!tracked || tracked.grant.contextVersion !== contextVersion)
         businessError(409, '当前会话没有可用的写入资格');
       allowed(tracked.grant.expiresAt, scope);
+    },
+    // §11.20.27: the confirmed write generation of this very session.
+    writeHolding: (scope: Scope) => currentHolding(structuredClone(scope)),
+    watchGrants(listener: (scope: Scope, grant: Grant) => void) {
+      grantListeners.add(listener);
+      return () => {
+        grantListeners.delete(listener);
+      };
     },
     acquire: (scope: Scope, commandId: string, assertCurrent = () => {}) =>
       admit(() => acquire(structuredClone(scope), commandId, assertCurrent)),

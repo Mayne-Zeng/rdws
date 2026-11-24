@@ -21,6 +21,7 @@ import {
 import { cancelTitleOrigins, rememberTitleOrigin } from './title-binding.mjs';
 import { installFixtureToolProbe } from './tool-probe.mjs';
 import { installReadToolProbe } from './read-probe.mjs';
+import { installWriteToolProbe } from './write-probe.mjs';
 import { installSessionModelPilot } from './session-model-pilot.mjs';
 import { intakeImageMatches } from './image-intake.mjs';
 
@@ -191,6 +192,24 @@ export function installContext(
           config: { readStreamMinSize: config.readStreamMinSize ?? 16 * 1024 },
         })
       : undefined;
+  // §11.20.27 Write probe: opt-in by the isolated assembly that also armed
+  // the Read probe (a writable session always has Read).
+  const writeProbe =
+    config.writeToolProbe === true && config.modelRoutes && readProbe
+      ? installWriteToolProbe(ctx, {
+          currentStep: (agent) => {
+            const record = modelSteps.get(String(agent.session.id));
+            return record?.agent === agent && currentModelStep(record)
+              ? record
+              : undefined;
+          },
+          liveRun: (run) =>
+            authorized.get(lookup(run)) === run && run.expiresAt > Date.now(),
+          service,
+          config: { readStreamMinSize: config.readStreamMinSize ?? 16 * 1024 },
+          after: readProbe.ready,
+        })
+      : undefined;
   const inboxInputs = (agent) => [
     ...agent.inbox.nextStep,
     ...agent.inbox.nextTurn,
@@ -337,7 +356,7 @@ export function installContext(
     }
     recovered.clear();
   }
-  route('run', (input) => {
+  route('run', async (input) => {
     for (const [id, r] of authorized)
       if (r.expiresAt <= Date.now()) authorized.delete(id);
     if (
@@ -381,6 +400,12 @@ export function installContext(
       throw new Error('Invalid fixture tool run');
     if (input.readTool === true && !readProbe?.offer(run))
       throw new Error('Invalid read tool run');
+    if (input.writeTools === true) {
+      if (!writeProbe?.offer(run, input.writeShellGit === true))
+        throw new Error('Invalid write tool run');
+      // The parent holds the declared set before the run can be prompted.
+      await writeProbe.reported(run);
+    }
     if (!old) authorized.set(id, run);
     return { authorized: true };
   });
@@ -479,6 +504,11 @@ export function installContext(
           turn,
         );
       readProbe?.claim(
+        agent,
+        source.principal?.kind === 'rdws' ? run : undefined,
+        turn,
+      );
+      writeProbe?.claim(
         agent,
         source.principal?.kind === 'rdws' ? run : undefined,
         turn,
@@ -1163,6 +1193,7 @@ export function installContext(
   return {
     fixtureToolGate: (exec) => toolProbe?.gate(exec),
     readToolGate: (exec) => readProbe?.gate(exec),
+    writeToolGate: (exec) => writeProbe?.gate(exec),
     revoke(authSessionId, requirementId, cutoff) {
       choices?.revoke(authSessionId, requirementId);
       if (config.firstMessageTitle)

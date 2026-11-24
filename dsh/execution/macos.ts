@@ -13,7 +13,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { userInfo } from 'node:os';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 type Scope = {
@@ -25,9 +25,27 @@ type Scope = {
 };
 type ReadScope = Pick<Scope, 'runtimeRoot' | 'tree'>;
 
+// §11.20.27: `receipt` is the write-tool admission of a file write — the
+// worker emits the two receipts (the bytes before the write, then the
+// digest after the rename) and refuses an existing target over
+// writeExistingLimit; `edit` always runs that channel.
 export type ExecutionRequest =
   | { tool: 'file'; operation: 'read'; path: string }
-  | { tool: 'file'; operation: 'write'; path: string; text: string }
+  | {
+      tool: 'file';
+      operation: 'write';
+      path: string;
+      text: string;
+      receipt?: true;
+    }
+  | {
+      tool: 'file';
+      operation: 'edit';
+      path: string;
+      old_string: string;
+      new_string: string;
+      replace_all: boolean;
+    }
   | { tool: 'shell'; script: string }
   | { tool: 'test'; path: string }
   | { tool: 'git'; operation: 'status' | 'diff' | 'head' };
@@ -56,6 +74,10 @@ type Options = {
   signal?: AbortSignal;
   onOutput?: (event: Event) => void;
   timeoutMs?: number;
+  // §11.20.27 W10: the output budget of this one call (stdout and stderr
+  // together). Calls that do not name one keep the 64 KiB default; the
+  // write tool Shell path names the bounded budget of 1 MiB.
+  outputLimitBytes?: number;
   authorizeStart?: (start: () => void) => Promise<void>;
 };
 
@@ -83,7 +105,17 @@ const execBootstrap = String.raw`
   exit 71;
 `;
 const maxBytes = 64 * 1024;
+// §11.20.27 W10: the largest output budget a caller may name.
+export const maxOutputBudgetBytes = 1024 * 1024;
 export const maxSnapshotBytes = 256 * 1024;
+// §11.20.27 limits of the write tools (bytes, UTF-8).
+export const editTargetLimit = 16 * 1024;
+export const editStringLimit = 8 * 1024;
+export const editResultLimit = 64 * 1024;
+export const writeContentLimit = 24 * 1024;
+export const writeExistingLimit = 16 * 1024;
+const byteLength = (value: unknown): value is string =>
+  typeof value === 'string' ? Buffer.byteLength(value) <= maxBytes : false;
 const maxReadDiagnostics = 4 * 1024;
 const stopTimeoutMs = 1500;
 const controls = /[\p{Cc}\p{Cf}]/u;
@@ -133,12 +165,26 @@ function safeRelativePath(path: string) {
 function allowedRequest(request: ExecutionRequest) {
   switch (request.tool) {
     case 'file':
+      if (!safeRelativePath(request.path)) return false;
+      if (request.operation === 'read') return true;
+      if (request.operation === 'edit')
+        return (
+          // The write admission refuses protected locations on the same
+          // list as the read path, before any process is started.
+          !protectedReadPath(request.path) &&
+          byteLength(request.old_string) &&
+          byteLength(request.new_string) &&
+          Buffer.byteLength(request.old_string) <= editStringLimit &&
+          Buffer.byteLength(request.new_string) <= editStringLimit &&
+          request.old_string.length > 0 &&
+          request.old_string !== request.new_string
+        );
+      // write
       return (
-        safeRelativePath(request.path) &&
-        (request.operation === 'read' ||
-          (request.operation === 'write' &&
-            typeof request.text === 'string' &&
-            Buffer.byteLength(request.text) <= maxBytes))
+        byteLength(request.text) &&
+        (request.receipt !== true ||
+          (!protectedReadPath(request.path) &&
+            Buffer.byteLength(request.text) <= writeContentLimit))
       );
     case 'shell':
       return (
@@ -155,8 +201,12 @@ function allowedRequest(request: ExecutionRequest) {
   }
 }
 
+// Walks the whole tree before an execution (every call) and returns the
+// protected locations it found, relative to the root: §11.20.27 W19 turns
+// them into literal deny rules of the Shell profile.
 async function inspectFiles(root: string, signal?: AbortSignal) {
   const directories = [root];
+  const protectedLocations: { path: string; directory: boolean }[] = [];
   let entries = 0;
   while (directories.length) {
     const directory = directories.pop()!;
@@ -186,8 +236,12 @@ async function inspectFiles(root: string, signal?: AbortSignal) {
           throw new Error('Invalid execution file');
         }
       }
+      const relativePath = relative(root, path).split(sep).join('/');
+      if (protectedReadPath(relativePath))
+        protectedLocations.push({ path, directory: entry.isDirectory() });
     }
   }
+  return protectedLocations;
 }
 
 function profile(
@@ -196,6 +250,10 @@ function profile(
   home: string,
   git: boolean,
   readWorker?: string,
+  // §11.20.27 W19: the protected locations found in the tree before the
+  // execution. Each becomes a literal deny rule for reading and writing,
+  // placed after the allow rules (the last matching rule decides).
+  denied: readonly { path: string; directory: boolean }[] = [],
 ) {
   const store = git && scope.store ? [scope.store] : [];
   const paths = [
@@ -254,6 +312,12 @@ function profile(
       (path) => `(allow file-read-metadata (literal ${quoted(path)}))`,
     ),
     `(allow process-exec (literal ${quoted(executable === bash ? bash : perl)}) (literal ${quoted(executable)}))`,
+    ...denied.flatMap(({ path, directory }) => {
+      const target = directory
+        ? `(subpath ${quoted(path)})`
+        : `(literal ${quoted(path)})`;
+      return [`(deny file-read* ${target})`, `(deny file-write* ${target})`];
+    }),
   ].join('\n');
 }
 
@@ -295,8 +359,11 @@ async function program(
         new URL('./file-worker.mjs', import.meta.url),
         'utf8',
       );
+      const receipt = request.operation === 'write' && request.receipt === true;
       return {
         executable: await realpath(process.execPath),
+        // Edit: target of at most 16 KiB, result of at most 64 KiB; a
+        // write with receipts keeps an existing target within 16 KiB.
         args: [
           '--no-addons',
           '--input-type=module',
@@ -305,9 +372,29 @@ async function program(
           '--',
           request.operation,
           request.path,
-          String(maxBytes),
+          String(
+            request.operation === 'edit'
+              ? editTargetLimit
+              : receipt
+                ? writeContentLimit
+                : maxBytes,
+          ),
+          ...(request.operation === 'edit'
+            ? [String(editResultLimit)]
+            : receipt
+              ? ['receipt', String(writeExistingLimit)]
+              : []),
         ],
-        input: request.operation === 'write' ? request.text : undefined,
+        input:
+          request.operation === 'edit'
+            ? JSON.stringify({
+                old_string: request.old_string,
+                new_string: request.new_string,
+                replace_all: request.replace_all,
+              })
+            : request.operation === 'write'
+              ? request.text
+              : undefined,
       };
     }
     case 'shell':
@@ -368,10 +455,16 @@ function launch(
   scope: Pick<Scope, 'tree'>,
   policy: string,
   { executable, args, input }: Awaited<ReturnType<typeof program>>,
-  { signal, onOutput, timeoutMs = 10_000 }: Options,
+  {
+    signal,
+    onOutput,
+    timeoutMs = 10_000,
+    outputLimitBytes = maxBytes,
+  }: Options,
   rawSnapshot = false,
 ): Promise<Result> {
   if (signal?.aborted) return Promise.resolve(result(runId, 'aborted'));
+  const budget = rawSnapshot ? maxBytes : outputLimitBytes;
   let launched: ChildProcess | undefined;
   return new Promise<Result>((resolve) => {
     const launcher =
@@ -488,7 +581,7 @@ function launch(
         const available = rawSnapshot
           ? (stream === 'stdout' ? maxSnapshotBytes : maxReadDiagnostics) -
             captured[stream]
-          : maxBytes - bytes;
+          : budget - bytes;
         const part = chunk.subarray(0, available);
         if (part.length) {
           bytes += part.length;
@@ -638,7 +731,14 @@ export async function runMacosWorktree(
 ): Promise<Result> {
   const runId = options.runId ?? randomUUID();
   if (options.signal?.aborted) return result(runId, 'aborted');
-  if (!allowedRequest(request)) return result(runId, 'rejected');
+  if (
+    !allowedRequest(request) ||
+    (options.outputLimitBytes !== undefined &&
+      (!Number.isSafeInteger(options.outputLimitBytes) ||
+        options.outputLimitBytes < 1 ||
+        options.outputLimitBytes > maxOutputBudgetBytes))
+  )
+    return result(runId, 'rejected');
   if (process.platform !== 'darwin') return result(runId, 'unavailable');
 
   let scope: Scope;
@@ -674,6 +774,7 @@ export async function runMacosWorktree(
   }
 
   async function executeRegistered(): Promise<Result> {
+    let denied: { path: string; directory: boolean }[];
     try {
       await writeFile(
         owner,
@@ -684,7 +785,7 @@ export async function runMacosWorktree(
         },
       );
       try {
-        await inspectFiles(scope.tree, options.signal);
+        denied = await inspectFiles(scope.tree, options.signal);
         await inspectFiles(scope.store, options.signal);
       } catch {
         return result(runId, options.signal?.aborted ? 'aborted' : 'rejected');
@@ -696,6 +797,8 @@ export async function runMacosWorktree(
         command.executable,
         home,
         request.tool === 'git',
+        undefined,
+        request.tool === 'test' ? denied : [],
       );
       const control = new AbortController();
       const signal = options.signal

@@ -1,5 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readMacosWorktree, maxSnapshotBytes } from '@rdws/dsh/execution';
+import {
+  maxOutputBudgetBytes,
+  maxSnapshotBytes,
+  readMacosWorktree,
+} from '@rdws/dsh/execution';
 import type { DemandRepositories, DemandWorktrees } from '@rdws/orchestrator';
 import { businessError, digestOf } from './business.ts';
 import { readReplyLimit } from '@rdws/dsh/read-tool-arguments';
@@ -459,6 +463,71 @@ export function createWorktreeReads(
     });
   }
 
+  // §11.20.27 B-4: the parent's own managed read of one whole file — the
+  // command set of a write generation reads package.json with it. Same
+  // verified read-only worker and access checks as stat; no page, no
+  // cursor and no window egress, the bytes go to the parent only and the
+  // snapshot is not retained.
+  async function bytes(
+    scope: Scope,
+    request: { repositoryId: string; path: string },
+    assertCurrent: () => void = () => {},
+    signal?: AbortSignal,
+    liveness?: () => boolean,
+  ) {
+    return withRead(scope, assertCurrent, signal, liveness, async (live) => {
+      if (
+        !request ||
+        typeof request !== 'object' ||
+        Array.isArray(request) ||
+        !keys(request, ['repositoryId', 'path']) ||
+        typeof request.repositoryId !== 'string' ||
+        typeof request.path !== 'string' ||
+        request.path.startsWith(readSegmentPrefix)
+      )
+        businessError(400, '读取参数不正确');
+      const snapshot = await load(scope, request, live);
+      return { sha256: snapshot.sha256, bytes: snapshot.bytes };
+    });
+  }
+
+  // §11.20.27 W10: the snapshot of a Shell output after content handling,
+  // bound to the scope of the job that produced it. The identifier the
+  // model reads on is a cursor from the end of the directly given head to
+  // the end, so the first page continues exactly where the head stopped.
+  // Same retention as every snapshot: 60 seconds, the shared byte budget,
+  // earliest first.
+  async function register(
+    scope: Scope,
+    repositoryId: string,
+    bytes: Buffer,
+    from: number,
+    assertCurrent: () => void = () => {},
+  ) {
+    if (
+      !Buffer.isBuffer(bytes) ||
+      bytes.length > maxOutputBudgetBytes ||
+      !Number.isSafeInteger(from) ||
+      from < 1 ||
+      from >= bytes.length
+    )
+      businessError(400, '输出快照不正确');
+    const access = await checkAccess(scope, repositoryId, assertCurrent);
+    const snapshot: Snapshot = {
+      id: randomUUID(),
+      scope,
+      repositoryId,
+      repositoryPlan: digestOf(access.repositories),
+      expiresAt: Math.min(access.validBefore, Date.now() + snapshotLifetime),
+      bytes,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      cursors: new Map(),
+      positions: new Map(),
+    };
+    retain(snapshot);
+    return readSegmentPrefix + issue(snapshot, from, bytes.length);
+  }
+
   // §11.20.26 long-line continuation registration: resolves the displayed
   // prefix against the registered snapshot, then issues a cursor from that
   // byte offset to the line end. The segment shares the snapshot's lifetime
@@ -542,6 +611,8 @@ export function createWorktreeReads(
   return {
     read,
     stat,
+    bytes,
+    register,
     segment,
     registered,
     revoke,

@@ -44,6 +44,10 @@ export type OwnerCommand =
       generation: string;
       commandId: string;
       exitCode?: 7;
+      // §11.20.27 W15: a real model-writable test file instead of the
+      // fixed shell script (the long-running process the kill evidence is
+      // taken on).
+      testPath?: string;
     }
   | {
       kind: 'read';
@@ -467,22 +471,24 @@ async function run() {
           commandId: command.commandId,
           repositoryId: 'app',
           generation: command.generation,
-          request: {
-            tool: 'shell',
-            script: [
-              ...(boot.supervisedExecution
-                ? [
-                    'if printf denied > ../../.rdws-worktree/forbidden-proof-write; then exit 77; fi',
-                  ]
-                : []),
-              "printf '|started' >> sample.txt || exit 1",
-              'printf \'%s\\n\' "$$" > fixture-running || exit 1',
-              ...(boot.outputFailure ? ["printf 'test output\\n'"] : []),
-              'deadline=$((SECONDS + 25))',
-              'while [[ ! -f fixture-stop && $SECONDS -lt $deadline ]]; do :; done',
-              ...(command.exitCode === 7 ? ['exit 7'] : []),
-            ].join('\n'),
-          },
+          request: command.testPath
+            ? { tool: 'test', path: command.testPath }
+            : {
+                tool: 'shell',
+                script: [
+                  ...(boot.supervisedExecution
+                    ? [
+                        'if printf denied > ../../.rdws-worktree/forbidden-proof-write; then exit 77; fi',
+                      ]
+                    : []),
+                  "printf '|started' >> sample.txt || exit 1",
+                  'printf \'%s\\n\' "$$" > fixture-running || exit 1',
+                  ...(boot.outputFailure ? ["printf 'test output\\n'"] : []),
+                  'deadline=$((SECONDS + 25))',
+                  'while [[ ! -f fixture-stop && $SECONDS -lt $deadline ]]; do :; done',
+                  ...(command.exitCode === 7 ? ['exit 7'] : []),
+                ].join('\n'),
+              },
         },
         boot.outputFailure
           ? async ({ stream }) => {

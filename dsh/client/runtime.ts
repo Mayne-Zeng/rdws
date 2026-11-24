@@ -71,6 +71,7 @@ export async function readSessionHistory(
       label: string;
       text?: string;
       outcome?: string;
+      time?: number;
     }[];
   }>;
 }

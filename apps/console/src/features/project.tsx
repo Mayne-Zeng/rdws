@@ -597,7 +597,12 @@ export function ProjectWorkspace({
             <span className="scope-label">{scopeLabel}</span>
           </div>
         )}
-        <div className="workspace-scroll">
+        <div
+          className={
+            'workspace-scroll' +
+            (view === 'chat' && showTabs ? ' chat-mode' : '')
+          }
+        >
           {error && !(mobile && smallScreen) && (
             <Alert theme="error" message={error} />
           )}

@@ -104,6 +104,8 @@ export interface SessionHistoryPage {
     label: string;
     text?: string;
     outcome?: string;
+    // Native event time in milliseconds; absent when the record has none.
+    time?: number;
   }[];
 }
 export interface SessionAnchorCursor {

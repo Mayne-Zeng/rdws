@@ -1,11 +1,14 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
-  useRef,
   type Dispatch,
   type FormEvent,
+  type ReactNode,
   type SetStateAction,
 } from 'react';
 import { Alert, Button, Loading } from 'tdesign-react';
@@ -16,6 +19,12 @@ import {
   type SessionBinding,
 } from '../lib/native.ts';
 import { Icon } from '../lib/ui.tsx';
+import { ConversationStream } from './conversation-stream.tsx';
+import {
+  createProjectionCache,
+  projectConversationNodes,
+  type ProjectionCache,
+} from './conversation-nodes.ts';
 import { SessionModelComposer } from './session-model-composer.tsx';
 import { SessionModelStatus } from './session-model.tsx';
 import type { SessionOperationResult } from '@rdws/contracts';
@@ -32,14 +41,6 @@ export type NativeTab = {
   draft: NativeDraft | undefined;
   setDraft: Dispatch<SetStateAction<NativeDraft | undefined>>;
 };
-function text(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((part) => part?.type === 'text')
-    .map((part) => part.text ?? '')
-    .join('');
-}
 function Transcript({
   binding,
   own,
@@ -52,66 +53,42 @@ function Transcript({
     source.subscribe.bind(source),
     source.getSnapshot.bind(source),
   );
-  const rows: { id: string; role: string; body: string; live: boolean }[] = [];
-  const live = new Map<
-    string,
-    { id: string; role: string; body: string; live: boolean }
-  >();
-  for (const entry of snapshot.entries) {
-    const event = entry.event;
-    const data = event.data as unknown as Record<string, unknown>;
-    if (
-      event.type === 'user/message' &&
-      (data.source as { kind?: string } | undefined)?.kind === 'user'
-    ) {
-      const message = data.message as { content?: unknown } | undefined;
-      const body = text(message?.content ?? data.content);
-      if (body)
-        rows.push({ id: 'user-' + event.seq, role: 'user', body, live: false });
-    }
-    if (event.type === 'assistant/message') {
-      const message = data.message as { content?: unknown } | undefined;
-      const body = text(message?.content);
-      if (body)
-        rows.push({
-          id: 'assistant-' + event.seq,
-          role: 'assistant',
-          body,
-          live: false,
-        });
-    }
-    if (
-      entry.type === 'transient' &&
-      entry.event.data.chunk.type === 'text-delta'
-    ) {
-      const key = String(entry.event.data.attemptId);
-      let row = live.get(key);
-      if (!row) {
-        row = { id: key, role: 'assistant', body: '', live: true };
-        live.set(key, row);
-        rows.push(row);
-      }
-      row.body += entry.event.data.chunk.text;
-    }
-  }
+  // Entries keep their objects across publications, so unchanged messages
+  // keep their nodes and skip re-rendering.
+  const cache = useRef<ProjectionCache>(undefined);
+  cache.current ??= createProjectionCache();
+  const nodes = useMemo(
+    () => projectConversationNodes(snapshot.entries, cache.current!),
+    [snapshot.entries],
+  );
+  const list = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  useEffect(() => {
+    const body = list.current?.parentElement;
+    if (!body) return;
+    const track = () => {
+      stick.current =
+        body.scrollHeight - body.scrollTop - body.clientHeight < 48;
+    };
+    body.addEventListener('scroll', track, { passive: true });
+    return () => body.removeEventListener('scroll', track);
+  }, []);
+  // Follow the newest message only while the reader is already at the end.
+  useLayoutEffect(() => {
+    const body = list.current?.parentElement;
+    if (body && stick.current) body.scrollTop = body.scrollHeight;
+  }, [nodes]);
   return (
-    <div className="transcript" aria-live="polite" data-testid="transcript">
-      {rows.length === 0 && (
+    <div
+      className="transcript"
+      aria-live="polite"
+      data-testid="transcript"
+      ref={list}
+    >
+      {nodes.length === 0 && (
         <p className="muted">会话已就绪，可以开始讨论当前需求。</p>
       )}
-      {rows.map((row) => (
-        <div
-          className={'message ' + (row.role === 'user' ? 'from-user' : '')}
-          key={row.id}
-          data-live={row.live ? 'true' : 'false'}
-        >
-          <span>
-            {row.role === 'user' ? (own ? '你' : '用户') : '助手'}
-            {row.live ? ' · 正在生成' : ''}
-          </span>
-          <div>{row.body}</div>
-        </div>
-      ))}
+      <ConversationStream nodes={nodes} own={own} />
     </div>
   );
 }
@@ -125,6 +102,7 @@ function SessionPanel({
   requirementId,
   draft,
   setDraft,
+  actions,
 }: {
   runtime: NativeRuntime;
   id: string;
@@ -135,6 +113,7 @@ function SessionPanel({
   requirementId: string;
   draft: NativeTab['draft'];
   setDraft: NativeTab['setDraft'];
+  actions: ReactNode;
 }) {
   const [binding, setBinding] = useState<SessionBinding>();
   const [error, setError] = useState('');
@@ -271,10 +250,13 @@ function SessionPanel({
   return (
     <div className="conversation" data-testid="conversation">
       <div className="conversation-title">
-        <strong>需求会话</strong>
-        <span className="muted">
-          {own ? '本人会话 · 只读分析' : '他人会话 · 只读查看'}
+        <span>
+          <strong>需求会话</strong>
+          <span className="muted">
+            {own ? '本人会话 · 只读分析' : '他人会话 · 只读查看'}
+          </span>
         </span>
+        {actions}
       </div>
       {error && <Alert theme="error" message={error} />}
       {own && runtime.modelEgressPaused && (
@@ -560,6 +542,28 @@ function ConnectedConversation({
     }
   }
   const selectedSession = sessions.find((session) => session.id === selected);
+  // Session-level actions share the panel's title row instead of their own.
+  const sessionActions = (
+    <div className="session-actions" aria-label="当前会话操作">
+      {selectedSession?.own && (
+        <Button
+          tag="button"
+          variant="outline"
+          onClick={() => void create(selected)}
+          disabled={busy || !!intent}
+        >
+          派生当前会话
+        </Button>
+      )}
+      <Button
+        tag="button"
+        variant="text"
+        onClick={() => setReplay((value) => !value)}
+      >
+        {replay ? '返回会话' : '回放历史'}
+      </Button>
+    </div>
+  );
   return (
     <section className="sessions-region">
       <div className="title-row">
@@ -627,31 +631,13 @@ function ConnectedConversation({
         </nav>
         {runtime && selectedSession ? (
           <div className="conversation">
-            <div className="session-actions" aria-label="当前会话操作">
-              {selectedSession.own && (
-                <Button
-                  tag="button"
-                  variant="outline"
-                  onClick={() => void create(selected)}
-                  disabled={busy || !!intent}
-                >
-                  派生当前会话
-                </Button>
-              )}
-              <Button
-                tag="button"
-                variant="text"
-                onClick={() => setReplay((value) => !value)}
-              >
-                {replay ? '返回会话' : '回放历史'}
-              </Button>
-            </div>
             {replay ? (
               <SessionHistory
                 key={'history-' + selected}
                 requirementId={requirementId}
                 id={selected}
                 observedLoginId={login.sessionId}
+                actions={sessionActions}
               />
             ) : (
               <SessionPanel
@@ -670,6 +656,7 @@ function ConnectedConversation({
                 draft={draft}
                 setDraft={setDraft}
                 own={selectedSession.own}
+                actions={sessionActions}
               />
             )}
           </div>

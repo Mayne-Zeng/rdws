@@ -8,6 +8,9 @@ export interface NativeEvent {
   data: Record<string, unknown>;
   surfaceOp?: unknown;
   sourceEventSeqs?: unknown;
+  // Native event time in milliseconds. The reader stays lenient: fork
+  // boundaries and execution evidence share it, so it is not a validity gate.
+  time?: number;
 }
 export interface NativePage {
   cursor: number;

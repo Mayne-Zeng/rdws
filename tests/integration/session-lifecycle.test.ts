@@ -97,6 +97,9 @@ class Host extends NativeWebHost {
                 event: {
                   seq: 1,
                   type: 'user/message',
+                  // Only this record carries a Native time; the route must
+                  // pass it through and omit the field for the others.
+                  time: 1_700_000_000_000,
                   surfaceOp: 'append',
                   data: {
                     source: { kind: 'user', principal: { secret: 'internal' } },
@@ -1396,6 +1399,11 @@ test('passive replay returns a safe fixed-cut projection without activating Nati
     expect(response.json().events.map((e: { type: string }) => e.type)).toEqual(
       ['turn/start', 'user/message', 'turn/end'],
     );
+    // The Native time passes through so the trace can show it; a record
+    // without one simply leaves the field out.
+    expect(
+      response.json().events.map((e: { time?: number }) => e.time),
+    ).toEqual([undefined, 1_700_000_000_000, undefined]);
     expect(response.body).toContain('<b>history</b>');
     expect(response.body).not.toContain('principal');
     expect(response.body).not.toContain('internal');

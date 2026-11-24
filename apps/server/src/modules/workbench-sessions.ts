@@ -604,6 +604,7 @@ export function registerSessions(
             seq: event.seq,
             type: event.type,
             label,
+            ...(Number.isSafeInteger(event.time) ? { time: event.time } : {}),
             ...(text === undefined ? {} : { text }),
             ...(event.type === 'turn/end'
               ? { outcome: outcomes[String(reason)] ?? '已结束' }

@@ -1,7 +1,25 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Alert, Button } from 'tdesign-react';
 import type { SessionHistoryPage } from '@rdws/contracts';
 import { readSessionHistory } from '../lib/native.ts';
+import { formatClock } from './conversation-nodes.ts';
+
+type EventKind = 'message' | 'tool' | 'turn';
+// A filter is offered only for the kinds present in the loaded range, so no
+// option leads to a guaranteed-empty list.
+const kindLabels: Record<EventKind, string> = {
+  message: '消息',
+  tool: '工具',
+  turn: '轮次',
+};
+const kindOrder: EventKind[] = ['message', 'tool', 'turn'];
+function kindOf(type: string): EventKind {
+  return type === 'user/message' || type === 'assistant/message'
+    ? 'message'
+    : type === 'tool/call' || type === 'tool/result'
+      ? 'tool'
+      : 'turn';
+}
 
 function downloadSummary(id: string, history: SessionHistoryPage) {
   const summary = {
@@ -11,11 +29,12 @@ function downloadSummary(id: string, history: SessionHistoryPage) {
     throughSeq: history.cursor,
     oldestLoadedSeq: history.beforeSeq,
     hasEarlierPages: history.hasMore,
-    events: history.events.map(({ seq, type, label, outcome }) => ({
+    events: history.events.map(({ seq, type, label, outcome, time }) => ({
       seq,
       type,
       label,
       outcome,
+      time,
     })),
   };
   const url = URL.createObjectURL(
@@ -36,17 +55,20 @@ export function SessionHistory({
   observedLoginId,
   mode = 'replay',
   onAccessLost,
+  actions,
 }: {
   requirementId: string;
   id: string;
   observedLoginId: string;
   mode?: 'replay' | 'trace';
   onAccessLost?: () => void;
+  actions?: ReactNode;
 }) {
   const trace = mode === 'trace';
   const [history, setHistory] = useState<SessionHistoryPage>();
   const [busy, setBusy] = useState(false),
-    [error, setError] = useState('');
+    [error, setError] = useState(''),
+    [filter, setFilter] = useState<'all' | EventKind>('all');
   const controller = useRef<AbortController>(undefined),
     pending = useRef(false);
   async function load(current?: SessionHistoryPage) {
@@ -111,26 +133,42 @@ export function SessionHistory({
     const current = new AbortController();
     controller.current = current;
     pending.current = false;
+    setFilter('all');
     void load();
     return () => current.abort();
   }, [requirementId, id, observedLoginId]);
   const shown = trace && (busy || error) ? undefined : history;
+  const kinds = useMemo(
+    () =>
+      kindOrder.filter((kind) =>
+        (shown?.events ?? []).some(({ type }) => kindOf(type) === kind),
+      ),
+    [shown],
+  );
+  const active: 'all' | EventKind =
+    filter === 'all' || kinds.includes(filter) ? filter : 'all';
+  const events = (shown?.events ?? []).filter(
+    ({ type }) => active === 'all' || kindOf(type) === active,
+  );
   return (
     <section
       className="history-panel"
       aria-label={trace ? '会话轨迹事件' : '会话历史回放'}
     >
       <div className="conversation-title">
-        <strong>{trace ? '已读事件' : '历史回放'}</strong>
-        <span className="muted">
-          {shown
-            ? shown.cursor < 0
-              ? '空历史'
-              : `固定至事件 ${shown.cursor}`
-            : error
-              ? '读取失败'
-              : '正在确定回放位置'}
+        <span>
+          <strong>{trace ? '已读事件' : '历史回放'}</strong>
+          <span className="muted">
+            {shown
+              ? shown.cursor < 0
+                ? '空历史'
+                : `固定至事件 ${shown.cursor}`
+              : error
+                ? '读取失败'
+                : '正在确定回放位置'}
+          </span>
         </span>
+        {actions}
       </div>
       <p className="muted">
         原生会话历史可能包含中断后的恢复补齐。回放不会重新执行模型或工具。
@@ -176,8 +214,22 @@ export function SessionHistory({
               </span>
             )}
       </div>
+      {kinds.length > 1 && (
+        <div className="segment" role="group" aria-label="事件类型筛选">
+          {(['all', ...kinds] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={active === option}
+              onClick={() => setFilter(option)}
+            >
+              {option === 'all' ? '全部' : kindLabels[option]}
+            </button>
+          ))}
+        </div>
+      )}
       <ol className="history-events" aria-label="历史事件序列">
-        {shown?.events.map((event) => (
+        {events.map((event) => (
           <li key={event.seq} className="history-event">
             {trace ? (
               <details>
@@ -185,6 +237,9 @@ export function SessionHistory({
                   <span className="muted">#{event.seq}</span>{' '}
                   <strong>{event.label}</strong>
                   {event.outcome && <span> · {event.outcome}</span>}
+                  {event.time !== undefined && (
+                    <time>{formatClock(event.time, true)}</time>
+                  )}
                 </summary>
                 <div className="trace-event-detail">
                   <span className="muted">事件类型 {event.type}</span>
@@ -197,6 +252,9 @@ export function SessionHistory({
                   <span className="muted">#{event.seq}</span>
                   <strong>{event.label}</strong>
                   {event.outcome && <span>{event.outcome}</span>}
+                  {event.time !== undefined && (
+                    <time>{formatClock(event.time, true)}</time>
+                  )}
                 </div>
                 {event.text !== undefined && <p>{event.text}</p>}
               </>
@@ -206,6 +264,9 @@ export function SessionHistory({
       </ol>
       {shown && !shown.events.length && (
         <p className="muted">当前范围暂无可展示事件。</p>
+      )}
+      {shown && shown.events.length > 0 && !events.length && (
+        <p className="muted">当前筛选下没有事件。</p>
       )}
     </section>
   );

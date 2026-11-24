@@ -33,6 +33,15 @@
 - 依据：[工程 §11.20.20](02-directory-and-engineering-design.html#t07-writable-session-acceptance-20261121)、[写工具联合证据](02-directory-and-engineering-design.html#t07-write-tools-joint-evidence-20261124)、[用户走查通过与 A-5 知情接受](00-decision-ledger.html#t07-user-acceptance-20261124)。
 - 确认：2026-11-24 ✓（用户走查通过；A-5 有界性知情接受；T08 解锁）。
 
+## T08 · 变更查看与交付快照（隔离装配已实现，待用户侧走查）
+
+### T08-1 变更查看、受控提交与候选快照（双人旅程，macOS 隔离装配）
+
+- 观察方式：captain 以有头模式运行受管 Chromium 旅程（`pnpm exec playwright test --config playwright.managed.config.ts --headed`），浏览器窗口实时可见。
+- 预期：A 取得写代 → 真实编辑与受控提交（一次成功「已提交」徽标；一次含清单外文件的提交被围栏拒绝且模型可见 `staged-set-mismatch`、分支不动）→ B 接手 → A 旧会话迟来提交零许可零执行 → 需求概览「变更查看」区两候选带「已提交」徽标、**「已交付」不显示**（无合入证据）→ 快照 UPDATE/DELETE 被数据库拒绝（不可变）。
+- 依据：[方案 §11.23](02-directory-and-engineering-design.html#t08-delivery-snapshot-plan-20261124)、[交付证据](02-directory-and-engineering-design.html#t08-delivery-snapshot-evidence-20261124)、[用户解锁 T08](00-decision-ledger.html#t07-user-acceptance-20261124)。
+- 确认：
+
 ## T14 · 首批运营候选（前置：平台审核冻结，见 docs/09-t14-audit-handoff.md）
 
 ### T14-1 插件「验收会话提示」

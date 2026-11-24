@@ -25,6 +25,14 @@
 - 依据：[工程证据](02-directory-and-engineering-design.html#t12-background-evidence-20261120)。
 - 确认：
 
+## T07 · 单写与安全交接（已验收 2026-11-24）
+
+### T07-1 双人红→绿工作台旅程（macOS 隔离装配）
+
+- 范围：设为可写会话、首批 Read／Edit／Write／Shell／本地 Git、回环模型正文、失权拒绝与接手。
+- 依据：[工程 §11.20.20](02-directory-and-engineering-design.html#t07-writable-session-acceptance-20261121)、[写工具联合证据](02-directory-and-engineering-design.html#t07-write-tools-joint-evidence-20261124)、[用户走查通过与 A-5 知情接受](00-decision-ledger.html#t07-user-acceptance-20261124)。
+- 确认：2026-11-24 ✓（用户走查通过；A-5 有界性知情接受；T08 解锁）。
+
 ## T14 · 首批运营候选（前置：平台审核冻结，见 docs/09-t14-audit-handoff.md）
 
 ### T14-1 插件「验收会话提示」

@@ -171,12 +171,13 @@
   - 已实现（隔离装配、opt-in，用户侧走查通过 2026-11-24）：[写工具 A 段交付](02-directory-and-engineering-design.html#t07-write-tools-a-delivery-20261124)与[A、B 两段联合交付证据](02-directory-and-engineering-design.html#t07-write-tools-joint-evidence-20261124)。步骤 0 补遗、解除监督执行与 mediated 工具的合装禁令、Write／Edit 监督回环（许可→Broker→T06 回执通道→FD4 工具投影）、写权绑定与命令集随写代冻结；B 段补齐 Shell（封闭命令集、两层输出处置、1 MiB 预算与续读）与本地 Git 只读回环、同一 BFF 内多运行武装、受管 Chromium 双人红到绿旅程（A 设为可写会话→写首个单测→登记命令跑红→续读→修正→跑绿→Git，B 读最新文件后接手，A 旧会话三类调用被拒）。W1–W19 与 R1–R20 中本节两段列明的判据先红后绿：新测试 5 文件 22 项、T06 回执与保护位置 2 项、受管 Chromium 3 项通过，邻域 6 文件与探针邻域通过，窗口关闭红跑分布不变，静态检查返回 0，运行后无残留；诚实边界见证据段（浏览器旅程的长输出只在回环中证、R10 关停路径与 R18 三个点未分别驱动）。双面交付评审各 round 1 通过后，[提交前修复轮](02-directory-and-engineering-design.html#t07-write-tools-repair-evidence-20261124)落定证据不实两项（旅程按本轮等待、分块重组真实）、失败时放行一项（位置解析失败即拒绝输出）、兜底正对照、资源释放与未确认停稳处理及精度回写；受管 Chromium 3 项两次通过。本项状态不变：用户侧验收未翻转，T08 不解锁。
   - 来源：I2-AUTH、I3-WRITE、I3-CONTEXT。
 
-- [ ] **T08 · 变更查看与交付快照**
+- [x] **T08 · 变更查看与交付快照**（已验收：macOS 隔离装配实现与受管 Chromium 双人旅程经用户现场走查通过 2026-11-24；合入结果记录生产恒空，实际合入动作与「已交付」点亮归 T09）
   - 说明：提供真实 diff、受控提交和不可变候选快照，分别记录历史候选、当前候选和后续实际合入结果。
   - 可验收目标：差异与工作树一致；提交只包含选定范围；快照记录需求提交和冻结基线；后续修改不改写历史快照；没有执行证据时不显示“已提交”或“已交付”。
   - 方案已交付：[T08 变更查看与交付快照方案](02-directory-and-engineering-design.html#t08-delivery-snapshot-plan-20261124)。
   - 已实现（步骤 0 精度补遗 9 条、快照两表迁移与应用角色 revoke 守卫、受控提交链、快照写入与锚点校验、变更查看 D2–D5、证据投影 E1–E3、S5 与双人旅程）：[T08 A 段交付证据](02-directory-and-engineering-design.html#t08-delivery-snapshot-a-evidence-20261124)、[T08 B 段交付证据](02-directory-and-engineering-design.html#t08-delivery-snapshot-evidence-20261124)（双锚点：[方案 §11.23](02-directory-and-engineering-design.html#t08-delivery-snapshot-plan-20261124)）。A 段 C1–C5、S1–S4 与反例 N2/N4/N6–N9，B 段 D2–D5、E1–E3、S5 与反例 N1/N3/N5 各自先红后绿，邻域、受管 Chromium 旅程与静态检查通过；待验收状态不翻转。
-  - 前置：T07。
+  - 前置：T07（已于 2026-11-24 在 macOS 范围结项）。
+  - 用户走查通过与结项：[决策台账](00-decision-ledger.html#t08-user-acceptance-20261124)。
   - 来源：I3-DELIVERY、D22、D23。
 
 - [ ] **T09 · GitLab 首次交付闭环**

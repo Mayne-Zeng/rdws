@@ -2765,3 +2765,38 @@ input[type='checkbox'] {
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+/* Capability matrix and the viewer's own capabilities. */
+.matrix-panel {
+  overflow-x: auto;
+}
+.capability-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.capability-matrix th,
+.capability-matrix td {
+  border: 1px solid var(--line);
+  padding: 7px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.capability-matrix thead th {
+  background: var(--rail);
+  font-weight: 600;
+}
+.capability-matrix tbody th {
+  font-weight: 500;
+}
+.matrix-yes {
+  color: var(--ok);
+  font-weight: 600;
+}
+.matrix-note {
+  margin: 10px 0 0;
+  font-size: 11px;
+}
+.own-capabilities {
+  grid-template-columns: minmax(0, 1fr) auto;
+}

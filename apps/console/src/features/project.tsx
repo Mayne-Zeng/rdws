@@ -683,6 +683,7 @@ export function ProjectWorkspace({
                 key={project.id + userId}
                 projectId={project.id}
                 userId={userId}
+                viewerRoles={project.roles}
               />
             ) : view === 'capabilities' ? (
               <CapabilityTemplates

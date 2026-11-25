@@ -25,7 +25,9 @@ export function RequirementWorktrees({ id }: { id: string }) {
       aria-labelledby="requirement-worktrees"
     >
       <div className="panel-heading">
-        <h2 id="requirement-worktrees">需求工作树</h2>
+        <h2 id="requirement-worktrees" tabIndex={-1}>
+          需求工作树
+        </h2>
         {query.data && !query.isError && (
           <span className="pill">
             {query.data.state === 'ready' ? '已就绪' : '待准备'}

@@ -11,6 +11,7 @@ import { api, roleLabels } from '../lib/ui.tsx';
 import { CapabilityApprovals } from './capability-approvals.tsx';
 import { CapabilityTemplates } from './capability-templates.tsx';
 import { PlatformAccountAudit } from './platform-account-audit.tsx';
+import { CapabilityMatrixSection } from './capability-matrix.tsx';
 
 type Intent = ManagementCommand extends infer Command
   ? Command extends ManagementCommand
@@ -191,9 +192,11 @@ function Feedback({ action }: { action: ReturnType<typeof useManagement> }) {
 export function MembersPage({
   projectId,
   userId,
+  viewerRoles,
 }: {
   projectId: string;
   userId: string;
+  viewerRoles: string[];
 }) {
   const query = useQuery({
     queryKey: ['administration', 'members', projectId],
@@ -329,6 +332,7 @@ export function MembersPage({
         </>
       )}
       <Feedback action={action} />
+      <CapabilityMatrixSection projectRoles={viewerRoles} />
     </>
   );
 }

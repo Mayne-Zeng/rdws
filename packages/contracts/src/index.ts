@@ -199,6 +199,132 @@ export const stagesOfState = (state: RequirementState): Stage[] =>
   (Object.keys(stageLabels) as Stage[]).filter(
     (stage) => stateByStage[stage] === state,
   );
+
+// Capability matrix: what each role may do in the workbench. It is reference
+// data for readers; the server decides every request. A subject is allowed
+// when it has an entry, and the text names the extra condition beyond holding
+// the role. The matrix cross-check test probes every cell it can reach and
+// lists the rest with a reason.
+export const capabilitySubjects = [
+  'requirement_manager',
+  'developer',
+  'tester',
+  'project_admin',
+  'platform_admin',
+] as const;
+export type CapabilitySubject = (typeof capabilitySubjects)[number];
+export const capabilitySubjectLabels: Record<CapabilitySubject, string> = {
+  requirement_manager: '需求经理',
+  developer: '开发人员',
+  tester: '测试人员',
+  project_admin: '项目管理员',
+  platform_admin: '平台管理员',
+};
+export interface CapabilityRow {
+  id: string;
+  label: string;
+  allowed: Partial<Record<CapabilitySubject, string>>;
+}
+const participant = '需求参与者';
+const ownSession = '本人会话';
+export const capabilityMatrix = [
+  {
+    id: 'requirement.read',
+    label: '查看需求档案与会话',
+    allowed: {
+      requirement_manager: participant,
+      developer: participant,
+      tester: participant,
+      project_admin: '',
+    },
+  },
+  {
+    id: 'session.create',
+    label: '新建本人会话并发送',
+    allowed: {
+      requirement_manager: participant,
+      developer: participant,
+      tester: participant,
+      project_admin: '',
+    },
+  },
+  {
+    id: 'session.fork',
+    label: '派生与回放会话',
+    allowed: {
+      requirement_manager: ownSession,
+      developer: ownSession,
+      tester: ownSession,
+      project_admin: ownSession,
+    },
+  },
+  {
+    id: 'session.write',
+    label: '设为可写会话与释放写锁',
+    allowed: {
+      developer: '本人会话，且是开发负责人或有未完成子任务；仅隔离装配提供',
+    },
+  },
+  {
+    id: 'requirement.create',
+    label: '创建需求与批量导入',
+    allowed: { requirement_manager: '', project_admin: '' },
+  },
+  {
+    id: 'requirement.details',
+    label: '编辑需求资料与背景',
+    allowed: {
+      requirement_manager: '同时是该需求的需求经理',
+      project_admin: '',
+    },
+  },
+  {
+    id: 'requirement.personnel',
+    label: '维护需求人员与开发负责人',
+    allowed: {
+      requirement_manager: '同时是该需求的需求经理',
+      project_admin: '',
+    },
+  },
+  {
+    id: 'requirement.stage',
+    label: '调整阶段与维护子任务',
+    allowed: { developer: '开发负责人' },
+  },
+  {
+    id: 'task.own',
+    label: '更新本人负责的任务',
+    allowed: { developer: '本人负责的子任务' },
+  },
+  {
+    id: 'worktree.prepare',
+    label: '准备需求工作树',
+    allowed: { requirement_manager: '', project_admin: '' },
+  },
+  {
+    id: 'template.bind',
+    label: '绑定需求能力模板',
+    allowed: { project_admin: '' },
+  },
+  {
+    id: 'repository.sync',
+    label: '同步仓库基线',
+    allowed: { project_admin: '' },
+  },
+  {
+    id: 'member.roles',
+    label: '维护项目成员角色',
+    allowed: { project_admin: '' },
+  },
+  {
+    id: 'platform.admin',
+    label: '平台设置',
+    allowed: { platform_admin: '' },
+  },
+] as const satisfies readonly CapabilityRow[];
+export function capabilitiesFor(subject: CapabilitySubject) {
+  return capabilityMatrix.filter((row) => Object.hasOwn(row.allowed, subject));
+}
 export const capabilityKindLabels = {
   plugin: '插件',
   skill: '技能',

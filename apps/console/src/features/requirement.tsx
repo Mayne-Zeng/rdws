@@ -19,6 +19,7 @@ import { RequirementTemplate } from './requirement-template.tsx';
 import { SessionTemplateStatusPanel } from './session-template-status.tsx';
 import { RequirementPersonnel } from './requirement-personnel.tsx';
 import { RequirementAudit } from './requirement-audit.tsx';
+import { RequirementArtifacts } from './requirement-artifacts.tsx';
 import {
   RequirementDetailsEditor,
   detailFieldLabels,
@@ -502,7 +503,7 @@ export function RequirementPage({
           </section>
           <section className="document-section">
             <h2>基本信息</h2>
-            <div className="info-panel">
+            <div className="info-panel" id="requirement-facts" tabIndex={-1}>
               <dl className="detail-grid requirement-facts">
                 <dt>开发负责人</dt>
                 <dd>{names.get(r.leadId) ?? '未命名成员'}</dd>
@@ -557,6 +558,13 @@ export function RequirementPage({
               />
             </div>
           </section>
+          <RequirementArtifacts
+            requirement={r}
+            canEditDetails={canEdit}
+            userId={userId}
+            sessionId={sessionId}
+            projectId={projectId}
+          />
           <section className="document-section">
             <div className="section-heading">
               <div>

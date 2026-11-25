@@ -448,3 +448,61 @@ test('the requirement list filters by status and stage while export waits', asyn
   ).toBeDisabled();
   void stays;
 });
+
+test('the dossier lists real artifacts and the members page shows the matrix', async ({
+  page,
+  baseURL,
+}) => {
+  test.setTimeout(90000);
+  const { leadId } = await signIn(page, baseURL!);
+  const fixture = await requirementWithSession(page, baseURL!, leadId);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/?project=poc&view=overview&requirement=${fixture.id}`);
+  const artifacts = page.getByRole('region', { name: '重要产物' });
+  await artifacts.scrollIntoViewIfNeeded();
+  // Every row is present and reads from a real record; nothing claims a
+  // status there is no source for.
+  const rows = artifacts.getByRole('list').locator('> li');
+  await expect(rows).toHaveCount(5);
+  const names = ['需求说明', '能力模板', '需求工作树', '代码变更', '会话轨迹'];
+  for (const [index, name] of names.entries())
+    await expect(rows.nth(index).locator('strong')).toHaveText(name);
+  // The worktree is unconfigured here, the template unbound and the diff
+  // source unavailable on a plain dev run; the rows say so without an
+  // error bar.
+  await expect(artifacts.getByText('未登记仓库')).toBeVisible();
+  await expect(artifacts.getByText('未绑定')).toBeVisible();
+  // The change source is unavailable on a plain dev run; both the
+  // worktree-free state and the missing repository read as quiet rows.
+  await expect(artifacts.getByText('暂不可用').first()).toBeVisible();
+  await expect(artifacts.getByText('1 个会话')).toBeVisible();
+  // A row links to its panel.
+  await artifacts.getByRole('button', { name: '前往轨迹' }).click();
+  await expect(page).toHaveURL(new RegExp('view=trace'));
+
+  // The members page carries the read-only matrix for its viewers.
+  await page.goto('/?project=poc&view=members');
+  const matrix = page.getByRole('table', { name: '能力矩阵', exact: true });
+  await expect(matrix.getByRole('columnheader')).toHaveText([
+    '能力',
+    '需求经理',
+    '开发人员',
+    '测试人员',
+    '项目管理员',
+    '平台管理员',
+  ]);
+  await expect(matrix.getByRole('row').nth(1)).toContainText(
+    '查看需求档案与会话',
+  );
+  const own = page.getByRole('region', { name: '当前身份可执行' });
+  await expect(own.getByText('创建需求与批量导入')).toBeVisible();
+  await expect(
+    own
+      .getByText('创建需求与批量导入')
+      .locator('..')
+      .getByText('允许', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    own.getByText('平台设置').locator('..').getByText('—', { exact: true }),
+  ).toBeVisible();
+});

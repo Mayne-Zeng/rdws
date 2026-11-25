@@ -166,7 +166,7 @@ export function RequirementArtifacts({
                 variant="text"
                 onClick={() => jumpTo('requirement-facts')}
               >
-                编辑需求资料
+                前往资料编辑
               </Button>
             ) : undefined
           }

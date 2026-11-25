@@ -2356,6 +2356,10 @@
     <li><strong>不做与回退。</strong>不做代码高亮、推理过程展示、赞／踩／编辑／分享、附件与选模控件（T13 试点范围），也不处理上一轮走查列出的其余七项问题。接口追加字段与投影新增两例可独立回退，无数据迁移。</li>
   </ol>
 
+  <h4 id="demo-alignment-delivery-20261125">T23 交付记录 · 2026-11-25</h4>
+  <p>按 A–E 顺序完成并本地提交：<code>29dcd4a</code>（A 对话消息流 + D 轨迹筛选与时间）、<code>dbcd1af</code>（B 侧栏层级与折叠 + C 列表筛选）、<code>89c2e65</code>（E 重要产物与能力矩阵），以及两处交付期修复 <code>bf36699</code>／<code>4dcf62d</code>（产物区行内按钮与档案编辑按钮重名触发既有严格模式断言冲突，改名「前往资料编辑」；实时帧 seq 非安全整数导致流式正文被跳过，改为按 attempt 聚合）。工具名公开投影与「成员与权限」入口向非管理员开放两项维持搁置，待用户明确同意后按 §11.24 原设计补齐。</p>
+  <p>验证证据：<code>pnpm typecheck</code>、<code>pnpm lint</code>、<code>pnpm format:check</code>、<code>pnpm build</code> 通过；<code>pnpm test</code> 全套通过（含新增 conversation-nodes 与 conversation-stream 合计 22 项单元、requirement-state 2 项、capability-matrix 双人对照 2 项与既有 session-lifecycle 的 time 透传断言）；<code>pnpm test:e2e</code> 两片 56 项全部通过（新增 demo-alignment.spec 五项：轨迹筛选与导出、对话首屏布局、侧栏树与折叠、列表筛选、重要产物与矩阵）；<code>pnpm test:web-live workbench.spec.ts</code> 以真实 GLM 通过（正文逐字比对、刷新恢复、流式连续性；首次运行暴露实时 seq 回归，修复后复跑通过）。实机 5173 走查 40 项（明暗 × 四页面 × 1440/1024/821/820/390）零横向溢出，821/820 断点边界与折叠行为符合设计，截图存 <code>.impeccable/review/compare-20261124/walkthrough/</code>。依赖审计与新增前一致（0 high、3 moderate，均为既有项）。遗留：代码高亮、推理展示、消息操作扩展按 §11.24「不做」清单维持；两项搁置功能待用户同意。</p>
+
   <h2 id="s0"><span class="num">0</span>评审结论</h2>
   <div class="verdict">
     <div class="vtitle">总体判定</div>

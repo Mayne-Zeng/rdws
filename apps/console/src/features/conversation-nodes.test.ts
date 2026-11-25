@@ -182,7 +182,6 @@ describe('projectConversationNodes', () => {
       key: 'live-a1',
       live: true,
       text: '你好',
-      time: base + 1000,
     });
     expect(nodes[1]).toMatchObject({
       key: 'live-a2',

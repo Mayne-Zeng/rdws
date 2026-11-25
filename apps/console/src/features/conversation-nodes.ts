@@ -292,26 +292,26 @@ export function projectConversationNodes(
     const entry = record(value),
       event = record(entry?.event);
     if (!event) continue;
-    const place = positioned(event);
+    // Live chunk events carry a client-assigned order that is not required
+    // to be a safe integer; they are keyed and ordered by attempt instead.
     if (entry?.type === 'transient') {
       // Only text deltas accumulate; block frames repeat whole blocks and
       // reasoning stays out of the visible transcript.
       const data = record(event.data),
         chunk = record(data?.chunk);
       if (
-        !place ||
         chunk?.type !== 'text-delta' ||
         typeof chunk.text !== 'string' ||
         typeof data?.attemptId !== 'string'
       )
         continue;
+      const livePlace = { seq: Number(event.seq) || 0 };
       let node = live.get(data.attemptId);
       if (!node) {
         node = {
           kind: 'assistant',
           key: `live-${data.attemptId}`,
-          seq: place.seq,
-          time: place.time,
+          seq: livePlace.seq,
           text: '',
           live: true,
           interrupted: false,
@@ -322,6 +322,7 @@ export function projectConversationNodes(
       node.text += chunk.text;
       continue;
     }
+    const place = positioned(event);
     if (entry?.type !== 'event' || !place) continue;
     const tool = toolEvent(event, event.surfaceOp, place);
     if (tool) {
